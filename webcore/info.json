@@ -1,0 +1,12 @@
+{
+    "name": "WebCore",
+    "short": "Zentrales Web-Dashboard, in das sich andere Cogs einklinken.",
+    "description": "Startet im Bot-Prozess einen aiohttp-Webserver mit Discord-OAuth2-Login (nur Bot-Owner). Andere Cogs registrieren eigene Dashboard-Seiten über register_page(). Jeder neue Cog erscheint automatisch in der Navigation.",
+    "tags": ["dashboard", "web", "utility", "oauth2"],
+    "requirements": ["aiohttp-jinja2", "aiohttp-session", "cryptography"],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert beim Dashboard-Login die Discord-User-ID und den Anzeigenamen verschlüsselt in einer Session-Cookie. Es werden keine Nachrichteninhalte gespeichert."
+}

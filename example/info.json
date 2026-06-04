@@ -1,0 +1,12 @@
+{
+    "name": "Example",
+    "short": "Beispiel-Cog mit Befehl und eigener Dashboard-Seite.",
+    "description": "Demonstriert das Zusammenspiel aus Hybrid-Befehl (Text + Slash), WebCore-Dashboard-Integration und Doku. Als Vorlage zum Kopieren für eigene Cogs gedacht.",
+    "tags": ["example", "template", "dashboard"],
+    "requirements": [],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert keine personenbezogenen Endnutzerdaten. Pro Server kann eine frei wählbare Notiz hinterlegt werden."
+}

@@ -1,0 +1,7 @@
+{
+    "author": ["DeinName"],
+    "name": "Red-Cogs",
+    "short": "Eigene Cogs samt integriertem Web-Dashboard.",
+    "description": "Sammlung eigener Cogs für Red-DiscordBot. Enthält ein zentrales Web-Dashboard (WebCore), in das sich jeder Cog mit eigenen Seiten einklinkt.",
+    "install_msg": "Danke fürs Installieren! Lade zuerst `webcore`, setze die OAuth2-Daten und starte das Dashboard. Details stehen im README."
+}

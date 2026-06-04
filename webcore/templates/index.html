@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-6 col-lg-3"><div class="card-x"><div class="stat-label">Server</div><div class="stat">{{ guild_count }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="card-x"><div class="stat-label">Latenz</div><div class="stat">{{ latency }} ms</div></div></div>
+  <div class="col-6 col-lg-3"><div class="card-x"><div class="stat-label">Cogs geladen</div><div class="stat">{{ cog_count }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="card-x"><div class="stat-label">Dashboard-Seiten</div><div class="stat">{{ nav_pages|length }}</div></div></div>
+</div>
+
+<div class="card-x" style="margin-top:18px">
+  <h2 style="font-family:Archivo,sans-serif;font-size:1.15rem;margin:0 0 8px">Willkommen</h2>
+  <p style="color:var(--muted);margin:0">
+    Wähle links einen Cog, um dessen Dashboard zu öffnen. Jeder neue Cog erscheint hier automatisch,
+    sobald er beim Laden <code>register_page()</code> aufruft.
+  </p>
+</div>
+{% endblock %}
