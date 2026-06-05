@@ -284,6 +284,11 @@ class WebCore(commands.Cog):
                 status=500,
             )
 
+        # Handler darf eine fertige Response direkt zurückgeben
+        # (z. B. Transcript-Seite, Datei-Download). web.Response erbt von StreamResponse.
+        if isinstance(result, web.StreamResponse):
+            return result
+
         # Handler darf nach einem POST per {"redirect": "/..."} umleiten (PRG-Muster).
         if isinstance(result, dict) and result.get("redirect"):
             raise web.HTTPFound(result["redirect"])
