@@ -78,3 +78,38 @@ class MeinCog(commands.Cog):
 Der `handler` bekommt das aiohttp-`request` und gibt ein Dict mit `title` und `content`
 (HTML-String) zurück. Der Inhalt wird in das gemeinsame Layout eingebettet – nutzbare
 CSS-Klassen u. a.: `card-x`, `table`, `stat`, `stat-label`, `mono`, `btn-accent`.
+
+## Einstellungen über das Dashboard ändern (Formulare, POST + CSRF)
+
+Seiten dürfen nicht nur anzeigen, sondern auch schreiben. Jede Cog-Seite ist sowohl per
+**GET** als auch per **POST** unter `/cogs/<slug>` erreichbar – derselbe `handler` bekommt
+beide Anfragen, unterschieden über `request.method`.
+
+WebCore legt pro Sitzung ein **CSRF-Token** an und stellt es dem Handler unter
+`request["webcore_csrf"]` bereit. Jedes Formular muss dieses Token als verstecktes Feld
+`csrf_token` mitsenden – WebCore prüft es bei jedem POST zentral und lehnt fehlende/falsche
+Token mit HTTP 400 ab. Nach erfolgreichem Schreiben sollte der Handler per
+`return {"redirect": "/cogs/<slug>"}` umleiten (Post/Redirect/Get), damit ein Neuladen die
+Aktion nicht erneut auslöst.
+
+```python
+async def dashboard_page(self, request):
+    csrf = request.get("webcore_csrf", "")
+
+    if request.method == "POST":
+        form = await request.post()          # CSRF wurde bereits von WebCore geprüft
+        await self.config.guild_from_id(int(form["guild_id"])).note.set(form.get("note", ""))
+        return {"redirect": "/cogs/meincog?ok=1"}
+
+    content = (
+        "<form method='post' action='/cogs/meincog' class='card-x'>"
+        f"<input type='hidden' name='csrf_token' value='{csrf}'>"
+        "<input name='note' class='form-control'>"
+        "<button class='btn-accent' type='submit'>Speichern</button>"
+        "</form>"
+    )
+    return {"title": "Mein Cog", "content": content}
+```
+
+Nutzereingaben aus Formularen immer mit `html.escape(...)` ausgeben und Zahlen/Werte
+serverseitig validieren (z. B. Channel-IDs gegen die echten Guild-Objekte prüfen).

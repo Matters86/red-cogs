@@ -246,10 +246,34 @@ class WebCore(commands.Cog):
                 {"title": "Nicht gefunden", "message": f"Keine Seite für '{slug}'.", "active_page": None},
                 status=404,
             )
+
+        # CSRF-Token pro Sitzung sicherstellen und dem Handler bereitstellen.
+        session = await get_session(request)
+        token = session.get("csrf_token")
+        if not token:
+            token = secrets.token_urlsafe(32)
+            session["csrf_token"] = token
+
+        # Schreibende Anfragen (Formulare) zentral gegen CSRF absichern.
+        if request.method == "POST":
+            form = await request.post()
+            if form.get("csrf_token") != token:
+                return aiohttp_jinja2.render_template(
+                    "error.html",
+                    request,
+                    {
+                        "title": "Abgelehnt",
+                        "message": "Ungültiges oder fehlendes CSRF-Token. Bitte Seite neu laden und erneut absenden.",
+                        "active_page": slug,
+                    },
+                    status=400,
+                )
+
+        request["webcore_csrf"] = token
+
         try:
             result = await page.handler(request)
         except web.HTTPException:
-            # Erlaubt Handlern, Redirects (z. B. Post/Redirect/Get) auszulösen.
             raise
         except Exception as exc:  # noqa: BLE001
             log.exception("Fehler in Dashboard-Seite %s", slug)
@@ -259,9 +283,11 @@ class WebCore(commands.Cog):
                 {"title": "Fehler", "message": str(exc), "active_page": slug},
                 status=500,
             )
-        # Handler darf auch direkt eine Response zurückgeben (eigene Seite/Datei).
-        if isinstance(result, web.StreamResponse):
-            return result
+
+        # Handler darf nach einem POST per {"redirect": "/..."} umleiten (PRG-Muster).
+        if isinstance(result, dict) and result.get("redirect"):
+            raise web.HTTPFound(result["redirect"])
+
         return aiohttp_jinja2.render_template(
             "page.html",
             request,
@@ -285,7 +311,7 @@ class WebCore(commands.Cog):
         """OAuth2-Daten setzen.
 
         redirect_uri MUSS exakt dem Eintrag im Discord-Developer-Portal entsprechen,
-        z. B. https://dashboard.deinedomain.de/callback genau
+        z. B. https://dashboard.deinedomain.de/callback
         """
         await self.config.client_id.set(client_id)
         await self.config.client_secret.set(client_secret)

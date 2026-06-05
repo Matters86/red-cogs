@@ -36,7 +36,8 @@ red-cogs/
 |---|---|
 | webcore | 8472013561 |
 | example | 290117450912 |
-| tickets | 846215097433 |
+| autoroom | 736014928503 |
+| _neue hier ergänzen_ | |
 
 ## info.json pro Cog — Vorlage
 ```json
@@ -81,6 +82,27 @@ async def dashboard_page(self, request):
 - Nutzbare CSS-Klassen aus dem Standard-Theme: `card-x`, `table`, `stat`, `stat-label`,
   `mono`, `btn-accent`. Icons: Bootstrap-Icons (`bi-...`).
 - Nutzereingaben in HTML immer mit `html.escape(...)` absichern.
+
+### Einstellungen schreiben (Formulare, POST + CSRF) — optional
+Seiten dürfen auch schreiben. Jede Seite ist unter `/cogs/<slug>` per **GET und POST**
+erreichbar; derselbe `handler` bekommt beide (Unterscheidung über `request.method`).
+WebCore stellt pro Sitzung ein CSRF-Token unter `request["webcore_csrf"]` bereit, prüft es
+bei jedem POST zentral (HTTP 400 bei Fehler) und der Handler leitet nach Erfolg per
+`return {"redirect": "/cogs/<slug>?ok=1"}` um (Post/Redirect/Get).
+```python
+async def dashboard_page(self, request):
+    csrf = request.get("webcore_csrf", "")
+    if request.method == "POST":
+        form = await request.post()                 # CSRF schon geprüft
+        await self.config.guild_from_id(int(form["guild_id"])).note.set(form.get("note", ""))
+        return {"redirect": "/cogs/<slug>?ok=1"}
+    return {"title": "...", "content":
+        f"<form method='post' action='/cogs/<slug>'>"
+        f"<input type='hidden' name='csrf_token' value='{csrf}'>"
+        f"<input name='note'><button class='btn-accent'>Speichern</button></form>"}
+```
+- Jedes Formular muss `csrf_token` als verstecktes Feld mitsenden.
+- Werte serverseitig validieren (z. B. Channel-IDs gegen echte Guild-Objekte prüfen).
 
 ## Definition of Done (ein Cog ist erst fertig, wenn ALLE 4 stehen)
 1. **Code** — `<cog>/` mit `__init__.py`, `<cog>.py`, `info.json`

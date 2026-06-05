@@ -1,0 +1,12 @@
+{
+    "name": "AutoRoom",
+    "short": "Erstellt automatisch temporäre Voicechannels, wenn jemand einen Quell-Channel betritt.",
+    "description": "Autovoiceroom: Wer einen festgelegten Quell-Voicechannel betritt, bekommt automatisch einen eigenen Voicechannel und wird hineinverschoben. Sobald der Raum leer ist, wird er wieder gelöscht. Räume lassen sich von ihren Besitzern selbst verwalten (öffentlich/gesperrt/privat, Nutzer erlauben/verbieten, umbenennen, Limit). Mehrere Quellen pro Server möglich, jede mit eigener Zielkategorie, Namensvorlage, Limit und Standard-Sichtbarkeit. Eingerichtet wird alles per Befehl oder bequem über das WebCore-Dashboard.",
+    "tags": ["voice", "channels", "automation", "dashboard", "temporary"],
+    "requirements": [],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert pro Server die Einrichtung der Quell-Channels (Channel- und Kategorie-IDs, Vorlagen, Limits – keine personenbezogenen Daten). Solange ein automatisch erstellter Raum existiert, wird die Nutzer-ID seines aktuellen Besitzers gespeichert; dieser Eintrag wird gelöscht, sobald der Raum gelöscht wird. Es werden keine Nachrichteninhalte gespeichert."
+}
