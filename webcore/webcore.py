@@ -116,6 +116,7 @@ class WebCore(commands.Cog):
                 web.get("/callback", self.handle_callback),
                 web.get("/logout", self.handle_logout),
                 web.get("/cogs/{slug}", self.handle_cog_page),
+                web.post("/cogs/{slug}", self.handle_cog_page),
             ]
         )
 
@@ -247,6 +248,9 @@ class WebCore(commands.Cog):
             )
         try:
             result = await page.handler(request)
+        except web.HTTPException:
+            # Erlaubt Handlern, Redirects (z. B. Post/Redirect/Get) auszulösen.
+            raise
         except Exception as exc:  # noqa: BLE001
             log.exception("Fehler in Dashboard-Seite %s", slug)
             return aiohttp_jinja2.render_template(
@@ -255,6 +259,9 @@ class WebCore(commands.Cog):
                 {"title": "Fehler", "message": str(exc), "active_page": slug},
                 status=500,
             )
+        # Handler darf auch direkt eine Response zurückgeben (eigene Seite/Datei).
+        if isinstance(result, web.StreamResponse):
+            return result
         return aiohttp_jinja2.render_template(
             "page.html",
             request,

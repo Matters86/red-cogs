@@ -1,0 +1,12 @@
+{
+    "name": "Tickets",
+    "short": "Mehrsprachiges Ticketsystem mit Panels, Transcripts und Dashboard-Verwaltung.",
+    "description": "Vollständiges Support-Ticketsystem für Red. Panels mit Buttons oder Dropdown, optionalem Modal (bis zu 5 Fragen), Tickets als eigener Kanal, privater Thread oder Forum-Beitrag. Getrennte Support-, Admin-, View-, Ping- und Inhaber-Rollen, Übernehmen/Sperren/Schließen/Wiederöffnen/Löschen, Mitglieder verwalten, Limit für offene Tickets. Mehrsprachig (Deutsch als Standard, pro Server umschaltbar, eigene Texte überschreibbar), HTML-Transcripts, Logging. Einstellungen, Panels, Transcripts und Statistik laufen über das WebCore-Dashboard.",
+    "tags": ["tickets", "support", "dashboard", "i18n", "moderation"],
+    "requirements": [],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert pro Ticket Metadaten (Ticketnummer, Discord-ID des Inhabers, gewählter Grund, Zeitstempel, übernommen-von) sowie HTML-Transcripts des Ticketverlaufs (Nachrichtentexte, Autoren, Zeitpunkte, Anhang-Dateinamen). Transcripts und Metadaten können über Befehle bzw. das Löschen des Servers/der Tickets entfernt werden."
+}

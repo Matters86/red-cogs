@@ -20,6 +20,7 @@ Danach `webcore` einrichten (siehe [`webcore/README.md`](webcore/README.md)).
 |---|---|
 | [`webcore`](webcore/) | Zentrales Web-Dashboard (aiohttp, Discord-OAuth2). Andere Cogs klinken sich ein. |
 | [`example`](example/) | Vorlage: Hybrid-Befehl + automatische Dashboard-Seite. |
+| [`tickets`](tickets/) | Mehrsprachiges Ticketsystem: Panels, Threads/Foren, Transcripts, Statistik – komplett über das Dashboard verwaltbar. |
 
 ## Wie das Dashboard funktioniert
 
