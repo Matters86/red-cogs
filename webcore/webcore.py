@@ -285,7 +285,7 @@ class WebCore(commands.Cog):
         """OAuth2-Daten setzen.
 
         redirect_uri MUSS exakt dem Eintrag im Discord-Developer-Portal entsprechen,
-        z. B. https://dashboard.deinedomain.de/callback
+        z. B. https://dashboard.deinedomain.de/callback genau
         """
         await self.config.client_id.set(client_id)
         await self.config.client_secret.set(client_secret)
