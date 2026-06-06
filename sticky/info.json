@@ -1,0 +1,12 @@
+{
+    "name": "Sticky",
+    "short": "Hält eine Nachricht am unteren Ende eines Kanals fest.",
+    "description": "Pinnt pro Kanal eine Nachricht ans Ende: Sobald jemand schreibt, löscht der Bot die alte Sticky und postet sie unten neu. Text- oder Embed-Modus, optionaler Webhook (eigener Name/Avatar), Platzhalter, Cooldown gegen Spam, mehrsprachig (Deutsch/Englisch) und vollständig über das WebCore-Dashboard konfigurierbar.",
+    "tags": ["sticky", "message", "channel", "dashboard", "moderation"],
+    "requirements": [],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert keine personenbezogenen Endnutzerdaten. Pro Kanal werden die vom Team festgelegte Sticky-Nachricht sowie die ID der zuletzt geposteten Nachricht gespeichert."
+}

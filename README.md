@@ -23,7 +23,7 @@ Danach `webcore` einrichten (siehe [`webcore/README.md`](webcore/README.md)).
 | [`autoroom`](autoroom/) | Autovoiceroom: automatische temporäre Voicechannels, voll per Dashboard konfigurierbar. |
 | [`tickets`](tickets/) | Mehrsprachiges Ticketsystem mit Panels, Transcripts und Dashboard. |
 | [`raidhelper`](raidhelper/) | Mehrsprachiger Raid-Planer: Anmeldung per Button, Roster, Erinnerungen, Wiederholung, CSV-Export und Dashboard. |
-| [`poll`](poll/) | Mehrsprachige Umfragen: Abstimmung per Button, Live-Ergebnis, Einzel-/Mehrfachauswahl, anonym/öffentlich, Auto-Ende, CSV-Export und Dashboard. |
+| [`sticky`](sticky/) | Hält eine Nachricht am unteren Ende eines Kanals fest (Text/Embed, Webhook, Platzhalter, Cooldown). Voll per Dashboard konfigurierbar. |
 
 ## Wie das Dashboard funktioniert
 

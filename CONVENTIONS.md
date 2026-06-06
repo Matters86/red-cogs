@@ -39,6 +39,7 @@ red-cogs/
 | autoroom | 736014928503 |
 | tickets | 846215097433 |
 | raidhelper | 615238947104 |
+| sticky | 592384710265 |
 | _neue hier ergänzen_ | |
 
 ## info.json pro Cog — Vorlage
