@@ -1,0 +1,12 @@
+{
+    "name": "RaidHelper",
+    "short": "Mehrsprachiger Raid-Planer mit Anmeldung per Button, Roster, Erinnerungen und Dashboard.",
+    "description": "Raid-Anmeldungen wie bei raid-helper.dev, direkt in Red. Organisatoren legen Events an, der Bot postet ein Embed mit Live-Roster; Mitglieder melden sich per Klassen-Dropdown an, w\u00e4hlen ihre Spezialisierung (wird gemerkt) und werden anhand der Spec automatisch der Rolle Tank/Heiler/Nahkampf/Fernkampf zugeordnet. Zus\u00e4tzlich Bank/Sp\u00e4t/Vielleicht/Abwesend, Limits pro Event und Rolle, Anmeldeschluss, Erinnerungen (60 & 15 Minuten vorher, optional per DM), wiederkehrende Events (t\u00e4glich/w\u00f6chentlich/zweiw\u00f6chentlich), Teilnahme-Statistik und CSV-Export. Drei w\u00e4hlbare WoW-Vorlagen (Retail, Classic/Vanilla, WotLK/Cata) mit deutschen Klassen- und Spec-Namen; eigene Klassen-Icons lassen sich botweit als Application-Emojis hinterlegen und bequem \u00fcber das Dashboard hochladen. Weitere Spiele lassen sich als reiner Datenblock erg\u00e4nzen. Mehrsprachig (Deutsch als Standard, pro Server umschaltbar). Alle Events und Einstellungen lassen sich \u00fcber das WebCore-Dashboard verwalten.",
+    "tags": ["raid", "events", "signup", "wow", "dashboard", "i18n"],
+    "requirements": ["tzdata"],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert pro Event Anmeldungen mit Discord-ID, Anzeigename, gew\u00e4hlter Klasse/Spezialisierung, abgeleiteter Rolle, Status (angemeldet/Bank/Sp\u00e4t/Vielleicht/Abwesend) und Anmeldezeitpunkt. Pro Nutzer wird die zuletzt gew\u00e4hlte Spezialisierung je Spiel und Klasse gemerkt, um die Anmeldung zu beschleunigen. Zus\u00e4tzlich wird eine Teilnahme-Statistik (Anzahl Teilnahmen je Discord-ID) gef\u00fchrt. Daten werden beim L\u00f6schen eines Events, beim Entfernen des Cogs oder beim Verlassen des Servers entfernt."
+}

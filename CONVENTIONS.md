@@ -37,6 +37,8 @@ red-cogs/
 | webcore | 8472013561 |
 | example | 290117450912 |
 | autoroom | 736014928503 |
+| tickets | 846215097433 |
+| raidhelper | 615238947104 |
 | _neue hier ergänzen_ | |
 
 ## info.json pro Cog — Vorlage

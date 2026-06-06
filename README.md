@@ -21,6 +21,8 @@ Danach `webcore` einrichten (siehe [`webcore/README.md`](webcore/README.md)).
 | [`webcore`](webcore/) | Zentrales Web-Dashboard (aiohttp, Discord-OAuth2). Andere Cogs klinken sich ein. |
 | [`example`](example/) | Vorlage: Hybrid-Befehl + automatische Dashboard-Seite. |
 | [`autoroom`](autoroom/) | Autovoiceroom: automatische temporäre Voicechannels, voll per Dashboard konfigurierbar. |
+| [`tickets`](tickets/) | Mehrsprachiges Ticketsystem mit Panels, Transcripts und Dashboard. |
+| [`raidhelper`](raidhelper/) | Mehrsprachiger Raid-Planer: Anmeldung per Button, Roster, Erinnerungen, Wiederholung, CSV-Export und Dashboard. |
 
 ## Wie das Dashboard funktioniert
 
