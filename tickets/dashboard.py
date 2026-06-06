@@ -90,6 +90,7 @@ async def _render(cog, request):
         return {"title": "Tickets", "content": "<div class='card-x'>Der Bot ist auf keinem Server.</div>"}
 
     conf = await cog.config.guild(guild).all()
+    csrf = request.get("webcore_csrf", "")
 
     # Auswahllisten
     guild_opts = _options(
@@ -127,6 +128,7 @@ async def _render(cog, request):
     <div class='card-x'>
       <div class='tk-section-title'>Einstellungen</div>
       <form class='tk-form' method='post' action='/cogs/tickets'>
+        <input type='hidden' name='csrf_token' value='{csrf}'>
         <input type='hidden' name='form' value='settings'>
         <input type='hidden' name='guild' value='{guild.id}'>
 
@@ -217,7 +219,7 @@ async def _render(cog, request):
     </div>
     """
 
-    panels_html = _render_panels(guild, conf, role_items, text_items)
+    panels_html = _render_panels(guild, conf, role_items, text_items, csrf)
     transcripts_html = _render_transcripts(guild, conf)
     stats_html = await _render_stats(cog, guild, conf)
 
@@ -245,7 +247,7 @@ async def _render(cog, request):
     return {"title": "Tickets", "content": content}
 
 
-def _render_panels(guild, conf, role_items, text_items) -> str:
+def _render_panels(guild, conf, role_items, text_items, csrf) -> str:
     rows = []
     for p in conf.get("panels", []):
         ch = guild.get_channel(p.get("channel_id")) if p.get("channel_id") else None
@@ -261,6 +263,7 @@ def _render_panels(guild, conf, role_items, text_items) -> str:
             f"<td class='mono'>{n_q}</td>"
             "<td>"
             f"<form method='post' action='/cogs/tickets' onsubmit=\"return confirm('Panel löschen?')\">"
+            f"<input type='hidden' name='csrf_token' value='{_esc(csrf)}'>"
             f"<input type='hidden' name='form' value='panel_delete'>"
             f"<input type='hidden' name='guild' value='{guild.id}'>"
             f"<input type='hidden' name='panel_id' value='{_esc(p.get('id'))}'>"
@@ -280,6 +283,7 @@ def _render_panels(guild, conf, role_items, text_items) -> str:
       <div class='tk-spacer'></div>
       <div class='tk-section-title' style='font-size:1rem'>Neues Panel</div>
       <form class='tk-form' method='post' action='/cogs/tickets'>
+        <input type='hidden' name='csrf_token' value='{csrf}'>
         <input type='hidden' name='form' value='panel_create'>
         <input type='hidden' name='guild' value='{guild.id}'>
         <div class='row2'>
