@@ -1,0 +1,12 @@
+{
+    "name": "Poll",
+    "short": "Mehrsprachige Umfragen mit Abstimmung per Button, Live-Ergebnis und Dashboard.",
+    "description": "Umfragen direkt in Red. Erstellen per Befehl (Text oder Slash) oder komplett über das WebCore-Dashboard. Der Bot postet ein Embed mit Live-Ergebnis (Balken und Prozente); abgestimmt wird per Button (ein Button je Option, mit Z\u00e4hler). Pro Umfrage w\u00e4hlbar: Einzel- oder Mehrfachauswahl, anonym (nur Z\u00e4hler) oder \u00f6ffentlich (Namen einsehbar) und eine optionale Laufzeit mit automatischem Ende samt Ergebnis-Ansage. Wer Umfragen erstellen darf (alle oder Mods/Manager) ist pro Server einstellbar. CSV-Export der Ergebnisse. Mehrsprachig (Deutsch als Standard, pro Server umschaltbar). Die Buttons sind persistent und \u00fcberstehen Bot-Neustarts.",
+    "tags": ["poll", "vote", "abstimmung", "umfrage", "dashboard", "i18n", "buttons"],
+    "requirements": [],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert pro Umfrage die Frage, die Optionen und die abgegebenen Stimmen. Zu jeder Stimme werden die Discord-ID und der Anzeigename der abstimmenden Person sowie die gew\u00e4hlten Optionen gespeichert. Bei als anonym markierten Umfragen werden Namen weder im Embed noch im CSV-Export angezeigt, sind intern aber gespeichert, solange die Umfrage existiert. Daten werden beim L\u00f6schen einer Umfrage, beim Entfernen des Cogs oder beim Verlassen des Servers entfernt."
+}
