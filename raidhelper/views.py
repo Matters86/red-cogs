@@ -48,9 +48,11 @@ def build_signup_view(event: dict, lang: str, *, emojis: dict | None = None) -> 
                 label=games.class_label(game_id, cid)[:100],
                 value=cid,
             )
-            if emojis and emojis.get(cid):
+            # Im Klassen-Dropdown das Icon der Standard-Spec als visueller Anker.
+            default_key = f"{cid}:{games.default_spec(game_id, cid)}"
+            if emojis and emojis.get(default_key):
                 try:
-                    opt.emoji = discord.PartialEmoji.from_str(emojis[cid])
+                    opt.emoji = discord.PartialEmoji.from_str(emojis[default_key])
                 except (ValueError, TypeError):
                     pass
             options.append(opt)
@@ -90,25 +92,25 @@ def build_signup_view(event: dict, lang: str, *, emojis: dict | None = None) -> 
 
 
 def build_spec_view(event_id: str, class_id: str, game_id: str, lang: str,
-                    class_emoji: str | None = None) -> discord.ui.View:
-    """Kurzlebige Spec-Auswahl (ephemer), erscheint bei Klassen mit mehreren Specs."""
+                    emojis: dict | None = None) -> discord.ui.View:
+    """Kurzlebige Spec-Auswahl (ephemer), erscheint bei Klassen mit mehreren Specs.
+
+    Jede Spec-Option erhält ihr eigenes Spec-Icon (Schlüssel ``"<class>:<spec>"``).
+    """
     view = discord.ui.View(timeout=180)
-    parsed_emoji = None
-    if class_emoji:
-        try:
-            parsed_emoji = discord.PartialEmoji.from_str(class_emoji)
-        except (ValueError, TypeError):
-            parsed_emoji = None
     options = []
     for sid, label, role in games.specs_of(game_id, class_id):
-        options.append(
-            discord.SelectOption(
-                label=label[:100],
-                value=sid,
-                description=role_name(lang, role)[:100],
-                emoji=parsed_emoji,
-            )
+        opt = discord.SelectOption(
+            label=label[:100],
+            value=sid,
+            description=role_name(lang, role)[:100],
         )
+        if emojis and emojis.get(f"{class_id}:{sid}"):
+            try:
+                opt.emoji = discord.PartialEmoji.from_str(emojis[f"{class_id}:{sid}"])
+            except (ValueError, TypeError):
+                pass
+        options.append(opt)
     view.add_item(
         discord.ui.Select(
             custom_id=f"{CID_SPEC}:{event_id}:{class_id}",

@@ -54,8 +54,8 @@ def _member_line(order_no: int, game_id: str, entry: dict, emojis: dict | None =
     cid = entry.get("class")
     sid = entry.get("spec")
     icon = ""
-    if cid and emojis and emojis.get(cid):
-        icon = f"{emojis[cid]} "
+    if cid and sid and emojis and emojis.get(f"{cid}:{sid}"):
+        icon = f"{emojis[f'{cid}:{sid}']} "
     if cid and sid:
         tag = f"`{games.spec_label(game_id, cid, sid)}` "
     elif cid:

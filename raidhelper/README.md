@@ -16,7 +16,7 @@ Organisatoren legen ein Event an, der Bot postet ein **Embed mit Live-Roster** i
 - **Teilnahme-Statistik** je Mitglied.
 - **CSV-Export** der Anmeldungen.
 - **Drei WoW-Vorlagen**: Retail (13 Klassen), Classic/Vanilla (9), WotLK/Cata (10) – mit **deutschen** Klassen- und Spec-Namen.
-- **Klassen-Icons** – eigene Klassen-Icons botweit als Application-Emojis, bequem per Dashboard hochladbar; erscheinen im Dropdown und im Roster.
+- **Spec-Icons** – eigene Icons je Spezialisierung, botweit als Application-Emojis, bequem per Dashboard hochladbar; erscheinen im Spec-Auswahlmenü und im Roster.
 - **Mehrsprachig** – Deutsch als Standard, pro Server umschaltbar (aktuell `de`, `en`).
 - **Dashboard** – Events und Einstellungen vollständig über das WebCore-Dashboard verwaltbar.
 
@@ -70,9 +70,9 @@ Einstellungen (`raidset`) erfordern „Server verwalten" oder Admin.
 | `[p]raidset timezone <zone>` | Anzeige-Zeitzone setzen (z. B. `Europe/Berlin`) |
 | `[p]raidset reminders <true\|false>` | Erinnerungen an-/ausschalten |
 | `[p]raidset icons` | Zeigt, welche Klasse welches Icon hat |
-| `[p]raidset classicon <klasse> <emoji>` | Icon einer Klasse manuell auf ein vorhandenes Emoji setzen |
-| `[p]raidset clearicon <klasse>` | Icon einer Klasse entfernen |
-| `[p]raidset uploadicons` | Angehängte Bilddateien als Klassen-Icons hochladen (Dateiname = Klassen-ID) |
+| `[p]raidset specicon <klasse> <spec> <emoji>` | Icon einer Spezialisierung manuell auf ein vorhandenes Emoji setzen |
+| `[p]raidset clearspecicon <klasse> <spec>` | Icon einer Spezialisierung entfernen |
+| `[p]raidset uploadicons` | Angehängte Bilddateien als Spec-Icons hochladen (Dateiname = klasse_spec) |
 | `[p]raidset settings` | Aktuelle Einstellungen anzeigen |
 | `[p]raidset dashboard` | Hinweis zur Dashboard-Seite |
 
@@ -86,17 +86,17 @@ Die Seite **Raidplaner** erscheint nach dem Laden automatisch im WebCore-Dashboa
 - ein Einstellungs-Formular (Sprache, Standard-Spiel, Anmelde-Kanal, Zeitzone, Erinnerungen, Text-Overrides),
 - eine Event-Tabelle mit Aktionen (Schließen/Öffnen/Löschen),
 - eine Roster-Ansicht pro Event,
-- eine **Klassen-Icon-Verwaltung** mit Datei-Upload und Vorschau der aktuellen Icons.
+- eine **Spec-Icon-Verwaltung** mit Datei-Upload und Vorschau der aktuellen Icons.
 
-## Klassen-Icons
+## Spec-Icons
 
-Eigene Klassen-Icons werden als **Application-Emojis** an der Bot-Anwendung hinterlegt – botweit nutzbar, ohne Server-Emoji-Slots und ohne Einrichtung pro Server. Sie erscheinen im Klassen-Dropdown, in der Spec-Auswahl und in jeder Roster-Zeile.
+Eigene Icons je Spezialisierung werden als **Application-Emojis** an der Bot-Anwendung hinterlegt – botweit nutzbar, ohne Server-Emoji-Slots und ohne Einrichtung pro Server. Sie erscheinen im Spec-Auswahlmenü und in jeder Roster-Zeile (im Klassen-Dropdown wird das Icon der Standard-Spec als Anker genutzt).
 
-Am einfachsten über das **Dashboard** (Abschnitt „Klassen-Icons"): die Bilddateien hochladen, wobei der Dateiname der Klassen-ID entspricht (`krieger.png`, `paladin.png`, `daemonenjaeger.png`, …). Pro Datei max. 256 KB; der Gesamt-Upload sollte unter ca. 1 MB bleiben (sonst in kleineren Gruppen hochladen). Alternativ per Befehl `[p]raidset uploadicons` mit angehängten Dateien oder manuell mit `[p]raidset classicon <klasse> <emoji>`.
+Am einfachsten über das **Dashboard** (Abschnitt „Spec-Icons"): die Bilddateien hochladen, wobei der Dateiname dem Schema `klasse_spec` folgt (`krieger_furor.png`, `priester_heilig.png`, `daemonenjaeger_rachsucht.png`, …). Pro Datei max. 256 KB; der Gesamt-Upload sollte unter ca. 1 MB bleiben (sonst in kleineren Gruppen hochladen). Alternativ per Befehl `[p]raidset uploadicons` mit angehängten Dateien oder manuell mit `[p]raidset specicon <klasse> <spec> <emoji>`.
 
-Voraussetzung für den Upload ist discord.py ≥ 2.4 (in aktuellen Red-Versionen enthalten); das Cog erkennt dies und weist sonst im Dashboard darauf hin. Da die Klassen-IDs spielübergreifend gleich sind, gilt ein gesetztes Icon für alle WoW-Vorlagen.
+Voraussetzung für den Upload ist discord.py ≥ 2.4 (in aktuellen Red-Versionen enthalten); das Cog erkennt dies und weist sonst im Dashboard darauf hin. Da Klassen- und Spec-IDs spielübergreifend gleich sind, gilt ein gesetztes Icon für alle WoW-Vorlagen, in denen es diese Spezialisierung gibt.
 
-Die offiziellen WoW-Klassen-Icons sind Eigentum von Blizzard und werden nicht mitgeliefert – die Grafiken stellst du selbst bereit, das Cog bindet sie über den obigen Mechanismus ein.
+Die offiziellen WoW-Spec-Icons sind Eigentum von Blizzard und werden nicht mitgeliefert – die Grafiken stellst du selbst bereit, das Cog bindet sie über den obigen Mechanismus ein.
 
 ## Eigene Spiele ergänzen
 

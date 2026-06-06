@@ -58,8 +58,8 @@ class RaidHelper(commands.Cog):
         )
         # Gemerkte Spec je Nutzer und Spiel/Klasse (serverübergreifend).
         self.config.register_user(remember={})
-        # Klassen-Icons gelten botweit (Application Emojis): class_id -> "<:rh_x:id>".
-        self.config.register_global(class_emojis={})
+        # Spec-Icons gelten botweit (Application Emojis): "<class>:<spec>" -> "<:rh_x:id>".
+        self.config.register_global(spec_emojis={})
 
     # ----------------------------------------------------------------- #
     #  Dashboard-Anbindung (1:1-Muster aus example/tickets)
@@ -139,10 +139,10 @@ class RaidHelper(commands.Cog):
             rem[f"{game_id}:{class_id}"] = spec_id
 
     # ----------------------------------------------------------------- #
-    #  Klassen-Icons (Application Emojis, botweit)
+    #  Spec-Icons (Application Emojis, botweit) – Schlüssel "<class>:<spec>"
     # ----------------------------------------------------------------- #
-    async def _class_emojis(self) -> dict:
-        return await self.config.class_emojis()
+    async def _spec_emojis(self) -> dict:
+        return await self.config.spec_emojis()
 
     def _supports_app_emojis(self) -> bool:
         return hasattr(self.bot, "create_application_emoji") and hasattr(
@@ -150,15 +150,15 @@ class RaidHelper(commands.Cog):
         )
 
     @staticmethod
-    def _emoji_name(class_id: str) -> str:
-        # Application-Emoji-Name: a-z0-9_ , 2-32 Zeichen. Klassen-IDs sind bereits umlautfrei.
-        return f"rh_{class_id}"
+    def _emoji_name(class_id: str, spec_id: str) -> str:
+        # Application-Emoji-Name: a-z0-9_ , 2-32 Zeichen. IDs sind bereits umlautfrei.
+        return f"rh_{class_id}_{spec_id}"[:32]
 
-    async def _set_class_emoji_from_bytes(self, class_id: str, data: bytes) -> str:
+    async def _set_spec_emoji_from_bytes(self, class_id: str, spec_id: str, data: bytes) -> str:
         """Lädt ein Bild als Application Emoji hoch und speichert das Mapping. Ersetzt vorhandenes."""
         if not self._supports_app_emojis():
             raise RuntimeError("app_emojis_unsupported")
-        name = self._emoji_name(class_id)
+        name = self._emoji_name(class_id, spec_id)
         try:
             for e in await self.bot.fetch_application_emojis():
                 if e.name == name:
@@ -166,16 +166,16 @@ class RaidHelper(commands.Cog):
         except discord.HTTPException:
             pass
         emoji = await self.bot.create_application_emoji(name=name, image=data)
-        async with self.config.class_emojis() as mapping:
-            mapping[class_id] = str(emoji)
+        async with self.config.spec_emojis() as mapping:
+            mapping[f"{class_id}:{spec_id}"] = str(emoji)
         return str(emoji)
 
-    async def _set_class_emoji_str(self, class_id: str, emoji_str: str):
-        async with self.config.class_emojis() as mapping:
-            mapping[class_id] = emoji_str
+    async def _set_spec_emoji_str(self, class_id: str, spec_id: str, emoji_str: str):
+        async with self.config.spec_emojis() as mapping:
+            mapping[f"{class_id}:{spec_id}"] = emoji_str
 
-    async def _delete_class_emoji(self, class_id: str):
-        name = self._emoji_name(class_id)
+    async def _delete_spec_emoji(self, class_id: str, spec_id: str):
+        name = self._emoji_name(class_id, spec_id)
         if self._supports_app_emojis():
             try:
                 for e in await self.bot.fetch_application_emojis():
@@ -183,18 +183,29 @@ class RaidHelper(commands.Cog):
                         await self.bot.delete_application_emoji(e)
             except discord.HTTPException:
                 pass
-        async with self.config.class_emojis() as mapping:
-            mapping.pop(class_id, None)
+        async with self.config.spec_emojis() as mapping:
+            mapping.pop(f"{class_id}:{spec_id}", None)
 
     @staticmethod
-    def _known_class_ids() -> list[str]:
-        """Vereinigung aller Klassen-IDs über alle Spiele (Retail ist die Obermenge)."""
-        seen: list[str] = []
+    def _known_spec_structure() -> list[tuple[str, str, list[tuple[str, str]]]]:
+        """[(class_id, class_label, [(spec_id, spec_label), …]), …] – Vereinigung über alle Spiele."""
+        order: list[str] = []
+        index: dict[str, dict] = {}
         for gid, _ in games.list_games():
             for cid in games.class_order(gid):
-                if cid not in seen:
-                    seen.append(cid)
-        return seen
+                if cid not in index:
+                    index[cid] = {"label": games.class_label(gid, cid), "specs": [], "seen": set()}
+                    order.append(cid)
+                entry = index[cid]
+                for sid, slabel, _role in games.specs_of(gid, cid):
+                    if sid not in entry["seen"]:
+                        entry["seen"].add(sid)
+                        entry["specs"].append((sid, slabel))
+        return [(cid, index[cid]["label"], index[cid]["specs"]) for cid in order]
+
+    @classmethod
+    def _known_pair_set(cls) -> set[tuple[str, str]]:
+        return {(cid, sid) for cid, _lbl, specs in cls._known_spec_structure() for sid, _sl in specs}
 
 
     # ----------------------------------------------------------------- #
@@ -206,7 +217,7 @@ class RaidHelper(commands.Cog):
             return None
         lang = await self._lang(guild)
         overrides = await self._overrides(guild)
-        emojis = await self._class_emojis()
+        emojis = await self._spec_emojis()
         try:
             msg = await channel.send(
                 embed=build_event_embed(event, lang, overrides=overrides, emojis=emojis),
@@ -225,7 +236,7 @@ class RaidHelper(commands.Cog):
             return
         lang = await self._lang(guild)
         overrides = await self._overrides(guild)
-        emojis = await self._class_emojis()
+        emojis = await self._spec_emojis()
         try:
             msg = await channel.fetch_message(event["message_id"])
             await msg.edit(
@@ -324,10 +335,10 @@ class RaidHelper(commands.Cog):
             await self._apply_signup(interaction, event_id, class_id, spec_id)
             return
         # Vorauswahl der gemerkten Spec? Trotzdem Auswahl anbieten (Wechsel möglich).
-        emojis = await self._class_emojis()
+        emojis = await self._spec_emojis()
         await interaction.response.send_message(
             t(lang, "pick_spec", cls=games.class_label(game_id, class_id)),
-            view=build_spec_view(event_id, class_id, game_id, lang, emojis.get(class_id)),
+            view=build_spec_view(event_id, class_id, game_id, lang, emojis),
             ephemeral=True,
         )
 
@@ -811,60 +822,70 @@ class RaidHelper(commands.Cog):
             return await ctx.send("WebCore ist nicht geladen – Dashboard nicht verfügbar.")
         await ctx.send("Die Raidplaner-Seite findest du im WebCore-Dashboard unter `/cogs/raidhelper`.")
 
-    # ----- Klassen-Icons ----------------------------------------------- #
+    # ----- Spec-Icons -------------------------------------------------- #
     @raidset.command(name="icons")
     async def raidset_icons(self, ctx):
-        """Zeigt, welche Klassen ein Icon haben (botweit)."""
+        """Zeigt, welche Spezialisierungen ein Icon haben (botweit)."""
         lang = await self._lang(ctx.guild)
-        mapping = await self._class_emojis()
+        mapping = await self._spec_emojis()
         lines = [t(lang, "icons_list_header")]
-        for cid in self._known_class_ids():
-            emoji = mapping.get(cid, "—")
-            lines.append(f"{emoji} {games.class_label('wow_retail', cid)} (`{cid}`)")
-        await ctx.send("\n".join(lines))
+        for cid, clabel, specs in self._known_spec_structure():
+            parts = []
+            for sid, slabel in specs:
+                emoji = mapping.get(f"{cid}:{sid}", "—")
+                parts.append(f"{emoji} {slabel}")
+            lines.append(f"**{clabel}**: " + " · ".join(parts))
+        # Discord-Nachrichtenlimit beachten
+        text = "\n".join(lines)
+        await ctx.send(text[:1990])
 
-    @raidset.command(name="classicon")
-    async def raidset_classicon(self, ctx, class_id: str, emoji: str):
-        """Setzt das Icon einer Klasse manuell auf ein vorhandenes Emoji."""
+    @raidset.command(name="specicon")
+    async def raidset_specicon(self, ctx, class_id: str, spec_id: str, emoji: str):
+        """Setzt das Icon einer Spezialisierung manuell auf ein vorhandenes Emoji."""
         lang = await self._lang(ctx.guild)
-        class_id = class_id.lower()
-        if class_id not in self._known_class_ids():
-            return await ctx.send(t(lang, "icon_unknown_class", cls=class_id,
-                                    classes=", ".join(self._known_class_ids())))
-        await self._set_class_emoji_str(class_id, emoji.strip())
-        await ctx.send(t(lang, "icon_set", cls=games.class_label("wow_retail", class_id), emoji=emoji.strip()))
+        class_id, spec_id = class_id.lower(), spec_id.lower()
+        if (class_id, spec_id) not in self._known_pair_set():
+            return await ctx.send(t(lang, "icon_unknown_pair", cls=class_id, spec=spec_id))
+        await self._set_spec_emoji_str(class_id, spec_id, emoji.strip())
+        await ctx.send(t(lang, "icon_set",
+                         cls=games.class_label("wow_retail", class_id),
+                         spec=spec_id, emoji=emoji.strip()))
 
-    @raidset.command(name="clearicon")
-    async def raidset_clearicon(self, ctx, class_id: str):
-        """Entfernt das Icon einer Klasse."""
+    @raidset.command(name="clearspecicon")
+    async def raidset_clearspecicon(self, ctx, class_id: str, spec_id: str):
+        """Entfernt das Icon einer Spezialisierung."""
         lang = await self._lang(ctx.guild)
-        class_id = class_id.lower()
-        await self._delete_class_emoji(class_id)
-        await ctx.send(t(lang, "icon_removed", cls=games.class_label("wow_retail", class_id)))
+        class_id, spec_id = class_id.lower(), spec_id.lower()
+        await self._delete_spec_emoji(class_id, spec_id)
+        await ctx.send(t(lang, "icon_removed",
+                         cls=games.class_label("wow_retail", class_id), spec=spec_id))
 
     @raidset.command(name="uploadicons")
     async def raidset_uploadicons(self, ctx):
-        """Lädt angehängte Bilddateien als Klassen-Icons hoch (Dateiname = Klassen-ID)."""
+        """Lädt angehängte Bilddateien als Spec-Icons hoch (Dateiname = klasse_spec, z. B. krieger_furor.png)."""
         lang = await self._lang(ctx.guild)
         if not self._supports_app_emojis():
             return await ctx.send(t(lang, "icons_unsupported"))
         attachments = getattr(ctx.message, "attachments", [])
         if not attachments:
             return await ctx.send(t(lang, "icons_no_files"))
-        known = self._known_class_ids()
-        ok, skipped = [], []
+        pairs = self._known_pair_set()
+        # Dateiname klasse_spec -> (class, spec): am ersten "_" trennen (IDs sind unterstrichfrei).
+        ok, skipped = 0, 0
         for att in attachments:
             stem = att.filename.rsplit(".", 1)[0].lower()
-            if stem not in known:
-                skipped.append(att.filename)
+            cls_spec = stem.split("_", 1)
+            if len(cls_spec) != 2 or tuple(cls_spec) not in pairs:
+                skipped += 1
                 continue
+            cid, sid = cls_spec
             try:
                 data = await att.read()
                 if len(data) > 256 * 1024:
-                    skipped.append(f"{att.filename} (>256 KB)")
+                    skipped += 1
                     continue
-                await self._set_class_emoji_from_bytes(stem, data)
-                ok.append(stem)
+                await self._set_spec_emoji_from_bytes(cid, sid, data)
+                ok += 1
             except (discord.HTTPException, RuntimeError):
-                skipped.append(att.filename)
-        await ctx.send(t(lang, "icons_upload_result", ok=len(ok), skipped=len(skipped)))
+                skipped += 1
+        await ctx.send(t(lang, "icons_upload_result", ok=ok, skipped=skipped))

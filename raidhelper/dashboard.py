@@ -210,48 +210,55 @@ async def _render(cog, request):
     # Event-Tabelle
     table = _render_events_table(events, guild.id, tz_name, csrf)
 
-    # Klassen-Icons
-    class_emojis = await cog._class_emojis()
+    # Spec-Icons
+    spec_emojis = await cog._spec_emojis()
     supported = cog._supports_app_emojis()
-    known = [(cid, games.class_label("wow_retail", cid)) for cid in cog._known_class_ids()]
-    icons_card = _render_icons(csrf, guild.id, class_emojis, supported, known)
+    structure = cog._known_spec_structure()
+    icons_card = _render_icons(csrf, guild.id, spec_emojis, supported, structure)
 
     return {"title": "Raidplaner",
             "content": _FORM_STYLE + bar + flash + stats + settings + table + "<div class='rh-spacer'></div>" + icons_card}
 
 
-def _render_icons(csrf: str, guild_id: int, emojis: dict, supported: bool, known) -> str:
+def _render_icons(csrf: str, guild_id: int, emojis: dict, supported: bool, structure) -> str:
     rows = ""
-    for cid, label in known:
-        cur = emojis.get(cid)
-        img = _emoji_img(cur)
-        if img:
-            cell = f"<img src='{img}' width='22' height='22' style='border-radius:5px;vertical-align:middle'>"
-        elif cur:
-            cell = f"<span class='mono'>{_esc(cur)}</span>"
-        else:
-            cell = "<span style='color:var(--muted)'>—</span>"
+    for cid, clabel, specs in structure:
         rows += (
-            f"<tr><td>{_esc(label)}</td><td class='mono' style='color:var(--muted)'>{_esc(cid)}</td>"
-            f"<td>{cell}</td>"
-            f"<td><label class='rh-check' style='margin:0'><input type='checkbox' name='remove_{_esc(cid)}'>"
-            f"<span>entfernen</span></label></td></tr>"
+            f"<tr><td colspan='4' style='padding-top:12px;color:#fff;font-weight:700'>{_esc(clabel)}</td></tr>"
         )
+        for sid, slabel in specs:
+            key = f"{cid}:{sid}"
+            cur = emojis.get(key)
+            img = _emoji_img(cur)
+            if img:
+                cell = f"<img src='{img}' width='22' height='22' style='border-radius:5px;vertical-align:middle'>"
+            elif cur:
+                cell = f"<span class='mono'>{_esc(cur)}</span>"
+            else:
+                cell = "<span style='color:var(--muted)'>—</span>"
+            rows += (
+                f"<tr><td style='padding-left:18px'>{_esc(slabel)}</td>"
+                f"<td class='mono' style='color:var(--muted)'>{_esc(cid)}_{_esc(sid)}</td>"
+                f"<td>{cell}</td>"
+                f"<td><label class='rh-check' style='margin:0'><input type='checkbox' name='remove_{_esc(cid)}_{_esc(sid)}'>"
+                f"<span>entfernen</span></label></td></tr>"
+            )
     warning = ""
     if not supported:
         warning = (
             "<div class='rh-flash' style='background:rgba(255,107,107,.12);border-color:var(--danger);color:#ffd9d9'>"
             "Dieser Bot unterst&uuml;tzt keine Application-Emojis (discord.py &lt; 2.4). Der Upload funktioniert nicht – "
-            "bitte Red aktualisieren oder Icons per Befehl <span class='mono'>[p]raidset classicon</span> setzen."
+            "bitte Red aktualisieren oder Icons per Befehl <span class='mono'>[p]raidset specicon</span> setzen."
             "</div>"
         )
     disabled = " disabled" if not supported else ""
     return f"""
     <div class='card-x'>
-      <div class='rh-title'>Klassen-Icons</div>
+      <div class='rh-title'>Spec-Icons</div>
       <div style='color:var(--muted);font-size:.85rem;margin-bottom:14px'>
-        Icons gelten <b>botweit</b> (Application Emojis) f&uuml;r alle WoW-Vorlagen. Pro Datei max. 256&nbsp;KB,
-        Gesamt-Upload m&ouml;glichst unter 1&nbsp;MB. Dateiname = Klassen-ID, z.&nbsp;B. <span class='mono'>krieger.png</span>.
+        Icons gelten <b>botweit</b> (Application Emojis) und pro Spezialisierung. Pro Datei max. 256&nbsp;KB,
+        Gesamt-Upload m&ouml;glichst unter 1&nbsp;MB. Dateiname = <span class='mono'>klasse_spec</span>,
+        z.&nbsp;B. <span class='mono'>krieger_furor.png</span>.
       </div>
       {warning}
       <form class='rh-form' method='post' action='/cogs/raidhelper' enctype='multipart/form-data'>
@@ -259,7 +266,7 @@ def _render_icons(csrf: str, guild_id: int, emojis: dict, supported: bool, known
         <input type='hidden' name='form' value='icons'>
         <input type='hidden' name='guild' value='{guild_id}'>
         <table class='table'>
-          <thead><tr><th>Klasse</th><th>ID</th><th>Aktuelles Icon</th><th>Aktion</th></tr></thead>
+          <thead><tr><th>Spec</th><th>Datei-ID</th><th>Aktuelles Icon</th><th>Aktion</th></tr></thead>
           <tbody>{rows}</tbody>
         </table>
         <label>Icons hochladen (mehrere Dateien m&ouml;glich)</label>
@@ -434,11 +441,11 @@ async def _handle_post(cog, request):
             raise web.HTTPFound(f"/cogs/raidhelper?guild={guild.id}&ok=Gel%C3%B6scht")
 
     if form == "icons":
-        known = set(cog._known_class_ids())
+        pairs = cog._known_pair_set()  # {(class_id, spec_id), …}
         removed = 0
-        for cid in list(known):
-            if f"remove_{cid}" in data:
-                await cog._delete_class_emoji(cid)
+        for cid, sid in list(pairs):
+            if f"remove_{cid}_{sid}" in data:
+                await cog._delete_spec_emoji(cid, sid)
                 removed += 1
         unsupported = not cog._supports_app_emojis()
         files = [] if unsupported else data.getall("icons", [])
@@ -449,9 +456,11 @@ async def _handle_post(cog, request):
             if not filename or fileobj is None:
                 continue
             stem = filename.rsplit(".", 1)[0].lower()
-            if stem not in known:
+            parts = stem.split("_", 1)  # IDs sind unterstrichfrei -> erster "_" trennt Klasse/Spec
+            if len(parts) != 2 or (parts[0], parts[1]) not in pairs:
                 skipped += 1
                 continue
+            cid, sid = parts
             try:
                 fileobj.seek(0)
                 raw = fileobj.read()
@@ -462,7 +471,7 @@ async def _handle_post(cog, request):
                 skipped += 1
                 continue
             try:
-                await cog._set_class_emoji_from_bytes(stem, raw)
+                await cog._set_spec_emoji_from_bytes(cid, sid, raw)
                 ok += 1
             except Exception:  # noqa: BLE001
                 skipped += 1

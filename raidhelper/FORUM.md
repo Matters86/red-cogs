@@ -17,7 +17,7 @@ Voraussetzung: der Cog `webcore` ist installiert und eingerichtet.
 - Erinnerungen 60 & 15 Min vorher (optional per DM), wiederkehrende Events
 - Teilnahme-Statistik, CSV-Export
 - Drei WoW-Vorlagen (Retail/Classic/WotLK) mit deutschen Klassen- und Spec-Namen
-- Eigene Klassen-Icons (Application-Emojis), bequem per Dashboard hochladbar
+- Eigene Spec-Icons je Spezialisierung (Application-Emojis), bequem per Dashboard hochladbar
 - Verwaltung komplett über das WebCore-Dashboard
 - Persistente Buttons (überstehen Neustarts)
 
@@ -43,9 +43,9 @@ Voraussetzung: der Cog `webcore` ist installiert und eingerichtet.
 | `[p]raidset timezone <zone>` | Anzeige-Zeitzone setzen (z. B. `Europe/Berlin`). | Admin / Manage Server |
 | `[p]raidset reminders <true\|false>` | Erinnerungen an-/ausschalten. | Admin / Manage Server |
 | `[p]raidset icons` | Zeigt, welche Klasse welches Icon hat. | Admin / Manage Server |
-| `[p]raidset classicon <klasse> <emoji>` | Icon einer Klasse manuell setzen. | Admin / Manage Server |
-| `[p]raidset clearicon <klasse>` | Icon einer Klasse entfernen. | Admin / Manage Server |
-| `[p]raidset uploadicons` | Angehängte Bilder als Klassen-Icons hochladen (Dateiname = Klassen-ID). | Admin / Manage Server |
+| `[p]raidset specicon <klasse> <spec> <emoji>` | Icon einer Spezialisierung manuell setzen. | Admin / Manage Server |
+| `[p]raidset clearspecicon <klasse> <spec>` | Icon einer Spezialisierung entfernen. | Admin / Manage Server |
+| `[p]raidset uploadicons` | Angehängte Bilder als Spec-Icons hochladen (Dateiname = klasse_spec). | Admin / Manage Server |
 | `[p]raidset settings` | Aktuelle Einstellungen anzeigen. | Admin / Manage Server |
 | `[p]raidset dashboard` | Hinweis zur Dashboard-Seite. | Admin / Manage Server |
 
