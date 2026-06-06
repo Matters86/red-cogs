@@ -125,6 +125,7 @@ _WOW_RETAIL_CLASSES: dict[str, dict] = {
     "daemonenjaeger": _cls("daemonenjaeger", "Dämonenjäger", {
         "verwuestung": _spec("Verwüstung", "mdps"),
         "rachsucht": _spec("Rachsucht", "tank"),
+        "verschlinger": _spec("Verschlinger", "rdps"),
     }),
     "rufer": _cls("rufer", "Rufer", {
         "verheerung": _spec("Verheerung", "rdps"),
