@@ -71,12 +71,14 @@
 <body>
   <aside class="sidebar">
     <div class="brand"><span class="dot"></span> {{ bot_name }}</div>
+    {% if authorized %}
     <a class="nav-link {% if active_page == 'home' %}active{% endif %}" href="/"><i class="bi bi-speedometer2"></i> Übersicht</a>
     {% if nav_pages %}
       <div class="nav-section">Cogs</div>
       {% for p in nav_pages %}
         <a class="nav-link {% if active_page == p.slug %}active{% endif %}" href="/cogs/{{ p.slug }}"><i class="bi {{ p.icon }}"></i> {{ p.name }}</a>
       {% endfor %}
+    {% endif %}
     {% endif %}
     <div class="nav-section" style="margin-top:auto">Sitzung</div>
     {% if current_user %}

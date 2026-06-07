@@ -152,9 +152,11 @@ class WebCore(commands.Cog):
 
     async def _global_context(self, request):
         """Wird bei jedem Template-Render eingefügt (Navigation, User …)."""
+        user = await self._get_user(request)
         return {
             "nav_pages": list(self.pages.values()),
-            "current_user": await self._get_user(request),
+            "current_user": user,
+            "authorized": await self._is_authorized(user),
             "bot_name": self.bot.user.name if self.bot.user else "Red",
         }
 
