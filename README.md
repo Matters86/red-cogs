@@ -28,6 +28,7 @@ Danach `webcore` einrichten (siehe [`webcore/README.md`](webcore/README.md)).
 | [`poll`](poll/) | Mehrsprachige Umfragen mit Abstimmung per Button, Live-Ergebnis und Dashboard. |
 | [`autorole`](autorole/) | Vergibt automatisch Rollen beim Beitritt – respektiert die Regelverifizierung, prüft Zuweisbarkeit, mit Anti-Raid, Bot- und sicheren Sticky-Rollen. Plus Self-Service-Rollen-Panels (Buttons/Dropdown). Voll per Dashboard konfigurierbar. |
 | [`commands`](commands/) | Listet alle Befehle aller Cogs im Dashboard – Stufen-Spalten (Jeder/Mod/Admin/Owner), exakte Mitglieds-Prüfung, Detail-Metadaten, Suche/Filter, Ausblenden und Markdown-Export. Plus `[p]meinebefehle`. |
+| [`guard`](guard/) | Spamschutz, Honeypot und Raid-Notmodus in einem: Heuristiken mit Punkte-Eskalation (verwarnen→Timeout→Kick→Bann), Honeypot-Kanal und Notmodus (übersteht Neustarts). Aktionen ohne DM, Log-Kanal + optional Reds modlog, Whitelist und Reds Immunität. Voll per Dashboard konfigurierbar. |
 
 ## Wie das Dashboard funktioniert
 

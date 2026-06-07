@@ -1,0 +1,12 @@
+{
+    "name": "Guard",
+    "short": "Spamschutz, Honeypot und Raid-Notmodus – mehrsprachig und per Dashboard steuerbar.",
+    "description": "Schutz-Cog mit zwei unabh\u00e4ngig schaltbaren Modulen. Honeypot: ein K\u00f6der-Kanal, in dem reguläre Mitglieder nie schreiben \u2013 wer dort postet, wird automatisch entfernt (Bann/Softban/Kick/Timeout w\u00e4hlbar). Spamschutz: mehrere Heuristiken (Nachrichten-Rate, Wiederholungen, Massen-Erw\u00e4hnungen, Einladungs-/Linkfilter, Anhang-/Emoji-/Zeilen-Walls, sehr neue Konten) f\u00fcttern ein Punktesystem; Schwellen l\u00f6sen eine Eskalationsleiter aus (Verwarnen \u2192 Timeout \u2192 Kick \u2192 Bann), Punkte verfallen nach einstellbarer Zeit. Dazu ein Raid-Notmodus (Lockdown): zu viele Beitritte in kurzer Zeit oder ein Befehl setzen Slowmode, pausieren Einladungen (falls unterst\u00fctzt) und behandeln neue Beitritte; der Notmodus \u00fcbersteht Neustarts und endet automatisch. Owner, Admins und Reds Immunit\u00e4t sind ausgenommen, dazu eigene Whitelist (Rollen/Kan\u00e4le/Nutzer). Aktionen werden ohne DM in einen Log-Kanal geschrieben, optional in Reds modlog gespiegelt und als Verlauf f\u00fcrs Dashboard gespeichert. Mehrsprachig (Deutsch als Standard, pro Server umschaltbar). Ohne externe pip-Abh\u00e4ngigkeiten.",
+    "tags": ["moderation", "antispam", "honeypot", "raid", "lockdown", "security", "dashboard", "i18n"],
+    "requirements": [],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert pro Server eine begrenzte Verlaufsliste der automatischen Moderationsaktionen. Zu jedem Eintrag werden die Discord-ID und der angezeigte Name der betroffenen Person, die ausgel\u00f6ste Aktion, die ausl\u00f6senden Regeln, der Kanalname und ein Zeitstempel gespeichert. Nachrichteninhalte werden nicht dauerhaft gespeichert; ausl\u00f6sende Nachrichten werden ggf. gel\u00f6scht. Optional werden Aktionen zus\u00e4tzlich in Reds modlog als Fall gespeichert. Der Verlauf ist auf die letzten 50 Eintr\u00e4ge begrenzt und wird beim Entfernen des Cogs oder \u00fcber Reds Datenl\u00f6schbefehle entfernt."
+}
