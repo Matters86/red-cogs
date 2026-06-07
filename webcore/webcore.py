@@ -17,11 +17,35 @@ from redbot.core import Config, commands
 from redbot.core.bot import Red
 from redbot.core.utils.chat_formatting import box
 
+import collections
+import platform
+from datetime import datetime, timezone
+
+import discord
+
+try:
+    import psutil
+except Exception:  # psutil ist optional
+    psutil = None
+
 log = logging.getLogger("red.red-cogs.webcore")
 
 DISCORD_API = "https://discord.com/api/v10"
 DISCORD_AUTHORIZE = "https://discord.com/oauth2/authorize"
 DISCORD_TOKEN = f"{DISCORD_API}/oauth2/token"
+
+try:
+    import redbot
+    RED_VERSION = getattr(redbot, "__version__", "?")
+except Exception:
+    RED_VERSION = "?"
+DPY_VERSION = discord.__version__
+PY_VERSION = platform.python_version()
+
+
+def _fmt(n: int) -> str:
+    """Tausendertrennung im deutschen Format (24500 -> 24.500)."""
+    return f"{n:,}".replace(",", ".")
 
 
 class DashboardPage:
@@ -59,6 +83,10 @@ class WebCore(commands.Cog):
         self.runner: web.AppRunner | None = None
         self.site: web.TCPSite | None = None
 
+        self.recent: collections.deque = collections.deque(maxlen=12)
+        self._loaded_at = datetime.now(timezone.utc)
+        self._process = None
+
     # ----------------------------------------------------------------- #
     #  Öffentliche API für andere Cogs
     # ----------------------------------------------------------------- #
@@ -83,6 +111,12 @@ class WebCore(commands.Cog):
     #  Lifecycle
     # ----------------------------------------------------------------- #
     async def cog_load(self):
+        if psutil is not None:
+            try:
+                self._process = psutil.Process()
+                self._process.cpu_percent(None)  # CPU-Messung initialisieren
+            except Exception:
+                self._process = None
         await self._start_webserver()
 
     async def cog_unload(self):
@@ -91,6 +125,21 @@ class WebCore(commands.Cog):
         if self.runner is not None:
             await self.runner.cleanup()
         log.info("WebCore-Dashboard gestoppt.")
+
+    @commands.Cog.listener()
+    async def on_command_completion(self, ctx: commands.Context):
+        """Hält die zuletzt genutzten Befehle für die Übersicht fest (nur im Speicher)."""
+        self.recent.appendleft(
+            {
+                "command": ctx.command.qualified_name if ctx.command else "?",
+                "where": (
+                    f"{ctx.guild.name} · {ctx.author.display_name}"
+                    if ctx.guild
+                    else f"DM · {ctx.author.display_name}"
+                ),
+                "ts": datetime.now(timezone.utc),
+            }
+        )
 
     async def _start_webserver(self):
         data = await self.config.all()
@@ -117,6 +166,7 @@ class WebCore(commands.Cog):
                 web.get("/logout", self.handle_logout),
                 web.get("/cogs/{slug}", self.handle_cog_page),
                 web.post("/cogs/{slug}", self.handle_cog_page),
+                web.get("/api/overview", self.handle_overview_api),
             ]
         )
 
@@ -168,13 +218,120 @@ class WebCore(commands.Cog):
         user = await self._get_user(request)
         if not await self._is_authorized(user):
             return self._login_response(request)
-        lat = self.bot.latency
+        ctx = self._collect_overview()
+        ctx["title"] = "Übersicht"
+        ctx["active_page"] = "home"
+        return ctx
+
+    async def handle_overview_api(self, request):
+        """Live-Kennzahlen als JSON (für die automatische Aktualisierung)."""
+        user = await self._get_user(request)
+        if not await self._is_authorized(user):
+            return web.json_response({"error": "unauthorized"}, status=403)
+        return web.json_response(self._collect_overview())
+
+    # ----------------------------------------------------------------- #
+    #  Übersicht: Datensammlung
+    # ----------------------------------------------------------------- #
+    @staticmethod
+    def _aware(dt):
+        if dt is None:
+            return datetime.now(timezone.utc)
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    @staticmethod
+    def _humanize(delta) -> str:
+        secs = int(delta.total_seconds())
+        if secs < 60:
+            return "<1m"
+        days, secs = divmod(secs, 86400)
+        hours, secs = divmod(secs, 3600)
+        mins, _ = divmod(secs, 60)
+        parts = []
+        if days:
+            parts.append(f"{days}d")
+        if hours:
+            parts.append(f"{hours}h")
+        if mins or not parts:
+            parts.append(f"{mins}m")
+        return " ".join(parts)
+
+    def _ago(self, ts, now=None) -> str:
+        now = now or datetime.now(timezone.utc)
+        secs = int((now - self._aware(ts)).total_seconds())
+        if secs < 10:
+            return "gerade eben"
+        if secs < 60:
+            return f"vor {secs}s"
+        if secs < 3600:
+            return f"vor {secs // 60}m"
+        return f"vor {secs // 3600}h {(secs % 3600) // 60}m"
+
+    def _collect_overview(self) -> dict:
+        bot = self.bot
+        guilds = list(bot.guilds)
+        member_total = sum((g.member_count or 0) for g in guilds)
+        channel_count = sum(len(g.channels) for g in guilds)
+        lat = bot.latency
+        latency = round(lat * 1000) if lat == lat else 0  # NaN != NaN
+
+        started = getattr(bot, "uptime", None) or self._loaded_at
+        uptime = self._humanize(datetime.now(timezone.utc) - self._aware(started))
+
+        largest = max((g.member_count or 0) for g in guilds) if guilds else 0
+        top = sorted(guilds, key=lambda g: (g.member_count or 0), reverse=True)[:5]
+        top_guilds = [
+            {
+                "name": g.name,
+                "members": _fmt(g.member_count or 0),
+                "pct": round((g.member_count or 0) / largest * 100) if largest else 0,
+            }
+            for g in top
+        ]
+
+        mem_mb = mem_pct = cpu_pct = None
+        if self._process is not None:
+            try:
+                mem_mb = round(self._process.memory_info().rss / 1048576)
+                mem_pct = round(self._process.memory_percent())
+                cpu_pct = round(self._process.cpu_percent())
+            except Exception:
+                pass
+
+        now = datetime.now(timezone.utc)
+        activity = [
+            {"ago": self._ago(a["ts"], now), "command": a["command"], "where": a["where"]}
+            for a in self.recent
+        ]
+
+        try:
+            command_count = sum(1 for _ in bot.walk_commands())
+        except Exception:
+            command_count = len(bot.commands)
+
         return {
-            "title": "Übersicht",
-            "active_page": "home",
-            "guild_count": len(self.bot.guilds),
-            "latency": round(lat * 1000) if lat == lat else 0,  # NaN != NaN
-            "cog_count": len(self.bot.cogs),
+            "guild_count": _fmt(len(guilds)),
+            "member_total": _fmt(member_total),
+            "user_count": _fmt(len(bot.users)),
+            "channel_count": _fmt(channel_count),
+            "emoji_count": _fmt(len(bot.emojis)),
+            "command_count": _fmt(command_count),
+            "cog_count": _fmt(len(bot.cogs)),
+            "latency": latency,
+            "uptime": uptime,
+            "shard_count": bot.shard_count or 1,
+            "red_version": RED_VERSION,
+            "dpy_version": DPY_VERSION,
+            "py_version": PY_VERSION,
+            "mem_mb": mem_mb,
+            "mem_pct": mem_pct,
+            "cpu_pct": cpu_pct,
+            "top_guilds": top_guilds,
+            "activity": activity,
+            "now": now.strftime("%H:%M:%S"),
+            "bot_avatar": str(bot.user.display_avatar.url) if bot.user else None,
         }
 
     async def handle_login(self, request):
