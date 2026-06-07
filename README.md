@@ -26,7 +26,7 @@ Danach `webcore` einrichten (siehe [`webcore/README.md`](webcore/README.md)).
 | [`sticky`](sticky/) | Hält eine Nachricht am unteren Ende eines Kanals fest (Text/Embed, Webhook, Platzhalter, Cooldown). Voll per Dashboard konfigurierbar. |
 | [`organigram`](organigram/) | Postet Server-Organigramme als Bild, Embed oder Text (Rollen + manuelle Namen, fünf Muster, Auto-Update). Voll per Dashboard konfigurierbar. |
 | [`poll`](poll/) | Mehrsprachige Umfragen mit Abstimmung per Button, Live-Ergebnis und Dashboard. |
-| [`autorole`](autorole/) | Vergibt automatisch Rollen beim Beitritt – respektiert die Regelverifizierung, prüft Zuweisbarkeit, mit Anti-Raid, Bot- und sicheren Sticky-Rollen. Voll per Dashboard konfigurierbar. |
+| [`autorole`](autorole/) | Vergibt automatisch Rollen beim Beitritt – respektiert die Regelverifizierung, prüft Zuweisbarkeit, mit Anti-Raid, Bot- und sicheren Sticky-Rollen. Plus Self-Service-Rollen-Panels (Buttons/Dropdown). Voll per Dashboard konfigurierbar. |
 
 ## Wie das Dashboard funktioniert
 

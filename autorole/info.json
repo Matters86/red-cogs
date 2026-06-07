@@ -1,8 +1,8 @@
 {
     "name": "Autorole",
     "short": "Vergibt automatisch Rollen an neue Mitglieder.",
-    "description": "Weist neuen Mitgliedern beim Beitritt automatisch eine oder mehrere Rollen zu. Berücksichtigt die native Discord-Regelverifizierung (Membership Screening), prüft vor jeder Vergabe die Zuweisbarkeit jeder Rolle, bietet Anti-Raid-Verzögerung und Mindest-Kontoalter, getrennte Rollen für Bots sowie sichere Sticky-Rollen (nur markierte Rollen werden beim Verlassen gemerkt und beim Wiederbeitritt wiederhergestellt). Mehrsprachig (Deutsch/Englisch) und vollständig über das WebCore-Dashboard konfigurierbar.",
-    "tags": ["autorole", "roles", "join", "welcome", "moderation", "dashboard"],
+    "description": "Weist neuen Mitgliedern beim Beitritt automatisch eine oder mehrere Rollen zu. Berücksichtigt die native Discord-Regelverifizierung (Membership Screening), prüft vor jeder Vergabe die Zuweisbarkeit jeder Rolle, bietet Anti-Raid-Verzögerung und Mindest-Kontoalter, getrennte Rollen für Bots sowie sichere Sticky-Rollen (nur markierte Rollen werden beim Verlassen gemerkt und beim Wiederbeitritt wiederhergestellt). Bietet außerdem Self-Service-Rollen-Panels: gepostete Nachrichten mit Buttons oder einem Dropdown, über die sich Mitglieder selbst Rollen geben oder nehmen (Verhalten je Panel einstellbar, übersteht Neustarts). Mehrsprachig (Deutsch/Englisch) und vollständig über das WebCore-Dashboard konfigurierbar.",
+    "tags": ["autorole", "roles", "join", "welcome", "moderation", "dashboard", "buttons", "dropdown", "self-roles", "button-roles", "reaction-roles"],
     "requirements": [],
     "min_bot_version": "3.5.0",
     "hidden": false,

@@ -31,6 +31,9 @@ Jedes neue Mitglied bekommt nun **@Mitglied** – bei aktiver Regelverifizierung
 - **Getrennte Bot-Rollen:** beitretende Bots bekommen eigene Rollen (ohne Screening).
 - **Sichere Sticky-Rollen:** nur markierte Rollen werden gemerkt/wiederhergestellt – keine
   pauschale Wiederherstellung, damit keine Mute-/Straf-Rolle per Rejoin zurückkommt.
+- **Rollen-Panels (Self-Service):** gepostete Nachricht mit **Buttons oder Dropdown** zum
+  Selbstvergeben von Rollen – Verhalten pro Panel (Toggle / nur vergeben / nur eine Rolle),
+  funktioniert auch nach einem Neustart weiter.
 
 ## Regelverifizierung
 | Modus | Verhalten |
@@ -61,12 +64,30 @@ Jedes neue Mitglied bekommt nun **@Mitglied** – bei aktiver Regelverifizierung
 
 Gibt es auch als Slash-Befehle (`/autorole …`).
 
+## Rollen-Panels (Buttons & Dropdown)
+Der Bot postet eine Nachricht mit **Buttons** oder einem **Dropdown** darunter; Mitglieder klicken
+und erhalten/verlieren die Rolle. Beliebig viele Panels pro Server, jedes einzeln einstellbar:
+**Darstellung** (Buttons/Dropdown), **Verhalten** (`Toggle` / `Nur vergeben`), optional **nur eine
+Rolle gleichzeitig** (z. B. Farben) und **Aussehen** (Embed oder Text). Es greift dieselbe
+Zuweisbarkeits-Prüfung; die Antwort sieht nur die klickende Person (ephemer); die Panels
+funktionieren auch **nach einem Neustart** weiter. Feineinstellungen (Emoji, Button-Farbe, Texte)
+am besten im **Dashboard**.
+
+| Befehl (Admin / „Rollen verwalten") | Beschreibung |
+|---|---|
+| `[p]autorole panel list` | Panels auflisten (ID, Kanal, Stil, Status). |
+| `[p]autorole panel create <name>` | Neues, leeres Panel anlegen. |
+| `[p]autorole panel addrole <id> <rolle>` | Rolle zum Panel hinzufügen. |
+| `[p]autorole panel removerole <id> <rolle>` | Rolle aus dem Panel entfernen. |
+| `[p]autorole panel post <id> [#kanal]` | Panel posten/aktualisieren. |
+| `[p]autorole panel delete <id>` | Panel samt Nachricht löschen. |
+
 ## Dashboard
 Mit geladenem `webcore` erscheint der Tab **Autorole**: Status-Übersicht (aktiv?, Anzahl
 Mitglieder-/Bot-Rollen, Regelverifizierung), Warnungen (fehlendes Recht „Rollen verwalten\" oder
 nicht zuweisbare Rollen), ein Formular für alle Einstellungen (An/Aus, Sprache, Screening,
 Verzögerung, Kontoalter, die drei Rollenlisten) sowie ein Knopf **„Jetzt anwenden\"** für
-bestehende Mitglieder – alles per Formular.
+bestehende Mitglieder – alles per Formular. Unter **Rollen-Panels** legst du beliebig viele Self-Service-Panels (Buttons/Dropdown) an, pflegst Rollen samt Emoji/Farbe und postest sie.
 
 ## Hinweise
 - Der Bot vergibt nur Rollen **unter** seiner höchsten Rolle; nicht zuweisbare Rollen werden mit ⚠ markiert.
