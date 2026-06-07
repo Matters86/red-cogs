@@ -703,135 +703,154 @@ class AutoRoom(commands.Cog):
 
     async def _render_dashboard(self, request) -> dict:
         csrf = request.get("webcore_csrf", "")
+
+        guilds = sorted(self.bot.guilds, key=lambda g: g.name.lower())
+        if not guilds:
+            return {"title": "Autovoiceroom", "content": "<div class='card-x'>Der Bot ist auf keinem Server.</div>"}
+
+        gid = request.query.get("guild")
+        guild = self.bot.get_guild(int(gid)) if (gid and gid.isdigit()) else None
+        if guild is None or guild not in guilds:
+            guild = guilds[0]
+
         flash = ""
         if request.query.get("ok"):
             flash = "<div class='card-x' style='border-color:var(--accent);margin-bottom:16px'>Gespeichert.</div>"
         elif request.query.get("err"):
             flash = "<div class='card-x' style='border-color:var(--danger);margin-bottom:16px'>Eingabe ungültig – bitte prüfen.</div>"
 
-        # Aktive Räume (über alle Server)
+        # Server-Auswahl (nur wenn der Bot auf mehr als einem Server ist)
+        guild_picker = ""
+        if len(guilds) > 1:
+            options = "".join(
+                f"<option value='{g.id}'{' selected' if g.id == guild.id else ''}>{html.escape(g.name)}</option>"
+                for g in guilds
+            )
+            guild_picker = (
+                "<form method='get' action='/cogs/autoroom' class='card-x' style='margin-bottom:18px'>"
+                "<label class='stat-label'>Server</label>"
+                f"<select name='guild' class='form-select' onchange='this.form.submit()' "
+                f"style='margin-top:6px;max-width:420px'>{options}</select>"
+                "</form>"
+            )
+
+        data = await self.config.guild(guild).all()
+        sources = data.get("sources", {})
+        source_ids = set(sources.keys())
+
+        # Aktive Räume (nur gewählter Server)
         room_rows = []
-        for guild in self.bot.guilds:
-            rooms = await self.config.guild(guild).active_rooms()
-            for cid, rec in rooms.items():
-                ch = guild.get_channel(int(cid))
-                if ch is None:
-                    continue
-                owner = guild.get_member(rec.get("owner_id"))
-                count = len([m for m in ch.members if not m.bot])
-                room_rows.append(
-                    "<tr>"
-                    f"<td>{html.escape(guild.name)}</td>"
-                    f"<td>{html.escape(ch.name)}</td>"
-                    f"<td>{html.escape(owner.display_name) if owner else '—'}</td>"
-                    f"<td class='mono'>{count}</td>"
-                    "</tr>"
-                )
-        rooms_body = "".join(room_rows) or "<tr><td colspan='4' style='color:var(--muted)'>Aktuell keine aktiven Räume.</td></tr>"
+        for cid, rec in data.get("active_rooms", {}).items():
+            ch = guild.get_channel(int(cid))
+            if ch is None:
+                continue
+            owner = guild.get_member(rec.get("owner_id"))
+            count = len([m for m in ch.members if not m.bot])
+            room_rows.append(
+                "<tr>"
+                f"<td>{html.escape(ch.name)}</td>"
+                f"<td>{html.escape(owner.display_name) if owner else '—'}</td>"
+                f"<td class='mono'>{count}</td>"
+                "</tr>"
+            )
+        rooms_body = "".join(room_rows) or "<tr><td colspan='3' style='color:var(--muted)'>Aktuell keine aktiven Räume.</td></tr>"
         active_card = (
             "<div class='card-x' style='margin-bottom:18px'>"
             "<div class='stat-label'>Aktive Räume</div>"
             "<table class='table' style='margin-top:10px'>"
-            "<thead><tr><th>Server</th><th>Raum</th><th>Besitzer</th><th>Drin</th></tr></thead>"
+            "<thead><tr><th>Raum</th><th>Besitzer</th><th>Drin</th></tr></thead>"
             f"<tbody>{rooms_body}</tbody></table></div>"
         )
 
-        # Pro Server: Quellen + Formulare
-        guild_blocks = []
-        for guild in sorted(self.bot.guilds, key=lambda g: g.name.lower()):
-            data = await self.config.guild(guild).all()
-            sources = data.get("sources", {})
-            source_ids = set(sources.keys())
-
-            # Tabelle bestehender Quellen mit Bearbeiten/Entfernen
-            src_rows = []
-            for cid, cfg in sources.items():
-                ch = guild.get_channel(int(cid))
-                ch_name = html.escape(ch.name) if ch else f"(gelöscht: {cid})"
-                edit_form = (
-                    "<details><summary style='cursor:pointer;color:var(--accent)'>bearbeiten</summary>"
-                    "<form method='post' action='/cogs/autoroom' style='margin-top:10px;display:grid;gap:8px;max-width:520px'>"
-                    f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-                    "<input type='hidden' name='action' value='edit'>"
-                    f"<input type='hidden' name='guild_id' value='{guild.id}'>"
-                    f"<input type='hidden' name='channel_id' value='{cid}'>"
-                    f"<label class='stat-label'>Kategorie</label>{self._category_select(guild, 'category_id', cfg.get('dest_category'))}"
-                    f"<label class='stat-label'>Namensvorlage</label><input name='template' class='form-control form-control-sm' value='{html.escape(cfg.get('name_template', ''))}'>"
-                    f"<label class='stat-label'>Limit (0 = unbegrenzt)</label><input name='limit' type='number' min='0' max='99' class='form-control form-control-sm' value='{int(cfg.get('user_limit') or 0)}'>"
-                    f"<label class='stat-label'>Bitrate kbps (leer = Standard)</label><input name='bitrate' type='number' min='8' class='form-control form-control-sm' value='{cfg.get('bitrate_kbps') or ''}'>"
-                    f"<label class='stat-label'>Sichtbarkeit</label>{self._vis_select('visibility', cfg.get('default_visibility', 'public'))}"
-                    f"<label class='form-check'><input class='form-check-input' type='checkbox' name='textchannel'{' checked' if cfg.get('text_channel') else ''}> Textkanal pro Raum</label>"
-                    "<button class='btn-accent' type='submit'>Speichern</button>"
-                    "</form></details>"
-                )
-                remove_form = (
-                    "<form method='post' action='/cogs/autoroom' onsubmit=\"return confirm('Quelle entfernen?')\">"
-                    f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-                    "<input type='hidden' name='action' value='remove'>"
-                    f"<input type='hidden' name='guild_id' value='{guild.id}'>"
-                    f"<input type='hidden' name='channel_id' value='{cid}'>"
-                    "<button type='submit' style='background:none;border:0;color:var(--danger);cursor:pointer'>entfernen</button>"
-                    "</form>"
-                )
-                cat = guild.get_channel(int(cfg["dest_category"])) if cfg.get("dest_category") else None
-                cat_cell = html.escape(cat.name) if cat else "<span style='color:var(--muted)'>wie Quelle</span>"
-                src_rows.append(
-                    "<tr>"
-                    f"<td>{ch_name}</td>"
-                    f"<td>{cat_cell}</td>"
-                    f"<td class='mono'>{html.escape(cfg.get('name_template', ''))}</td>"
-                    f"<td class='mono'>{int(cfg.get('user_limit') or 0) or '∞'}</td>"
-                    f"<td>{VIS_LABELS.get(cfg.get('default_visibility'), '?')}</td>"
-                    f"<td>{edit_form}</td>"
-                    f"<td>{remove_form}</td>"
-                    "</tr>"
-                )
-            src_body = "".join(src_rows) or "<tr><td colspan='7' style='color:var(--muted)'>Noch keine Quellen.</td></tr>"
-
-            add_form = (
-                "<form method='post' action='/cogs/autoroom' style='display:grid;gap:8px;max-width:520px;margin-top:14px'>"
+        # Quellen + Formulare des gewählten Servers
+        src_rows = []
+        for cid, cfg in sources.items():
+            ch = guild.get_channel(int(cid))
+            ch_name = html.escape(ch.name) if ch else f"(gelöscht: {cid})"
+            edit_form = (
+                "<details><summary style='cursor:pointer;color:var(--accent)'>bearbeiten</summary>"
+                "<form method='post' action='/cogs/autoroom' style='margin-top:10px;display:grid;gap:8px;max-width:520px'>"
                 f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-                "<input type='hidden' name='action' value='add'>"
+                "<input type='hidden' name='action' value='edit'>"
                 f"<input type='hidden' name='guild_id' value='{guild.id}'>"
-                f"<label class='stat-label'>Quell-Channel</label>{self._voice_select(guild, 'channel_id', exclude=source_ids)}"
-                f"<label class='stat-label'>Ziel-Kategorie</label>{self._category_select(guild, 'category_id')}"
-                "<label class='stat-label'>Namensvorlage</label>"
-                f"<input name='template' class='form-control form-control-sm' value='{html.escape(DEFAULT_TEMPLATE)}' placeholder='{{user}}'>"
-                "<label class='stat-label'>Limit (0 = unbegrenzt)</label>"
-                "<input name='limit' type='number' min='0' max='99' class='form-control form-control-sm' value='0'>"
-                "<label class='stat-label'>Sichtbarkeit</label>"
-                f"{self._vis_select('visibility')}"
-                "<label class='form-check'><input class='form-check-input' type='checkbox' name='textchannel'> Textkanal pro Raum</label>"
-                "<button class='btn-accent' type='submit'>Quelle hinzufügen</button>"
+                f"<input type='hidden' name='channel_id' value='{cid}'>"
+                f"<label class='stat-label'>Kategorie</label>{self._category_select(guild, 'category_id', cfg.get('dest_category'))}"
+                f"<label class='stat-label'>Namensvorlage</label><input name='template' class='form-control form-control-sm' value='{html.escape(cfg.get('name_template', ''))}'>"
+                f"<label class='stat-label'>Limit (0 = unbegrenzt)</label><input name='limit' type='number' min='0' max='99' class='form-control form-control-sm' value='{int(cfg.get('user_limit') or 0)}'>"
+                f"<label class='stat-label'>Bitrate kbps (leer = Standard)</label><input name='bitrate' type='number' min='8' class='form-control form-control-sm' value='{cfg.get('bitrate_kbps') or ''}'>"
+                f"<label class='stat-label'>Sichtbarkeit</label>{self._vis_select('visibility', cfg.get('default_visibility', 'public'))}"
+                f"<label class='form-check'><input class='form-check-input' type='checkbox' name='textchannel'{' checked' if cfg.get('text_channel') else ''}> Textkanal pro Raum</label>"
+                "<button class='btn-accent' type='submit'>Speichern</button>"
+                "</form></details>"
+            )
+            remove_form = (
+                "<form method='post' action='/cogs/autoroom' onsubmit=\"return confirm('Quelle entfernen?')\">"
+                f"<input type='hidden' name='csrf_token' value='{csrf}'>"
+                "<input type='hidden' name='action' value='remove'>"
+                f"<input type='hidden' name='guild_id' value='{guild.id}'>"
+                f"<input type='hidden' name='channel_id' value='{cid}'>"
+                "<button type='submit' style='background:none;border:0;color:var(--danger);cursor:pointer'>entfernen</button>"
                 "</form>"
             )
-
-            access_form = (
-                "<form method='post' action='/cogs/autoroom' style='display:flex;gap:18px;align-items:center;margin-top:14px;flex-wrap:wrap'>"
-                f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-                "<input type='hidden' name='action' value='access'>"
-                f"<input type='hidden' name='guild_id' value='{guild.id}'>"
-                f"<label class='form-check'><input class='form-check-input' type='checkbox' name='admin_access'{' checked' if data.get('admin_access', True) else ''}> Admin-Rollen sehen private Räume</label>"
-                f"<label class='form-check'><input class='form-check-input' type='checkbox' name='mod_access'{' checked' if data.get('mod_access', False) else ''}> Mod-Rollen sehen private Räume</label>"
-                "<button class='btn-accent' type='submit'>Übernehmen</button>"
-                "</form>"
+            cat = guild.get_channel(int(cfg["dest_category"])) if cfg.get("dest_category") else None
+            cat_cell = html.escape(cat.name) if cat else "<span style='color:var(--muted)'>wie Quelle</span>"
+            src_rows.append(
+                "<tr>"
+                f"<td>{ch_name}</td>"
+                f"<td>{cat_cell}</td>"
+                f"<td class='mono'>{html.escape(cfg.get('name_template', ''))}</td>"
+                f"<td class='mono'>{int(cfg.get('user_limit') or 0) or '∞'}</td>"
+                f"<td>{VIS_LABELS.get(cfg.get('default_visibility'), '?')}</td>"
+                f"<td>{edit_form}</td>"
+                f"<td>{remove_form}</td>"
+                "</tr>"
             )
+        src_body = "".join(src_rows) or "<tr><td colspan='7' style='color:var(--muted)'>Noch keine Quellen.</td></tr>"
 
-            guild_blocks.append(
-                "<div class='card-x' style='margin-bottom:18px'>"
-                f"<h2 style='font-family:Archivo,sans-serif;font-size:1.1rem;margin:0 0 12px'>{html.escape(guild.name)}</h2>"
-                "<table class='table'>"
-                "<thead><tr><th>Quelle</th><th>Kategorie</th><th>Vorlage</th><th>Limit</th><th>Sicht</th><th></th><th></th></tr></thead>"
-                f"<tbody>{src_body}</tbody></table>"
-                f"{add_form}{access_form}</div>"
-            )
+        add_form = (
+            "<form method='post' action='/cogs/autoroom' style='display:grid;gap:8px;max-width:520px;margin-top:14px'>"
+            f"<input type='hidden' name='csrf_token' value='{csrf}'>"
+            "<input type='hidden' name='action' value='add'>"
+            f"<input type='hidden' name='guild_id' value='{guild.id}'>"
+            f"<label class='stat-label'>Quell-Channel</label>{self._voice_select(guild, 'channel_id', exclude=source_ids)}"
+            f"<label class='stat-label'>Ziel-Kategorie</label>{self._category_select(guild, 'category_id')}"
+            "<label class='stat-label'>Namensvorlage</label>"
+            f"<input name='template' class='form-control form-control-sm' value='{html.escape(DEFAULT_TEMPLATE)}' placeholder='{{user}}'>"
+            "<label class='stat-label'>Limit (0 = unbegrenzt)</label>"
+            "<input name='limit' type='number' min='0' max='99' class='form-control form-control-sm' value='0'>"
+            "<label class='stat-label'>Sichtbarkeit</label>"
+            f"{self._vis_select('visibility')}"
+            "<label class='form-check'><input class='form-check-input' type='checkbox' name='textchannel'> Textkanal pro Raum</label>"
+            "<button class='btn-accent' type='submit'>Quelle hinzufügen</button>"
+            "</form>"
+        )
+
+        access_form = (
+            "<form method='post' action='/cogs/autoroom' style='display:flex;gap:18px;align-items:center;margin-top:14px;flex-wrap:wrap'>"
+            f"<input type='hidden' name='csrf_token' value='{csrf}'>"
+            "<input type='hidden' name='action' value='access'>"
+            f"<input type='hidden' name='guild_id' value='{guild.id}'>"
+            f"<label class='form-check'><input class='form-check-input' type='checkbox' name='admin_access'{' checked' if data.get('admin_access', True) else ''}> Admin-Rollen sehen private Räume</label>"
+            f"<label class='form-check'><input class='form-check-input' type='checkbox' name='mod_access'{' checked' if data.get('mod_access', False) else ''}> Mod-Rollen sehen private Räume</label>"
+            "<button class='btn-accent' type='submit'>Übernehmen</button>"
+            "</form>"
+        )
+
+        sources_card = (
+            "<div class='card-x' style='margin-bottom:18px'>"
+            f"<h2 style='font-family:Archivo,sans-serif;font-size:1.1rem;margin:0 0 12px'>{html.escape(guild.name)}</h2>"
+            "<table class='table'>"
+            "<thead><tr><th>Quelle</th><th>Kategorie</th><th>Vorlage</th><th>Limit</th><th>Sicht</th><th></th><th></th></tr></thead>"
+            f"<tbody>{src_body}</tbody></table>"
+            f"{add_form}{access_form}</div>"
+        )
 
         intro = (
             "<p style='color:var(--muted);margin-top:0'>Lege Quell-Channels fest: Wer einen Quell-Channel "
             "betritt, bekommt automatisch einen eigenen Voicechannel. Platzhalter in Vorlagen: "
             "<code>{user}</code>, <code>{game}</code>, <code>{num}</code>.</p>"
         )
-        content = flash + intro + active_card + "".join(guild_blocks)
+        content = flash + intro + guild_picker + active_card + sources_card
         return {"title": "Autovoiceroom", "content": content}
 
     async def _handle_dashboard_post(self, request) -> dict:
@@ -847,18 +866,18 @@ class AutoRoom(commands.Cog):
         if action == "access":
             await self.config.guild(guild).admin_access.set(form.get("admin_access") == "on")
             await self.config.guild(guild).mod_access.set(form.get("mod_access") == "on")
-            return {"redirect": "/cogs/autoroom?ok=1"}
+            return {"redirect": f"/cogs/autoroom?guild={guild.id}&ok=1"}
 
         if action == "remove":
             sources = await self.config.guild(guild).sources()
             if sources.pop(str(form.get("channel_id")), None) is not None:
                 await self.config.guild(guild).sources.set(sources)
-            return {"redirect": "/cogs/autoroom?ok=1"}
+            return {"redirect": f"/cogs/autoroom?guild={guild.id}&ok=1"}
 
         if action in ("add", "edit"):
             channel = guild.get_channel(int(form.get("channel_id"))) if str(form.get("channel_id") or "").isdigit() else None
             if not isinstance(channel, discord.VoiceChannel):
-                return {"redirect": "/cogs/autoroom?err=1"}
+                return {"redirect": f"/cogs/autoroom?guild={guild.id}&err=1"}
 
             cat_id = form.get("category_id") or ""
             dest_category = int(cat_id) if cat_id.isdigit() else None
@@ -892,9 +911,9 @@ class AutoRoom(commands.Cog):
             sources = await self.config.guild(guild).sources()
             sources[str(channel.id)] = cfg
             await self.config.guild(guild).sources.set(sources)
-            return {"redirect": "/cogs/autoroom?ok=1"}
+            return {"redirect": f"/cogs/autoroom?guild={guild.id}&ok=1"}
 
-        return {"redirect": "/cogs/autoroom?err=1"}
+        return {"redirect": f"/cogs/autoroom?guild={guild.id}&err=1"}
 
     async def dashboard_page(self, request):
         if request.method == "POST":
