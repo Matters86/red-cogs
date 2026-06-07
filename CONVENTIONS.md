@@ -41,6 +41,8 @@ red-cogs/
 | raidhelper | 615238947104 |
 | sticky | 592384710265 |
 | organigram | 471203958624 |
+| poll | 529184637025 |
+| autorole | 905172634810 |
 | _neue hier ergänzen_ | |
 
 ## info.json pro Cog — Vorlage

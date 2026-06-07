@@ -1,0 +1,12 @@
+{
+    "name": "Autorole",
+    "short": "Vergibt automatisch Rollen an neue Mitglieder.",
+    "description": "Weist neuen Mitgliedern beim Beitritt automatisch eine oder mehrere Rollen zu. Berücksichtigt die native Discord-Regelverifizierung (Membership Screening), prüft vor jeder Vergabe die Zuweisbarkeit jeder Rolle, bietet Anti-Raid-Verzögerung und Mindest-Kontoalter, getrennte Rollen für Bots sowie sichere Sticky-Rollen (nur markierte Rollen werden beim Verlassen gemerkt und beim Wiederbeitritt wiederhergestellt). Mehrsprachig (Deutsch/Englisch) und vollständig über das WebCore-Dashboard konfigurierbar.",
+    "tags": ["autorole", "roles", "join", "welcome", "moderation", "dashboard"],
+    "requirements": [],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert standardmäßig keine personenbezogenen Endnutzerdaten. Sind Sticky-Rollen aktiviert, werden beim Verlassen des Servers ausschließlich die IDs der für diesen Server als Sticky markierten Rollen, die das Mitglied besaß, gespeichert, um sie bei einem Wiederbeitritt wiederherzustellen; sie werden bei der Wiederherstellung gelöscht."
+}
