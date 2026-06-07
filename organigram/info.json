@@ -1,0 +1,12 @@
+{
+    "name": "Organigram",
+    "short": "Postet Server-Organigramme als Bild, Embed oder Text.",
+    "description": "Erstellt beliebig viele benannte Organigramme pro Server und postet sie nach Discord. Personen stammen hybrid aus Discord-Rollen und manuellen Einträgen. Ausgabe als Bild (fünf Muster: Baum, Abteilungen, Pyramide, Kompaktliste, Karten – mit Avataren und Rollenfarben), als strukturiertes Embed oder als Text-Baum – pro Post wählbar. Gepostete Beiträge aktualisieren sich automatisch bei Rollen- und Mitgliederänderungen. Vollständig über das WebCore-Dashboard konfigurierbar inkl. Live-Vorschau und PNG-Export.",
+    "tags": ["organigram", "organigramm", "orgchart", "roles", "dashboard", "image"],
+    "requirements": ["Pillow"],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert keine personenbezogenen Profildaten von Endnutzern. Pro Server werden die vom Team angelegten Organigramme gespeichert: Bezeichnungen, verknüpfte Rollen-IDs, optionale manuell eingegebene Namen (Freitext durch das Team), Farben sowie Kanal- und Nachrichten-IDs der geposteten Beiträge. Mitgliedernamen und Avatare werden ausschließlich zur Anzeige live abgerufen und nicht dauerhaft gespeichert."
+}

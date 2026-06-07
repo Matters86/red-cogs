@@ -1,0 +1,8 @@
+Gebündelte Schriftarten in diesem Ordner:
+
+- IBM Plex Sans, IBM Plex Mono — © IBM Corp., SIL Open Font License 1.1
+  https://github.com/IBM/plex
+- Archivo — © Omnibus-Type, SIL Open Font License 1.1
+  https://github.com/Omnibus-Type/Archivo
+
+Beide stehen unter der SIL Open Font License 1.1 und dürfen mitgeliefert werden.
