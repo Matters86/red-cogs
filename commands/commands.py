@@ -23,7 +23,7 @@ log = logging.getLogger("red.red-cogs.commands")
 
 
 class Commands(commands.Cog):
-    """Übersicht aller Befehle aller Cogs – im Dashboard und in Discord."""
+    """Übersicht aller Befehle aller Cogs · Overview of every cog's commands."""
 
     def __init__(self, bot: Red):
         self.bot = bot
@@ -162,7 +162,7 @@ class Commands(commands.Cog):
     @commands.hybrid_command(name="meinebefehle")
     @commands.guild_only()
     async def meinebefehle(self, ctx: commands.Context, member: discord.Member = None, dm: bool = False):
-        """Zeigt dir, welche Befehle du auf diesem Server nutzen kannst.
+        """Zeigt dir deine nutzbaren Befehle · Shows the commands you can use.
 
         Optional ein Mitglied angeben (nur Mod/Admin) und/oder `dm: true` für den
         Versand per Direktnachricht.
@@ -206,11 +206,14 @@ class Commands(commands.Cog):
     @commands.hybrid_group(name="befehlsliste")
     @commands.is_owner()
     async def befehlsliste(self, ctx: commands.Context):
-        """Verwaltung der Befehls-Übersicht (nur Bot-Owner)."""
+        """Verwaltung der Befehls-Übersicht · Manage the command overview (owner)."""
 
     @befehlsliste.command(name="verstecken")
     async def bl_hide(self, ctx: commands.Context, kind: str, *, name: str):
-        """Blendet einen Cog oder Befehl aus. `kind` = `cog` oder `command`."""
+        """Blendet einen Cog/Befehl aus · Hide a cog or command.
+
+        `kind` = `cog` oder `command`.
+        """
         lang = await self._lang(ctx.guild)
         kind = kind.lower()
         if kind not in ("cog", "command"):
@@ -224,7 +227,10 @@ class Commands(commands.Cog):
 
     @befehlsliste.command(name="zeigen")
     async def bl_show(self, ctx: commands.Context, kind: str, *, name: str):
-        """Zeigt einen ausgeblendeten Cog oder Befehl wieder. `kind` = `cog`/`command`."""
+        """Zeigt einen ausgeblendeten Cog/Befehl wieder · Show a hidden cog or command.
+
+        `kind` = `cog` oder `command`.
+        """
         lang = await self._lang(ctx.guild)
         kind = kind.lower()
         if kind not in ("cog", "command"):
@@ -238,7 +244,7 @@ class Commands(commands.Cog):
 
     @befehlsliste.command(name="status")
     async def bl_status(self, ctx: commands.Context):
-        """Zeigt eine Kurzübersicht (Anzahl Cogs/Befehle, Ausgeblendetes, Dashboard)."""
+        """Kurzübersicht & Dashboard-Status · Short overview and dashboard status."""
         lang = await self._lang(ctx.guild)
         n_cogs = len(inspector.cog_names(self.bot))
         n_cmds = len(inspector.walk_all_commands(self.bot))
@@ -261,7 +267,7 @@ class Commands(commands.Cog):
     @befehlsliste.command(name="sprache")
     @commands.guild_only()
     async def bl_language(self, ctx: commands.Context, language: str):
-        """Setzt die Sprache der Nutzer-Ausgabe für diesen Server (`de`/`en`)."""
+        """Sprache der Nutzer-Ausgabe setzen · Set the user-output language (de/en)."""
         lang_now = await self._lang(ctx.guild)
         code = language.lower()
         if code not in LANGUAGES:
