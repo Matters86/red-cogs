@@ -27,6 +27,7 @@ Danach `webcore` einrichten (siehe [`webcore/README.md`](webcore/README.md)).
 | [`organigram`](organigram/) | Postet Server-Organigramme als Bild, Embed oder Text (Rollen + manuelle Namen, fünf Muster, Auto-Update). Voll per Dashboard konfigurierbar. |
 | [`poll`](poll/) | Mehrsprachige Umfragen mit Abstimmung per Button, Live-Ergebnis und Dashboard. |
 | [`autorole`](autorole/) | Vergibt automatisch Rollen beim Beitritt – respektiert die Regelverifizierung, prüft Zuweisbarkeit, mit Anti-Raid, Bot- und sicheren Sticky-Rollen. Plus Self-Service-Rollen-Panels (Buttons/Dropdown). Voll per Dashboard konfigurierbar. |
+| [`commands`](commands/) | Listet alle Befehle aller Cogs im Dashboard – Stufen-Spalten (Jeder/Mod/Admin/Owner), exakte Mitglieds-Prüfung, Detail-Metadaten, Suche/Filter, Ausblenden und Markdown-Export. Plus `[p]meinebefehle`. |
 
 ## Wie das Dashboard funktioniert
 

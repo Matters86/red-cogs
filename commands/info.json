@@ -1,0 +1,12 @@
+{
+    "name": "Commands",
+    "short": "Listet alle Befehle aller Cogs im Dashboard – mit Stufen und Mitglieds-Prüfung.",
+    "description": "Erfasst per Introspektion alle geladenen Cogs und ihre Befehle und zeigt sie im WebCore-Dashboard: Stufen-Spalten (Jeder/Mod/Admin/Owner), Detail-Metadaten (Signatur, Aliase, Subbefehle, geforderte Rechte), Suche/Filter, eine exakte Prüfung pro Mitglied sowie Markdown-Export. Einzelne Cogs/Befehle lassen sich ausblenden. In Discord: [p]meinebefehle (eigene nutzbare Befehle, optional per DM) und die Owner-Gruppe [p]befehlsliste. Neue Cogs erscheinen automatisch. Keine zusätzlichen Abhängigkeiten.",
+    "tags": ["commands", "help", "permissions", "dashboard", "webcore", "introspection"],
+    "requirements": [],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert keine personenbezogenen Endnutzerdaten. Global werden nur die Namen ausgeblendeter Cogs/Befehle gespeichert, pro Server die gewählte Ausgabesprache. Befehls- und Rechteinformationen werden live aus dem laufenden Bot gelesen und nicht dauerhaft abgelegt."
+}

@@ -43,6 +43,7 @@ red-cogs/
 | organigram | 471203958624 |
 | poll | 529184637025 |
 | autorole | 905172634810 |
+| commands | 318472905613 |
 | _neue hier ergänzen_ | |
 
 ## info.json pro Cog — Vorlage
