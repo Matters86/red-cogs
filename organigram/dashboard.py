@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import html
 import logging
+import os
 import re
 import secrets
 import time
@@ -25,6 +26,8 @@ from aiohttp import web
 from .render import PATTERNS
 
 log = logging.getLogger("red.red-cogs.organigram")
+
+_PREVIEW_DIR = os.path.join(os.path.dirname(__file__), "assets", "previews")
 
 # Eingabe (DE im Formular) -> intern gespeicherter Modus
 MODE_MAP = {"bild": "image", "embed": "embed", "text": "text"}
@@ -57,7 +60,22 @@ _FORM_STYLE = """
   .og-preview-wrap img{max-width:100%;height:auto;border-radius:8px}
   .og-grid2{display:grid;grid-template-columns:1.1fr .9fr;gap:20px;align-items:start}
   @media (max-width:860px){.og-grid2{grid-template-columns:1fr}}
+  .og-muster{margin-top:10px;background:var(--panel-2);border:1px solid var(--border);
+    border-radius:10px;padding:10px;text-align:center}
+  .og-muster img{max-width:100%;max-height:240px;height:auto;border-radius:7px;
+    display:block;margin:0 auto}
+  .og-muster-cap{display:block;color:var(--muted);font-size:.78rem;margin-top:7px}
 </style>
+<script>
+  function ogMuster(sel){
+    var box = sel.parentNode.querySelector('.og-muster');
+    if(!box){ return; }
+    var img = box.querySelector('img');
+    var cap = box.querySelector('.og-muster-cap');
+    if(img){ img.src = img.getAttribute('data-base') + encodeURIComponent(sel.value); }
+    if(cap){ cap.textContent = sel.options[sel.selectedIndex].text; }
+  }
+</script>
 """
 
 
@@ -122,6 +140,19 @@ def _selected_guild(cog, request):
 #  Rendern (GET)
 # --------------------------------------------------------------------------- #
 async def _render(cog, request):
+    # Statische Muster-Vorschau (guild-unabhängig, lange cachebar).
+    muster = request.query.get("muster")
+    if muster:
+        if muster not in PATTERNS:
+            raise web.HTTPNotFound(text="Unbekanntes Muster")
+        path = os.path.join(_PREVIEW_DIR, f"{muster}.png")
+        if not os.path.isfile(path):
+            raise web.HTTPNotFound(text="Vorschau nicht gefunden")
+        with open(path, "rb") as fh:
+            data = fh.read()
+        return web.Response(body=data, content_type="image/png",
+                            headers={"Cache-Control": "public, max-age=86400"})
+
     guild = _selected_guild(cog, request)
     if guild is None:
         return {"title": "Organigramm",
@@ -226,6 +257,18 @@ def _pattern_options(selected: str) -> str:
     )
 
 
+def _muster_preview(selected: str) -> str:
+    base = "/cogs/organigram?muster="
+    label = PATTERNS.get(selected, selected)
+    return (
+        "<div class='og-muster'>"
+        f"<img alt='Muster-Vorschau' loading='lazy' data-base='{base}' "
+        f"src='{base}{_esc(selected)}'>"
+        f"<span class='og-muster-cap'>{_esc(label)}</span>"
+        "</div>"
+    )
+
+
 def _mode_options(internal_selected: str) -> str:
     # internal_selected ist "image"/"embed"/"text"
     pairs = [("bild", "Bild", "image"), ("embed", "Embed", "embed"), ("text", "Text", "text")]
@@ -250,7 +293,8 @@ def _render_new(guild, csrf) -> str:
           </div>
           <div>
             <label>Muster (für Bild-Modus)</label>
-            <select name='pattern'>{_pattern_options('baum')}</select>
+            <select name='pattern' onchange='ogMuster(this)'>{_pattern_options('baum')}</select>
+            {_muster_preview('baum')}
           </div>
         </div>
         <div class='row3'>
@@ -304,7 +348,8 @@ def _render_editor(cog, guild, cid, chart, csrf, request) -> str:
         </div>
         <div class='row3'>
           <div><label>Muster (Bild)</label>
-            <select name='pattern'>{_pattern_options(chart.get('pattern', 'baum'))}</select></div>
+            <select name='pattern' onchange='ogMuster(this)'>{_pattern_options(chart.get('pattern', 'baum'))}</select>
+            {_muster_preview(chart.get('pattern', 'baum'))}</div>
           <div><label>Standard-Ausgabe</label>
             <select name='mode'>{_mode_options(chart.get('mode', 'image'))}</select></div>
           <div><label>Akzentfarbe</label>

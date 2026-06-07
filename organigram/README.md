@@ -48,8 +48,8 @@ Dashboard gewählte Standard-Modus des Organigramms. Alias für die Befehlsgrupp
 Ist `webcore` geladen, erscheint automatisch der Tab **Organigramm**. Dort lassen sich:
 
 - Organigramme anlegen, umbenennen und löschen,
-- pro Organigramm Muster, Standard-Modus, Akzentfarbe und Optionen (Avatare,
-  „unbesetzt“, Auto-Update) einstellen,
+- pro Organigramm Muster (mit Sofort-Vorschau am Dropdown), Standard-Modus,
+  Akzentfarbe und Optionen (Avatare, „unbesetzt“, Auto-Update) einstellen,
 - Positionen pflegen (Bezeichnung, übergeordnete Position, verknüpfte Rolle,
   zusätzliche Namen, Emoji, Farbe, Reihenfolge),
 - eine **Live-Vorschau** ansehen und das **PNG herunterladen**,
