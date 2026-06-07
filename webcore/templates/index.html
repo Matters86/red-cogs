@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="head-band">
+  {% if bot_avatar %}<img src="{{ bot_avatar }}" alt="Avatar">{% endif %}
+  <div>
+    <div class="hb-name">{{ bot_name }}</div>
+    <div class="hb-sub">
+      <span class="status"><span class="pulse"></span> Online</span>
+      <span>Uptime <span id="uptime">{{ uptime }}</span></span>
+      <span>· {{ shard_count }} Shard{{ 's' if shard_count != 1 else '' }}</span>
+    </div>
+  </div>
+  <div class="hb-right">
+    Aktualisiert <span id="updated">{{ now }}</span><br>
+    <span style="opacity:.7">auto-refresh alle 10&nbsp;s</span>
+  </div>
+</div>
+
+<div class="grid-stats" style="margin-top:18px">
+  <div class="s-card"><i class="bi bi-hdd-stack si"></i><div class="sl">Server</div><div class="sv" id="m-guilds">{{ guild_count }}</div></div>
+  <div class="s-card"><i class="bi bi-people si"></i><div class="sl">Mitglieder</div><div class="sv" id="m-members">{{ member_total }}</div></div>
+  <div class="s-card"><i class="bi bi-person si"></i><div class="sl">Unique User</div><div class="sv" id="m-users">{{ user_count }}</div></div>
+  <div class="s-card"><i class="bi bi-hash si"></i><div class="sl">Kanäle</div><div class="sv" id="m-channels">{{ channel_count }}</div></div>
+  <div class="s-card"><i class="bi bi-emoji-smile si"></i><div class="sl">Emojis</div><div class="sv" id="m-emojis">{{ emoji_count }}</div></div>
+  <div class="s-card"><i class="bi bi-terminal si"></i><div class="sl">Befehle</div><div class="sv">{{ command_count }}</div></div>
+  <div class="s-card"><i class="bi bi-puzzle si"></i><div class="sl">Cogs</div><div class="sv">{{ cog_count }}</div></div>
+  <div class="s-card"><i class="bi bi-activity si"></i><div class="sl">Ping</div><div class="sv acc"><span id="m-ping">{{ latency }}</span> ms</div></div>
+</div>
+
+<div class="row g-3" style="margin-top:6px">
+  <div class="col-lg-7 mb-3 mb-lg-0">
+    <div class="card-x" style="height:100%">
+      <div class="section-title">Schnellzugriff</div>
+      {% if nav_pages %}
+      <div class="tiles">
+        {% for p in nav_pages %}
+        <a class="tile" href="/cogs/{{ p.slug }}">
+          <span class="ti"><i class="bi {{ p.icon }}"></i></span>
+          <span><div class="tn">{{ p.name }}</div><div class="td">/cogs/{{ p.slug }}</div></span>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p style="color:var(--muted);margin:0">Noch keine Cogs mit Dashboard-Seite geladen.</p>
+      {% endif %}
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="card-x" style="height:100%">
+      <div class="section-title">System</div>
+      <div class="kv">
+        <div class="row-kv"><span class="k">Red</span><span class="v">{{ red_version }}</span></div>
+        <div class="row-kv"><span class="k">discord.py</span><span class="v">{{ dpy_version }}</span></div>
+        <div class="row-kv"><span class="k">Python</span><span class="v">{{ py_version }}</span></div>
+        {% if mem_mb is not none %}
+        <div class="meter"><div class="mlabel"><span class="k">RAM</span><span class="v"><span id="sys-ram-val">{{ mem_mb }}</span> MB</span></div><div class="bar"><span id="sys-ram-bar" style="width:{{ mem_pct }}%"></span></div></div>
+        {% endif %}
+        {% if cpu_pct is not none %}
+        <div class="meter"><div class="mlabel"><span class="k">CPU</span><span class="v"><span id="sys-cpu-val">{{ cpu_pct }}</span> %</span></div><div class="bar"><span id="sys-cpu-bar" style="width:{{ cpu_pct }}%"></span></div></div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3" style="margin-top:6px">
+  <div class="col-lg-7 mb-3 mb-lg-0">
+    <div class="card-x" style="height:100%">
+      <div class="section-title">Größte Server</div>
+      {% if top_guilds %}
+      <table class="table" style="margin-bottom:0">
+        <tbody>
+        {% for g in top_guilds %}
+          <tr>
+            <td class="mono" style="width:28px;color:var(--muted)">{{ loop.index }}</td>
+            <td>{{ g.name }}</td>
+            <td style="width:38%"><div class="rankbar"><span style="width:{{ g.pct }}%"></span></div></td>
+            <td class="mono" style="text-align:right;white-space:nowrap">{{ g.members }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<p style="color:var(--muted);margin:0">Keine Server.</p>{% endif %}
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="card-x" style="height:100%">
+      <div class="section-title">Letzte Befehle</div>
+      <div class="feed" id="activity">
+        {% if activity %}
+          {% for a in activity %}
+          <div class="fi"><span class="ft">{{ a.ago }}</span><span class="fc">{{ a.command }}</span><span class="fm">{{ a.where }}</span></div>
+          {% endfor %}
+        {% else %}
+          <p style="color:var(--muted);margin:0">Noch keine Befehle seit dem Neustart.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  function set(id,val){var e=document.getElementById(id); if(e&&val!=null) e.textContent=val;}
+  function width(id,val){var e=document.getElementById(id); if(e) e.style.width=(val||0)+'%';}
+  async function refresh(){
+    try{
+      var r=await fetch('/api/overview',{headers:{'Accept':'application/json'}});
+      if(!r.ok) return;
+      var d=await r.json();
+      set('m-guilds',d.guild_count); set('m-members',d.member_total); set('m-users',d.user_count);
+      set('m-channels',d.channel_count); set('m-emojis',d.emoji_count); set('m-ping',d.latency);
+      set('uptime',d.uptime); set('updated',d.now);
+      if(d.mem_mb!=null){ set('sys-ram-val',d.mem_mb); width('sys-ram-bar',d.mem_pct); }
+      if(d.cpu_pct!=null){ set('sys-cpu-val',d.cpu_pct); width('sys-cpu-bar',d.cpu_pct); }
+      var feed=document.getElementById('activity');
+      if(feed && Array.isArray(d.activity)){
+        if(d.activity.length===0){
+          feed.innerHTML='<p style="color:var(--muted);margin:0">Noch keine Befehle seit dem Neustart.</p>';
+        } else {
+          feed.innerHTML='';
+          d.activity.forEach(function(a){
+            var fi=document.createElement('div'); fi.className='fi';
+            var ft=document.createElement('span'); ft.className='ft'; ft.textContent=a.ago;
+            var fc=document.createElement('span'); fc.className='fc'; fc.textContent=a.command;
+            var fm=document.createElement('span'); fm.className='fm'; fm.textContent=a.where;
+            fi.appendChild(ft); fi.appendChild(fc); fi.appendChild(fm); feed.appendChild(fi);
+          });
+        }
+      }
+    }catch(e){}
+  }
+  setInterval(refresh,10000);
+})();
+</script>
+{% endblock %}
