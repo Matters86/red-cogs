@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import logging
 import secrets
+import socket
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -173,9 +174,20 @@ class WebCore(commands.Cog):
         self.app = app
         self.runner = web.AppRunner(app)
         await self.runner.setup()
-        self.site = web.TCPSite(self.runner, data["host"], data["port"])
-        await self.site.start()
-        log.info("WebCore-Dashboard läuft auf %s:%s", data["host"], data["port"])
+        host = data["host"]
+        self.site = web.TCPSite(self.runner, host, data["port"])
+        try:
+            await self.site.start()
+        except OSError as exc:
+            # z. B. socket.gaierror, wenn der Host nicht auflösbar/bindbar ist.
+            if host != "0.0.0.0":
+                log.warning("Konnte nicht an Host %r binden (%s) – Fallback auf 0.0.0.0.", host, exc)
+                self.site = web.TCPSite(self.runner, "0.0.0.0", data["port"])
+                await self.site.start()
+                host = "0.0.0.0"
+            else:
+                raise
+        log.info("WebCore-Dashboard läuft auf %s:%s", host, data["port"])
 
         # Bereits geladene Cogs registrieren lassen.
         self.bot.dispatch("webcore_ready", self)
@@ -494,7 +506,20 @@ class WebCore(commands.Cog):
 
     @webcore.command(name="host")
     async def webcore_host(self, ctx: commands.Context, host: str):
-        """Bind-Host setzen (Standard 0.0.0.0)."""
+        """Bind-Host setzen (Standard 0.0.0.0).
+
+        Muss eine lokale Bind-Adresse sein (0.0.0.0, 127.0.0.1 oder eine interne IP),
+        nicht die öffentliche Domain – die gehört in die redirect_uri.
+        """
+        try:
+            socket.getaddrinfo(host, None)
+        except OSError:
+            await ctx.send(
+                f"`{host}` lässt sich nicht auflösen. Nimm eine lokale Bind-Adresse wie "
+                f"`0.0.0.0` (alle Interfaces) oder `127.0.0.1`. Die öffentliche Domain "
+                f"gehört in die redirect_uri, nicht in den Host."
+            )
+            return
         await self.config.host.set(host)
         await ctx.send(f"Host auf {host} gesetzt. Übernehmen mit `[p]reload webcore`.")
 
