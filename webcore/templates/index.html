@@ -20,16 +20,18 @@
 <div class="grid-stats" style="margin-top:18px">
   <div class="s-card"><i class="bi bi-hdd-stack si"></i><div class="sl">Server</div><div class="sv" id="m-guilds">{{ guild_count }}</div></div>
   <div class="s-card"><i class="bi bi-people si"></i><div class="sl">Mitglieder</div><div class="sv" id="m-members">{{ member_total }}</div></div>
-  <div class="s-card"><i class="bi bi-person si"></i><div class="sl">Unique User</div><div class="sv" id="m-users">{{ user_count }}</div></div>
+  {% if full_access %}<div class="s-card"><i class="bi bi-person si"></i><div class="sl">Unique User</div><div class="sv" id="m-users">{{ user_count }}</div></div>{% endif %}
   <div class="s-card"><i class="bi bi-hash si"></i><div class="sl">Kanäle</div><div class="sv" id="m-channels">{{ channel_count }}</div></div>
   <div class="s-card"><i class="bi bi-emoji-smile si"></i><div class="sl">Emojis</div><div class="sv" id="m-emojis">{{ emoji_count }}</div></div>
+  {% if full_access %}
   <div class="s-card"><i class="bi bi-terminal si"></i><div class="sl">Befehle</div><div class="sv">{{ command_count }}</div></div>
   <div class="s-card"><i class="bi bi-puzzle si"></i><div class="sl">Cogs</div><div class="sv">{{ cog_count }}</div></div>
+  {% endif %}
   <div class="s-card"><i class="bi bi-activity si"></i><div class="sl">Ping</div><div class="sv acc"><span id="m-ping">{{ latency }}</span> ms</div></div>
 </div>
 
 <div class="row g-3" style="margin-top:6px">
-  <div class="col-lg-7 mb-3 mb-lg-0">
+  <div class="{% if full_access %}col-lg-7 mb-3 mb-lg-0{% else %}col-12{% endif %}">
     <div class="card-x" style="height:100%">
       <div class="section-title">Schnellzugriff</div>
       {% if nav_pages %}
@@ -46,6 +48,7 @@
       {% endif %}
     </div>
   </div>
+  {% if full_access %}
   <div class="col-lg-5">
     <div class="card-x" style="height:100%">
       <div class="section-title">System</div>
@@ -62,6 +65,7 @@
       </div>
     </div>
   </div>
+  {% endif %}
 </div>
 
 <div class="row g-3" style="margin-top:6px">

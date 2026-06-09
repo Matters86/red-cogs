@@ -78,6 +78,8 @@ class WebCore(commands.Cog):
             client_secret=None,
             redirect_uri=None,
             secret_key=None,
+            access_mode="owner",   # owner | admin | allowlist
+            allowed_users=[],
         )
         self.pages: dict[str, DashboardPage] = {}
         self.app: web.Application | None = None
@@ -138,6 +140,7 @@ class WebCore(commands.Cog):
                     if ctx.guild
                     else f"DM · {ctx.author.display_name}"
                 ),
+                "guild_id": ctx.guild.id if ctx.guild else None,
                 "ts": datetime.now(timezone.utc),
             }
         )
@@ -203,9 +206,52 @@ class WebCore(commands.Cog):
         return {"id": int(uid), "name": session.get("user_name", "Unbekannt")}
 
     async def _is_authorized(self, user) -> bool:
-        # Sinnvoller Default: nur Bot-Owner und Co-Owner.
-        # Zum Erweitern hier z. B. Gilden-Adminrechte prüfen.
-        return user is not None and user["id"] in self.bot.owner_ids
+        """Darf dieser User das Dashboard überhaupt betreten?"""
+        if user is None:
+            return False
+        uid = user["id"]
+        if uid in self.bot.owner_ids:
+            return True
+        data = await self.config.all()
+        if uid in data["allowed_users"]:
+            return True
+        if data["access_mode"] == "admin":
+            return any(
+                (m := g.get_member(uid)) is not None and m.guild_permissions.administrator
+                for g in self.bot.guilds
+            )
+        return False
+
+    async def _has_full_scope(self, user) -> bool:
+        """Volle Sicht (alle Server + Bot-Infrastruktur): nur Owner und Allowlist."""
+        if user is None:
+            return False
+        if user["id"] in self.bot.owner_ids:
+            return True
+        return user["id"] in await self.config.allowed_users()
+
+    def _admin_guilds(self, user) -> list:
+        """Server, in denen der User Administrator ist (für eingeschränkte Sicht)."""
+        if user is None:
+            return []
+        uid = user["id"]
+        return [
+            g for g in self.bot.guilds
+            if (m := g.get_member(uid)) is not None and m.guild_permissions.administrator
+        ]
+
+    async def visible_guilds(self, request) -> list:
+        """Öffentlich für Cogs: die Server, die der eingeloggte User sehen darf.
+
+        Owner/Allowlist -> alle Server; Admin-Modus-User -> nur ihre eigenen.
+        Cogs sollten ihre Server-Auswahl darauf beschränken.
+        """
+        user = await self._get_user(request)
+        if not await self._is_authorized(user):
+            return []
+        if await self._has_full_scope(user):
+            return list(self.bot.guilds)
+        return self._admin_guilds(user)
 
     def _login_response(self, request):
         return aiohttp_jinja2.render_template(
@@ -230,7 +276,7 @@ class WebCore(commands.Cog):
         user = await self._get_user(request)
         if not await self._is_authorized(user):
             return self._login_response(request)
-        ctx = self._collect_overview()
+        ctx = await self._collect_overview(user)
         ctx["title"] = "Übersicht"
         ctx["active_page"] = "home"
         return ctx
@@ -240,7 +286,7 @@ class WebCore(commands.Cog):
         user = await self._get_user(request)
         if not await self._is_authorized(user):
             return web.json_response({"error": "unauthorized"}, status=403)
-        return web.json_response(self._collect_overview())
+        return web.json_response(await self._collect_overview(user))
 
     # ----------------------------------------------------------------- #
     #  Übersicht: Datensammlung
@@ -281,11 +327,13 @@ class WebCore(commands.Cog):
             return f"vor {secs // 60}m"
         return f"vor {secs // 3600}h {(secs % 3600) // 60}m"
 
-    def _collect_overview(self) -> dict:
+    async def _collect_overview(self, user) -> dict:
         bot = self.bot
-        guilds = list(bot.guilds)
+        full = await self._has_full_scope(user)
+        guilds = list(bot.guilds) if full else self._admin_guilds(user)
         member_total = sum((g.member_count or 0) for g in guilds)
         channel_count = sum(len(g.channels) for g in guilds)
+        emoji_count = sum(len(g.emojis) for g in guilds)
         lat = bot.latency
         latency = round(lat * 1000) if lat == lat else 0  # NaN != NaN
 
@@ -303,34 +351,44 @@ class WebCore(commands.Cog):
             for g in top
         ]
 
+        # Bot-weite Infrastruktur nur bei voller Sicht (Owner/Allowlist).
+        user_count = command_count = cog_count = None
         mem_mb = mem_pct = cpu_pct = None
-        if self._process is not None:
+        if full:
+            user_count = _fmt(len(bot.users))
             try:
-                mem_mb = round(self._process.memory_info().rss / 1048576)
-                mem_pct = round(self._process.memory_percent())
-                cpu_pct = round(self._process.cpu_percent())
+                command_count = _fmt(sum(1 for _ in bot.walk_commands()))
             except Exception:
-                pass
+                command_count = _fmt(len(bot.commands))
+            cog_count = _fmt(len(bot.cogs))
+            if self._process is not None:
+                try:
+                    mem_mb = round(self._process.memory_info().rss / 1048576)
+                    mem_pct = round(self._process.memory_percent())
+                    cpu_pct = round(self._process.cpu_percent())
+                except Exception:
+                    pass
 
         now = datetime.now(timezone.utc)
+        if full:
+            entries = list(self.recent)
+        else:
+            visible_ids = {g.id for g in guilds}
+            entries = [a for a in self.recent if a.get("guild_id") in visible_ids]
         activity = [
             {"ago": self._ago(a["ts"], now), "command": a["command"], "where": a["where"]}
-            for a in self.recent
+            for a in entries
         ]
 
-        try:
-            command_count = sum(1 for _ in bot.walk_commands())
-        except Exception:
-            command_count = len(bot.commands)
-
         return {
+            "full_access": full,
             "guild_count": _fmt(len(guilds)),
             "member_total": _fmt(member_total),
-            "user_count": _fmt(len(bot.users)),
+            "user_count": user_count,
             "channel_count": _fmt(channel_count),
-            "emoji_count": _fmt(len(bot.emojis)),
-            "command_count": _fmt(command_count),
-            "cog_count": _fmt(len(bot.cogs)),
+            "emoji_count": _fmt(emoji_count),
+            "command_count": command_count,
+            "cog_count": cog_count,
             "latency": latency,
             "uptime": uptime,
             "shard_count": bot.shard_count or 1,
@@ -523,6 +581,40 @@ class WebCore(commands.Cog):
         await self.config.host.set(host)
         await ctx.send(f"Host auf {host} gesetzt. Übernehmen mit `[p]reload webcore`.")
 
+    @webcore.command(name="access")
+    async def webcore_access(self, ctx: commands.Context, mode: str):
+        """Zugriffsmodus setzen: owner | admin | allowlist."""
+        mode = mode.lower()
+        if mode not in ("owner", "admin", "allowlist"):
+            await ctx.send("Modus muss `owner`, `admin` oder `allowlist` sein.")
+            return
+        await self.config.access_mode.set(mode)
+        hint = {
+            "owner": "Nur Bot-Owner und Co-Owner.",
+            "admin": (
+                "Owner plus Discord-Admins (in mind. einem gemeinsamen Server) – "
+                "jeweils nur auf ihre eigenen Server beschränkt. Erfordert das Members-Intent."
+            ),
+            "allowlist": "Owner plus die per `[p]webcore allow` freigegebenen User (volle Sicht).",
+        }[mode]
+        await ctx.send(f"Zugriffsmodus: **{mode}**. {hint}")
+
+    @webcore.command(name="allow")
+    async def webcore_allow(self, ctx: commands.Context, user: discord.User):
+        """User für das Dashboard freigeben (volle Sicht)."""
+        async with self.config.allowed_users() as users:
+            if user.id not in users:
+                users.append(user.id)
+        await ctx.send(f"{user} darf das Dashboard jetzt mit voller Sicht nutzen.")
+
+    @webcore.command(name="deny")
+    async def webcore_deny(self, ctx: commands.Context, user: discord.User):
+        """Freigabe für einen User entfernen."""
+        async with self.config.allowed_users() as users:
+            if user.id in users:
+                users.remove(user.id)
+        await ctx.send(f"{user} wurde aus der Freigabeliste entfernt.")
+
     @webcore.command(name="settings")
     async def webcore_settings(self, ctx: commands.Context):
         """Aktuelle Einstellungen anzeigen (ohne Secret)."""
@@ -533,6 +625,8 @@ class WebCore(commands.Cog):
             f"client_id: {d['client_id']}\n"
             f"redirect_uri: {d['redirect_uri']}\n"
             f"client_secret: {'gesetzt' if d['client_secret'] else 'nicht gesetzt'}\n"
+            f"access_mode: {d['access_mode']}\n"
+            f"allowlist: {len(d['allowed_users'])} User\n"
             f"seiten: {', '.join(self.pages) or 'keine'}"
         )
         await ctx.send(box(text, lang="yaml"))

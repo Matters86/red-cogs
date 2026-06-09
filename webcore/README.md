@@ -36,11 +36,20 @@ Dashboard-Seiten zu registrieren. Neue Cogs erscheinen automatisch in der Naviga
 | `[p]webcore oauth <id> <secret> <redirect>` | OAuth2-Daten setzen |
 | `[p]webcore port <port>` | Webserver-Port setzen (Standard 42100) |
 | `[p]webcore host <host>` | Bind-Host setzen (Standard 0.0.0.0) |
+| `[p]webcore access <owner|admin|allowlist>` | Zugriffsmodus setzen |
+| `[p]webcore allow <user>` | User freigeben (volle Sicht) |
+| `[p]webcore deny <user>` | Freigabe entfernen |
 | `[p]webcore settings` | Aktuelle Einstellungen anzeigen (ohne Secret) |
 
 ## Sicherheit
 
-- Zugriff haben standardmäßig **nur Bot-Owner/Co-Owner** (`bot.owner_ids`).
+- **Zugriffsmodi** (per `[p]webcore access` umschaltbar):
+  - `owner` (Standard): nur Bot-Owner und Co-Owner.
+  - `admin`: zusätzlich Discord-Admins – aber **eingeschränkte Sicht**: sie sehen nur die
+    Server, in denen sie Administrator sind, und keine Bot-Infrastruktur (RAM/CPU, Versionen,
+    serverübergreifende Zahlen). Erfordert das **Members-Intent**, damit Mitglieder erkannt werden.
+  - `allowlist`: zusätzlich die per `[p]webcore allow` freigegebenen User – mit **voller Sicht**.
+- Owner und Allowlist-User haben volle Sicht (alle Server + Infrastruktur).
 - Empfehlung: den Webserver hinter einen Reverse-Proxy mit HTTPS legen (z. B. Caddy/Nginx),
   statt den Port direkt offen ins Internet zu stellen.
 
@@ -113,3 +122,20 @@ async def dashboard_page(self, request):
 
 Nutzereingaben aus Formularen immer mit `html.escape(...)` ausgeben und Zahlen/Werte
 serverseitig validieren (z. B. Channel-IDs gegen die echten Guild-Objekte prüfen).
+
+### Sicht pro User einschränken (`visible_guilds`)
+
+Wenn der Zugriffsmodus `admin` aktiv ist, dürfen auch Server-Admins ins Dashboard – sie
+sollen aber **nur ihre eigenen Server** sehen. Damit deine Seite das respektiert, hol dir die
+erlaubten Server über WebCore statt über `self.bot.guilds`:
+
+```python
+async def dashboard_page(self, request):
+    webcore = self.bot.get_cog("WebCore")
+    guilds = await webcore.visible_guilds(request)   # Owner/Allowlist -> alle, Admin -> nur eigene
+    # Server-Dropdown / Daten nur aus `guilds` aufbauen
+    ...
+```
+
+`visible_guilds(request)` liefert für Owner/Allowlist-User alle Server, für Admin-Modus-User nur
+die, in denen sie Administrator sind. So bleibt die serverbezogene Datentrennung gewahrt.
