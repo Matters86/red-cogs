@@ -1,0 +1,12 @@
+{
+    "name": "OnlyImageVideo",
+    "short": "Erzwingt in ausgew\u00e4hlten Kan\u00e4len Beitr\u00e4ge mit Bild, Video oder GIF.",
+    "description": "Macht ausgew\u00e4hlte Kan\u00e4le zu reinen Medien-Kan\u00e4len: Nachrichten ohne Bild, Video oder GIF werden gel\u00f6scht, ein kurzer selbstl\u00f6schender Hinweis erkl\u00e4rt die Regel. Als g\u00fcltiges Medium z\u00e4hlen hochgeladene Bilder/Videos (inkl. .gif), Sticker, direkte Links zu Mediendateien sowie Links von GIF-/Medien-Diensten wie Tenor oder Giphy \u2013 alles pro Server abschaltbar. Threads in einem Nur-Medien-Kanal erben die Regel. Bots/Webhooks und Mitglieder mit einer Ausnahme-Rolle sind ausgenommen. Mehrsprachig (Deutsch als Standard, pro Server umschaltbar) und vollst\u00e4ndig \u00fcber das WebCore-Dashboard verwaltbar.",
+    "tags": ["moderation", "media", "image", "video", "gif", "dashboard", "i18n"],
+    "requirements": [],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert keine personenbezogenen Daten. Gespeichert werden ausschlie\u00dflich serverbezogene Einstellungen (\u00fcberwachte Kan\u00e4le, Ausnahme-Rollen, Schalter, Hinweistext) sowie ein Z\u00e4hler gel\u00f6schter Nachrichten. Inhalte gel\u00f6schter Nachrichten werden nicht gespeichert."
+}

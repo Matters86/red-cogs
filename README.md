@@ -23,12 +23,8 @@ Danach `webcore` einrichten (siehe [`webcore/README.md`](webcore/README.md)).
 | [`autoroom`](autoroom/) | Autovoiceroom: automatische temporäre Voicechannels, voll per Dashboard konfigurierbar. |
 | [`tickets`](tickets/) | Mehrsprachiges Ticketsystem mit Panels, Transcripts und Dashboard. |
 | [`raidhelper`](raidhelper/) | Mehrsprachiger Raid-Planer: Anmeldung per Button, Roster, Erinnerungen, Wiederholung, CSV-Export und Dashboard. |
-| [`sticky`](sticky/) | Hält eine Nachricht am unteren Ende eines Kanals fest (Text/Embed, Webhook, Platzhalter, Cooldown). Voll per Dashboard konfigurierbar. |
-| [`organigram`](organigram/) | Postet Server-Organigramme als Bild, Embed oder Text (Rollen + manuelle Namen, fünf Muster, Auto-Update). Voll per Dashboard konfigurierbar. |
-| [`poll`](poll/) | Mehrsprachige Umfragen mit Abstimmung per Button, Live-Ergebnis und Dashboard. |
-| [`autorole`](autorole/) | Vergibt automatisch Rollen beim Beitritt – respektiert die Regelverifizierung, prüft Zuweisbarkeit, mit Anti-Raid, Bot- und sicheren Sticky-Rollen. Plus Self-Service-Rollen-Panels (Buttons/Dropdown). Voll per Dashboard konfigurierbar. |
-| [`commands`](commands/) | Listet alle Befehle aller Cogs im Dashboard – Stufen-Spalten (Jeder/Mod/Admin/Owner), exakte Mitglieds-Prüfung, Detail-Metadaten, Suche/Filter, Ausblenden und Markdown-Export. Plus `[p]meinebefehle`. |
-| [`guard`](guard/) | Spamschutz, Honeypot und Raid-Notmodus in einem: Heuristiken mit Punkte-Eskalation (verwarnen→Timeout→Kick→Bann), Honeypot-Kanal und Notmodus (übersteht Neustarts). Aktionen ohne DM, Log-Kanal + optional Reds modlog, Whitelist und Reds Immunität. Voll per Dashboard konfigurierbar. |
+| [`poll`](poll/) | Mehrsprachige Umfragen: Abstimmung per Button, Live-Ergebnis, Einzel-/Mehrfachauswahl, anonym/öffentlich, Auto-Ende, CSV-Export und Dashboard. |
+| [`onlyimagevideo`](onlyimagevideo/) | Macht Kanäle zu Nur-Medien-Kanälen: löscht Nachrichten ohne Bild/Video/GIF (auch Tenor-/Giphy-Links, Sticker), Threads erben die Regel, mit Dashboard. |
 
 ## Wie das Dashboard funktioniert
 
