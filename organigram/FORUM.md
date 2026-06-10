@@ -13,7 +13,7 @@ benannte Organigramme pro Server, komplett über das Web-Dashboard konfigurierba
 
 ## Installation
 ```
-[p]repo add red-cogs <github-url>
+[p]repo add red-cogs https://github.com/Matters86/red-cogs.git
 [p]cog install red-cogs organigram
 [p]load organigram
 ```

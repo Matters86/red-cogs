@@ -4,7 +4,7 @@ Mehrsprachiger Raid-Planer für Red – Anmeldungen wie bei **raid-helper.dev**,
 
 **Installation**
 ```
-[p]repo add red-cogs <github-url>
+[p]repo add red-cogs https://github.com/Matters86/red-cogs.git
 [p]cog install red-cogs raidhelper
 [p]load raidhelper
 ```

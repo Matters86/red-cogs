@@ -7,7 +7,7 @@ zeigt `[p]meinebefehle` jedem seine nutzbaren Befehle. Keine zusätzlichen Abhä
 
 ## Installation
 ```
-[p]repo add red-cogs <github-url>
+[p]repo add red-cogs https://github.com/Matters86/red-cogs.git
 [p]cog install red-cogs commands
 [p]load commands
 ```

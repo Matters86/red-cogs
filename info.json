@@ -1,5 +1,5 @@
 {
-    "author": ["DeinName"],
+    "author": ["Matters86"],
     "name": "Red-Cogs",
     "short": "Eigene Cogs samt integriertem Web-Dashboard.",
     "description": "Sammlung eigener Cogs für Red-DiscordBot. Enthält ein zentrales Web-Dashboard (WebCore), in das sich jeder Cog mit eigenen Seiten einklinkt.",

@@ -19,7 +19,7 @@ für Sonderfälle. Konfiguriert wird am bequemsten über das **Dashboard**.
 ## Installation
 
 ```
-[p]repo add red-cogs <github-url>
+[p]repo add red-cogs https://github.com/Matters86/red-cogs.git
 [p]cog install red-cogs tickets
 [p]load tickets
 ```

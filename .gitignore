@@ -1,8 +1,33 @@
+# Python
 __pycache__/
 *.py[cod]
+*.pyo
 *.egg-info/
+*.egg
+dist/
+build/
+
+# Virtuelle Umgebungen
 .venv/
 venv/
+env/
+
+# Secrets & Config
 .env
-.DS_Store
+*.secret
+config.yml
+
+# Logs & Temp
 *.log
+*.tmp
+*.bak
+
+# Betriebssystem
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

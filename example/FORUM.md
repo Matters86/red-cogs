@@ -4,7 +4,7 @@ Beispiel-Cog als Vorlage – ein Befehl plus eine eigene Seite im Web-Dashboard.
 
 ## Installation
 ```
-[p]repo add red-cogs <github-url>
+[p]repo add red-cogs https://github.com/Matters86/red-cogs.git
 [p]cog install red-cogs example
 [p]load example
 ```
