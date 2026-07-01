@@ -1,0 +1,12 @@
+{
+    "name": "Changelog",
+    "short": "Server-Updates per Modal posten – als einheitliches Embed, mit Dashboard.",
+    "description": "Ein Slash-Befehl /changelog öffnet ein Modal (Titel, Neu, Geändert, Fixes, Hinweis). Der Bot baut daraus ein einheitliches Update-Embed und postet es im konfigurierten Kanal, optional mit Rollen-Ping. Ziel-Kanal, berechtigte Rollen, Ping-Rolle, Farbe, Sprache und wählbare Kategorien werden pro Server per Dashboard oder Befehl gesetzt. Gepostete Changelogs werden gespeichert und sind im Dashboard einsehbar.",
+    "tags": ["changelog", "updates", "modal", "embed", "dashboard"],
+    "requirements": [],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Speichert pro Server die geposteten Changelogs (Titel, Inhalte, Kanal- und Nachrichten-ID sowie Anzeigename und ID der postenden Person) für die Historie im Dashboard. Keine weiteren personenbezogenen Daten. Einträge lassen sich im Dashboard löschen."
+}
