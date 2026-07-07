@@ -219,6 +219,8 @@ class AdminPanel(commands.Cog):
         app.router.add_get("/api/panel/bans", self.http_get_bans)
         app.router.add_post("/api/panel/unban", self.http_unban)
         app.router.add_get("/api/panel/audit", self.http_audit)
+        app.router.add_get("/api/panel/roles", self.http_get_role_map)
+        app.router.add_post("/api/panel/roles", self.http_set_role_map)
         app.router.add_post("/api/panel/action", self.http_panel_action)
         # Bridge (FiveM-Server)
         app.router.add_post("/api/bridge/sync", self.http_bridge_sync)
@@ -371,6 +373,7 @@ class AdminPanel(commands.Cog):
             "server": None,
             "limits": {"money": self.money_max, "item": self.item_max},
             "locked": await self.config.locked(),
+            "is_admin": request["member"].guild_permissions.administrator,
         }
         if state:
             server = {
@@ -550,6 +553,48 @@ class AdminPanel(commands.Cog):
             "bans": db.get_active_bans(),
         })
 
+    # -------- Rollen-Verwaltung (NUR Discord-Administratoren) --------
+
+    async def http_get_role_map(self, request: web.Request):
+        member = request["member"]
+        if not member.guild_permissions.administrator:
+            return web.json_response({"error": "Nur Discord-Administratoren"}, status=403)
+        guild = member.guild
+        role_map = await self.config.guild(guild).role_map()
+        roles = []
+        for r in sorted(guild.roles, key=lambda x: -x.position):
+            if r.is_default() or r.managed:   # @everyone und Bot-Rollen ausblenden
+                continue
+            roles.append({
+                "id": str(r.id),
+                "name": r.name,
+                "color": f"#{r.color.value:06x}" if r.color.value else None,
+                "members": len(r.members),
+                "preset": role_map.get(str(r.id)),
+            })
+        return web.json_response({"roles": roles, "presets": sorted(PRESETS.keys())})
+
+    async def http_set_role_map(self, request: web.Request):
+        member = request["member"]
+        if not member.guild_permissions.administrator:
+            return web.json_response({"error": "Nur Discord-Administratoren"}, status=403)
+        data = await request.json()
+        role_id = str(data.get("role_id", "")).strip()
+        preset = data.get("preset") or None
+        if preset is not None and preset not in PRESETS:
+            return web.json_response({"error": "Unbekanntes Preset"}, status=400)
+        guild = member.guild
+        role = guild.get_role(int(role_id)) if role_id.isdigit() else None
+        if role is None:
+            return web.json_response({"error": "Rolle nicht gefunden"}, status=400)
+        async with self.config.guild(guild).role_map() as role_map:
+            if preset:
+                role_map[role_id] = preset
+            else:
+                role_map.pop(role_id, None)
+        await self._audit(f"🔧 **Rollen-Mapping** · @{role.name} → {preset or '— entfernt'} · von {member.display_name} (Panel)")
+        return web.json_response({"ok": True})
+
     async def http_bridge_catalog(self, request: web.Request):
         data = await request.json()
         items = data.get("items")
@@ -570,6 +615,11 @@ class AdminPanel(commands.Cog):
         status = data.get("status", "failed")
         result = data.get("result", "")
         db.mark_action_result(action_id, status, result)
+
+        # Name -> CID: aufgelöstes Target übernehmen (wichtig für Akte, Audit und Bans)
+        resolved = data.get("resolved_target")
+        if resolved:
+            db.update_action_target(action_id, str(resolved))
 
         action = db.get_action(action_id)
         if action:
@@ -721,39 +771,39 @@ class AdminPanel(commands.Cog):
     # ---- Support-Aktionen ----
 
     @ap.command(name="tp")
-    async def ap_tp(self, ctx: commands.Context, citizenid: str, target_citizenid: str):
+    async def ap_tp(self, ctx: commands.Context, spieler: str, target_spieler: str):
         """Teleportiert Spieler A zu Spieler B. Beispiel: !ap tp ABC123 XYZ789"""
         if not await self._require(ctx, "teleport"):
             return
-        db.add_action("teleport", citizenid,
-                      json.dumps({"to_citizenid": target_citizenid}),
+        db.add_action("teleport", spieler,
+                      json.dumps({"to_spieler": target_spieler}),
                       f"discord:{ctx.author.display_name}")
-        await ctx.send(f"✅ Teleport `{citizenid}` → `{target_citizenid}` angelegt.")
+        await ctx.send(f"✅ Teleport `{spieler}` → `{target_spieler}` angelegt.")
 
     @ap.command(name="heal")
-    async def ap_heal(self, ctx: commands.Context, citizenid: str):
+    async def ap_heal(self, ctx: commands.Context, spieler: str):
         """Heilt einen Spieler vollständig."""
         if not await self._require(ctx, "heal"):
             return
-        db.add_action("heal", citizenid, None, f"discord:{ctx.author.display_name}")
-        await ctx.send(f"✅ Heal für `{citizenid}` angelegt.")
+        db.add_action("heal", spieler, None, f"discord:{ctx.author.display_name}")
+        await ctx.send(f"✅ Heal für `{spieler}` angelegt.")
 
     @ap.command(name="revive")
-    async def ap_revive(self, ctx: commands.Context, citizenid: str):
+    async def ap_revive(self, ctx: commands.Context, spieler: str):
         """Belebt einen Spieler wieder."""
         if not await self._require(ctx, "revive"):
             return
-        db.add_action("revive", citizenid, None, f"discord:{ctx.author.display_name}")
-        await ctx.send(f"✅ Revive für `{citizenid}` angelegt.")
+        db.add_action("revive", spieler, None, f"discord:{ctx.author.display_name}")
+        await ctx.send(f"✅ Revive für `{spieler}` angelegt.")
 
     @ap.command(name="kick")
-    async def ap_kick(self, ctx: commands.Context, citizenid: str, *, reason: str = "Vom Support gekickt"):
+    async def ap_kick(self, ctx: commands.Context, spieler: str, *, reason: str = "Vom Support gekickt"):
         """Kickt einen Spieler. Beispiel: !ap kick ABC123 Beleidigung"""
         if not await self._require(ctx, "kick"):
             return
-        db.add_action("kick", citizenid, json.dumps({"reason": reason}),
+        db.add_action("kick", spieler, json.dumps({"reason": reason}),
                       f"discord:{ctx.author.display_name}")
-        await ctx.send(f"✅ Kick für `{citizenid}` angelegt. Grund: {reason}")
+        await ctx.send(f"✅ Kick für `{spieler}` angelegt. Grund: {reason}")
 
     @ap.command(name="announce")
     async def ap_announce(self, ctx: commands.Context, *, message: str):
@@ -774,23 +824,23 @@ class AdminPanel(commands.Cog):
         await ctx.send(f"✅ `{plate}` → Garage `{garage}` angelegt.")
 
     @ap.command(name="money")
-    async def ap_money(self, ctx: commands.Context, citizenid: str, op: str,
+    async def ap_money(self, ctx: commands.Context, spieler: str, op: str,
                        amount: int, account: str = "cash"):
         """Geld geben/nehmen. Beispiel: !ap money ABC123 add 500 bank"""
         if not await self._require(ctx, "money"):
             return
         op = op.lower()
         if op not in ("add", "remove") or amount <= 0 or account not in ("cash", "bank"):
-            return await ctx.send("Nutzung: `!ap money <citizenid> <add|remove> <betrag> [cash|bank]`")
+            return await ctx.send("Nutzung: `!ap money <spieler> <add|remove> <betrag> [cash|bank]`")
         if amount > self.money_max:
             return await ctx.send(f"❌ Limit: max. {self.money_max:,} $ pro Aktion.".replace(",", "."))
-        db.add_action("money", citizenid,
+        db.add_action("money", spieler,
                       json.dumps({"op": op, "amount": amount, "account": account}),
                       f"discord:{ctx.author.display_name}")
-        await ctx.send(f"✅ {op} {amount}$ ({account}) für `{citizenid}` angelegt.")
+        await ctx.send(f"✅ {op} {amount}$ ({account}) für `{spieler}` angelegt.")
 
     @ap.command(name="giveitem")
-    async def ap_giveitem(self, ctx: commands.Context, citizenid: str, item: str, count: int = 1):
+    async def ap_giveitem(self, ctx: commands.Context, spieler: str, item: str, count: int = 1):
         """Gibt einem Spieler ein Item. Beispiel: !ap giveitem ABC123 water 5"""
         if not await self._require(ctx, "items"):
             return
@@ -798,13 +848,13 @@ class AdminPanel(commands.Cog):
             return await ctx.send("Anzahl muss mindestens 1 sein.")
         if count > self.item_max:
             return await ctx.send(f"❌ Limit: max. {self.item_max} Stück pro Aktion.")
-        db.add_action("give_item", citizenid,
+        db.add_action("give_item", spieler,
                       json.dumps({"item": item, "count": count}),
                       f"discord:{ctx.author.display_name}")
-        await ctx.send(f"✅ `{item}` ×{count} für `{citizenid}` angelegt.")
+        await ctx.send(f"✅ `{item}` ×{count} für `{spieler}` angelegt.")
 
     @ap.command(name="removeitem")
-    async def ap_removeitem(self, ctx: commands.Context, citizenid: str, item: str, count: int = 1):
+    async def ap_removeitem(self, ctx: commands.Context, spieler: str, item: str, count: int = 1):
         """Nimmt einem Spieler ein Item weg. Beispiel: !ap removeitem ABC123 water 5"""
         if not await self._require(ctx, "items"):
             return
@@ -812,19 +862,19 @@ class AdminPanel(commands.Cog):
             return await ctx.send("Anzahl muss mindestens 1 sein.")
         if count > self.item_max:
             return await ctx.send(f"❌ Limit: max. {self.item_max} Stück pro Aktion.")
-        db.add_action("remove_item", citizenid,
+        db.add_action("remove_item", spieler,
                       json.dumps({"item": item, "count": count}),
                       f"discord:{ctx.author.display_name}")
-        await ctx.send(f"✅ Entfernen von `{item}` ×{count} bei `{citizenid}` angelegt.")
+        await ctx.send(f"✅ Entfernen von `{item}` ×{count} bei `{spieler}` angelegt.")
 
     @ap.command(name="inv")
-    async def ap_inv(self, ctx: commands.Context, citizenid: str):
+    async def ap_inv(self, ctx: commands.Context, spieler: str):
         """Zeigt das Inventar eines Spielers. Beispiel: !ap inv ABC123"""
         if not await self._require(ctx, "view_inventory"):
             return
-        action_id = db.add_action("get_inventory", citizenid, None,
+        action_id = db.add_action("get_inventory", spieler, None,
                                   f"discord:{ctx.author.display_name}")
-        msg = await ctx.send(f"⏳ Frage Inventar von `{citizenid}` ab…")
+        msg = await ctx.send(f"⏳ Frage Inventar von `{spieler}` ab…")
 
         import asyncio
         for _ in range(12):  # max. ~12 Sekunden auf die Bridge warten
@@ -839,8 +889,8 @@ class AdminPanel(commands.Cog):
             except (ValueError, TypeError):
                 items = []
             if not items:
-                return await msg.edit(content=f"📦 Inventar von `{citizenid}` ist leer.")
-            embed = discord.Embed(title=f"Inventar von {citizenid}")
+                return await msg.edit(content=f"📦 Inventar von `{spieler}` ist leer.")
+            embed = discord.Embed(title=f"Inventar von {spieler}")
             lines = [f"`{i.get('name')}` ×{i.get('count', 1)} (Slot {i.get('slot', '?')})"
                      for i in items[:25]]
             if len(items) > 25:
@@ -850,23 +900,23 @@ class AdminPanel(commands.Cog):
         await msg.edit(content="❌ Keine Antwort von der FiveM-Bridge – läuft der Server?")
 
     @ap.command(name="tpc")
-    async def ap_tpc(self, ctx: commands.Context, citizenid: str, x: float, y: float, z: float):
+    async def ap_tpc(self, ctx: commands.Context, spieler: str, x: float, y: float, z: float):
         """Teleportiert einen Spieler zu Koordinaten. Beispiel: !ap tpc ABC123 298.6 -584.5 43.3"""
         if not await self._require(ctx, "teleport"):
             return
-        db.add_action("teleport_coords", citizenid,
+        db.add_action("teleport_coords", spieler,
                       json.dumps({"x": x, "y": y, "z": z}),
                       f"discord:{ctx.author.display_name}")
-        await ctx.send(f"✅ Teleport `{citizenid}` → `{x}, {y}, {z}` angelegt.")
+        await ctx.send(f"✅ Teleport `{spieler}` → `{x}, {y}, {z}` angelegt.")
 
     @ap.command(name="cars")
-    async def ap_cars(self, ctx: commands.Context, citizenid: str):
+    async def ap_cars(self, ctx: commands.Context, spieler: str):
         """Zeigt die Fahrzeuge eines Spielers (auch offline). Beispiel: !ap cars ABC123"""
         if not await self._require(ctx, "car_to_garage"):
             return
-        action_id = db.add_action("get_vehicles", citizenid, None,
+        action_id = db.add_action("get_vehicles", spieler, None,
                                   f"discord:{ctx.author.display_name}")
-        msg = await ctx.send(f"⏳ Frage Fahrzeuge von `{citizenid}` ab…")
+        msg = await ctx.send(f"⏳ Frage Fahrzeuge von `{spieler}` ab…")
 
         import asyncio
         for _ in range(12):
@@ -881,9 +931,9 @@ class AdminPanel(commands.Cog):
             except (ValueError, TypeError):
                 vehicles = []
             if not vehicles:
-                return await msg.edit(content=f"🚗 `{citizenid}` besitzt keine Fahrzeuge.")
+                return await msg.edit(content=f"🚗 `{spieler}` besitzt keine Fahrzeuge.")
             state_names = {0: "Draußen", 1: "Garage", 2: "Beschlagnahmt"}
-            embed = discord.Embed(title=f"Fahrzeuge von {citizenid}")
+            embed = discord.Embed(title=f"Fahrzeuge von {spieler}")
             lines = []
             for v in vehicles[:25]:
                 st = state_names.get(v.get("state"), "?")
@@ -939,31 +989,31 @@ class AdminPanel(commands.Cog):
         await msg.edit(content="❌ Keine Antwort von der FiveM-Bridge – läuft der Server?")
 
     @ap.command(name="setjob")
-    async def ap_setjob(self, ctx: commands.Context, citizenid: str, job: str, grade: int = 0):
-        """Setzt den Job eines Online-Spielers. Beispiel: !ap setjob ABC123 police 2"""
+    async def ap_setjob(self, ctx: commands.Context, spieler: str, job: str, grade: int = 0):
+        """Setzt den Job eines Online-Spielers. Beispiel: !ap setjob Kevin police 2"""
         if not await self._require(ctx, "setjob"):
             return
-        db.add_action("set_job", citizenid, json.dumps({"job": job, "grade": grade}),
+        db.add_action("set_job", spieler, json.dumps({"job": job, "grade": grade}),
                       f"discord:{ctx.author.display_name}")
-        await ctx.send(f"✅ Job `{job}` (Grade {grade}) für `{citizenid}` angelegt.")
+        await ctx.send(f"✅ Job `{job}` (Grade {grade}) für `{spieler}` angelegt.")
 
     @ap.command(name="setgang")
-    async def ap_setgang(self, ctx: commands.Context, citizenid: str, gang: str, grade: int = 0):
-        """Setzt die Gang eines Online-Spielers. Beispiel: !ap setgang ABC123 ballas 1"""
+    async def ap_setgang(self, ctx: commands.Context, spieler: str, gang: str, grade: int = 0):
+        """Setzt die Gang eines Online-Spielers. Beispiel: !ap setgang Kevin ballas 1"""
         if not await self._require(ctx, "setjob"):
             return
-        db.add_action("set_gang", citizenid, json.dumps({"gang": gang, "grade": grade}),
+        db.add_action("set_gang", spieler, json.dumps({"gang": gang, "grade": grade}),
                       f"discord:{ctx.author.display_name}")
-        await ctx.send(f"✅ Gang `{gang}` (Grade {grade}) für `{citizenid}` angelegt.")
+        await ctx.send(f"✅ Gang `{gang}` (Grade {grade}) für `{spieler}` angelegt.")
 
     @ap.command(name="msg")
-    async def ap_msg(self, ctx: commands.Context, citizenid: str, *, message: str):
-        """Schickt einem Spieler eine private Support-Nachricht. Beispiel: !ap msg ABC123 Bitte melde dich im Support"""
+    async def ap_msg(self, ctx: commands.Context, spieler: str, *, message: str):
+        """Schickt einem Spieler eine private Support-Nachricht. Beispiel: !ap msg Kevin Bitte melde dich im Support"""
         if not await self._require(ctx, "message"):
             return
-        db.add_action("notify", citizenid, json.dumps({"message": message}),
+        db.add_action("notify", spieler, json.dumps({"message": message}),
                       f"discord:{ctx.author.display_name}")
-        await ctx.send(f"✅ Nachricht an `{citizenid}` angelegt.")
+        await ctx.send(f"✅ Nachricht an `{spieler}` angelegt.")
 
     @ap.command(name="note")
     async def ap_note(self, ctx: commands.Context, citizenid: str, *, text: str):
@@ -983,8 +1033,8 @@ class AdminPanel(commands.Cog):
         await ctx.send(f"⚠️ Verwarnung für `{citizenid}` gespeichert – das ist Verwarnung **Nr. {warns}**.")
 
     @ap.command(name="ban")
-    async def ap_ban(self, ctx: commands.Context, citizenid: str, duration: str, *, reason: str):
-        """Bannt einen Spieler. Dauer: Stunden-Zahl oder 'perm'. Beispiel: !ap ban ABC123 24 Cheating / !ap ban ABC123 perm RMD"""
+    async def ap_ban(self, ctx: commands.Context, spieler: str, duration: str, *, reason: str):
+        """Bannt einen Spieler. Dauer: Stunden-Zahl oder 'perm'. Beispiel: !ap ban Kevin 24 Cheating / !ap ban ABC123 perm RDM"""
         if not await self._require(ctx, "ban"):
             return
         if duration.lower() in ("perm", "permanent", "0"):
@@ -994,10 +1044,10 @@ class AdminPanel(commands.Cog):
                 hours = int(duration)
             except ValueError:
                 return await ctx.send("Dauer muss eine Stundenzahl oder `perm` sein.")
-        db.add_action("ban", citizenid, json.dumps({"hours": hours, "reason": reason}),
+        db.add_action("ban", spieler, json.dumps({"hours": hours, "reason": reason}),
                       f"discord:{ctx.author.display_name}")
         dur_txt = "permanent" if hours == 0 else f"{hours} Stunden"
-        await ctx.send(f"🔨 Ban für `{citizenid}` ({dur_txt}) angelegt – wird beim nächsten Sync ausgeführt.")
+        await ctx.send(f"🔨 Ban für `{spieler}` ({dur_txt}) angelegt – wird beim nächsten Sync ausgeführt.")
 
     @ap.command(name="unban")
     async def ap_unban(self, ctx: commands.Context, citizenid: str):

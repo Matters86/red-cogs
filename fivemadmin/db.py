@@ -263,6 +263,14 @@ def remove_ban(citizenid: str) -> bool:
 # Audit (Admin-Aktivität)
 # ------------------------------------------------------------------
 
+def update_action_target(action_id: str, target: str):
+    """Ersetzt das Target einer Action (z. B. Name -> aufgelöste CitizenID)."""
+    conn = get_conn()
+    conn.execute("UPDATE actions SET target = ? WHERE id = ?", (target, action_id))
+    conn.commit()
+    conn.close()
+
+
 def get_actions_audit(limit: int = 200):
     """Aktionen für die Audit-Ansicht – mehr Tiefe als das normale Protokoll."""
     conn = get_conn()

@@ -661,8 +661,8 @@
       <section class="card" data-perm="money">
         <h2>Geld</h2>
         <p class="hint" id="mo-hint">CitizenID per Klick auf einen Spielernamen übernehmen.</p>
-        <label for="mo-cid">CitizenID</label>
-        <input id="mo-cid" placeholder="ABC12345" autocomplete="off">
+        <label for="mo-cid">Spieler</label>
+        <input id="mo-cid" list="player-list" placeholder="Name oder CitizenID" autocomplete="off">
         <div class="split">
           <div>
             <label for="mo-amount">Betrag</label>
@@ -686,13 +686,14 @@
       <section class="card" data-perm="items">
         <h2>Item</h2>
         <p class="hint">Item aus der Liste wählen oder tippen (Liste kommt vom Server).</p>
-        <label for="it-cid">CitizenID</label>
-        <input id="it-cid" placeholder="ABC12345" autocomplete="off">
+        <label for="it-cid">Spieler</label>
+        <input id="it-cid" list="player-list" placeholder="Name oder CitizenID" autocomplete="off">
         <div class="split">
           <div>
             <label for="it-name">Item</label>
             <input id="it-name" list="item-list" placeholder="water" autocomplete="off">
             <datalist id="item-list"></datalist>
+            <datalist id="player-list"></datalist>
           </div>
           <div style="max-width:110px">
             <label for="it-count">Anzahl</label>
@@ -708,9 +709,9 @@
 
       <section class="card" data-perm="setjob">
         <h2>Job &amp; Gang</h2>
-        <p class="hint">Nur bei Online-Spielern möglich. CitizenID per Namensklick übernehmen.</p>
-        <label for="job-cid">CitizenID</label>
-        <input id="job-cid" placeholder="ABC12345" autocomplete="off">
+        <p class="hint">Nur bei Online-Spielern möglich. Namen eintippen (Vorschläge erscheinen) oder Spielernamen anklicken.</p>
+        <label for="job-cid">Spieler</label>
+        <input id="job-cid" list="player-list" placeholder="Name oder CitizenID" autocomplete="off">
         <div class="split">
           <div style="max-width:110px">
             <label for="job-type">Typ</label>
@@ -827,6 +828,16 @@
         <h2 style="font-size:19px">Audit &amp; Kontrolle</h2>
         <button class="btn small" id="audit-refresh" style="margin-left:auto">Aktualisieren</button>
       </div>
+
+      <section class="card hidden" id="roles-card">
+        <div class="list-head">
+          <h2>Berechtigungen</h2>
+          <span class="count">nur Discord-Administratoren</span>
+        </div>
+        <p class="hint">Weise Discord-Rollen ein Berechtigungs-Preset zu – gilt sofort für alle Mitglieder der Rolle. Discord-Administratoren haben immer vollen Zugriff. <b style="color:var(--text)">support</b>: TP/Heal/Revive/Inventar/Nachricht · <b style="color:var(--text)">moderator</b>: + Kick/Ban/Notizen/Job · <b style="color:var(--text)">admin</b>: + Geld/Items/Audit · <b style="color:var(--text)">editor</b>: nur Statistiken.</p>
+        <div id="roles-wrap"><div class="empty">Lade Rollen…</div></div>
+        <div class="msg" id="roles-msg"></div>
+      </section>
 
       <section class="card">
         <div class="list-head">
@@ -1120,6 +1131,7 @@
     }
     if (name === "audit" && can("audit")) {
       loadAudit();
+      loadRoles();
     }
   }
 
@@ -1149,6 +1161,16 @@
 
   function renderPlayers() {
     var wrap = $("players-wrap");
+    // Autocomplete-Liste für Spieler-Felder (Name anzeigen, CID einsetzen –
+    // die Bridge löst aber auch frei getippte Namen serverseitig auf)
+    var pdl = $("player-list");
+    if (pdl) {
+      var po = "";
+      players.forEach(function (p) {
+        if (p.citizenid) po += '<option value="' + esc(p.citizenid) + '">' + esc(p.charname || p.name) + '</option>';
+      });
+      pdl.innerHTML = po;
+    }
     var q = $("players-filter").value.trim().toLowerCase();
     var list = players.filter(function (p) {
       if (!q) return true;
@@ -1976,6 +1998,57 @@
     $("diag-wrap").innerHTML = head + html + '</div>';
   }
 
+  /* ---------- Rollen-Verwaltung (nur Discord-Admins) ---------- */
+
+  var isAdmin = false;
+
+  function loadRoles() {
+    if (!isAdmin) return;
+    api("/api/panel/roles").then(function (d) {
+      renderRoles(d.roles || [], d.presets || []);
+    }).catch(function (e) {
+      $("roles-wrap").innerHTML = '<div class="empty">' + errText(e) + '</div>';
+    });
+  }
+
+  var PRESET_LABEL = { support: "Support", moderator: "Moderator", admin: "Admin", editor: "Editor (Statistik)" };
+
+  function renderRoles(roles, presets) {
+    if (!roles.length) {
+      $("roles-wrap").innerHTML = '<div class="empty">Keine Rollen gefunden.</div>';
+      return;
+    }
+    var html = '<table class="t"><thead><tr><th>Discord-Rolle</th><th style="text-align:right">Mitglieder</th><th style="text-align:right">Preset</th></tr></thead><tbody>';
+    roles.forEach(function (r) {
+      var dot = '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;background:' + (r.color || 'var(--muted)') + '"></span>';
+      var opts = '<option value="">— kein Zugriff</option>';
+      presets.forEach(function (p) {
+        opts += '<option value="' + esc(p) + '"' + (r.preset === p ? ' selected' : '') + '>' + esc(PRESET_LABEL[p] || p) + '</option>';
+      });
+      html += '<tr><td>' + dot + esc(r.name) + '</td>' +
+        '<td class="num dim">' + r.members + '</td>' +
+        '<td style="text-align:right"><select data-role="' + esc(r.id) + '" style="max-width:190px;display:inline-block;width:auto">' + opts + '</select></td></tr>';
+    });
+    $("roles-wrap").innerHTML = html + '</tbody></table>';
+  }
+
+  $("roles-wrap").addEventListener("change", function (ev) {
+    var sel = ev.target.closest("select[data-role]");
+    if (!sel) return;
+    sel.disabled = true;
+    api("/api/panel/roles", {
+      method: "POST",
+      body: JSON.stringify({ role_id: sel.getAttribute("data-role"), preset: sel.value || null })
+    }).then(function () {
+      sel.disabled = false;
+      setMsg("roles-msg", "Gespeichert – gilt sofort.", "ok");
+    }).catch(function (e) {
+      sel.disabled = false;
+      setMsg("roles-msg", errText(e), "err");
+      loadRoles();
+    });
+  });
+
   /* ---------- Audit ---------- */
 
   var auditData = null;
@@ -2261,6 +2334,8 @@
       applyPerms();
       if (data.limits) applyLimits(data.limits);
       $("lockdown-banner").classList.toggle("hidden", !data.locked);
+      isAdmin = !!data.is_admin;
+      $("roles-card").classList.toggle("hidden", !isAdmin);
       renderFeed(data.actions || []);
       checkQueryResults(data.actions || []);
       renderLogs(data.events || []);
@@ -2291,9 +2366,9 @@
     if (limitsApplied) return;
     limitsApplied = true;
     var moHint = $("mo-hint");
-    if (moHint && limits.money) moHint.textContent = "Max. " + Number(limits.money).toLocaleString("de-DE") + " $ pro Aktion. CitizenID per Namensklick übernehmen.";
+    if (moHint && limits.money) moHint.textContent = "Max. " + Number(limits.money).toLocaleString("de-DE") + " $ pro Aktion. Name oder CitizenID eingeben – Namensklick übernimmt.";
     var itHint = document.querySelector('[data-perm="items"] .hint');
-    if (itHint && limits.item) itHint.textContent = "Max. " + limits.item + " Stück pro Aktion. Item aus der Liste wählen oder tippen.";
+    if (itHint && limits.item) itHint.textContent = "Max. " + limits.item + " Stück pro Aktion. Spieler per Name oder CitizenID.";
   }
 
   /* ---------- Login / Logout ---------- */
