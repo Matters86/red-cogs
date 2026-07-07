@@ -38,24 +38,13 @@ from . import db
 
 log = logging.getLogger("red.adminpanel")
 
-API_KEY = os.environ.get("ADMINPANEL_API_KEY", "CHANGE_ME")
-WEB_PORT = int(os.environ.get("ADMINPANEL_WEB_PORT", "8099"))
-PUBLIC_URL = os.environ.get("ADMINPANEL_PUBLIC_URL", "").rstrip("/")
-
-API_KEY_IS_DEFAULT = API_KEY == "CHANGE_ME"
-
-
-def _key_ok(provided: str) -> bool:
-    """Konstanter-Zeit-Vergleich gegen Timing-Angriffe."""
-    return hmac.compare_digest(str(provided or ""), API_KEY)
-
-# ------------------------------------------------------------------
-# Sicherheits-Limits (schützen vor kompromittierten Sessions / Fehlern)
-# Anpassbar per ENV, sonst diese Defaults.
-# ------------------------------------------------------------------
-
-MONEY_MAX_PER_ACTION = int(os.environ.get("ADMINPANEL_MONEY_MAX", "50000"))
-ITEM_MAX_PER_ACTION = int(os.environ.get("ADMINPANEL_ITEM_MAX", "100"))
+# ENV dienen nur noch als DEFAULTS. Zur Laufzeit überschreiben die per
+# Discord-Befehl gesetzten Config-Werte diese (self.api_key usw.).
+DEFAULT_API_KEY = os.environ.get("ADMINPANEL_API_KEY", "CHANGE_ME")
+DEFAULT_WEB_PORT = int(os.environ.get("ADMINPANEL_WEB_PORT", "8099"))
+DEFAULT_PUBLIC_URL = os.environ.get("ADMINPANEL_PUBLIC_URL", "").rstrip("/")
+DEFAULT_MONEY_MAX = int(os.environ.get("ADMINPANEL_MONEY_MAX", "50000"))
+DEFAULT_ITEM_MAX = int(os.environ.get("ADMINPANEL_ITEM_MAX", "100"))
 
 # Aktionen, die immer zusätzlich in den Audit-Channel geloggt werden
 # (die "damit könnte man Schaden anrichten"-Menge).
@@ -111,13 +100,38 @@ class AdminPanel(commands.Cog):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=0xA0D141)
         self.config.register_guild(role_map={})  # {role_id(str): preset_name}
-        self.config.register_global(alert_channel=None)
-        self.config.register_global(audit_channel=None)
-        self.config.register_global(locked=False)
+        self.config.register_global(
+            alert_channel=None,
+            audit_channel=None,
+            locked=False,
+            api_key=None,      # None => ENV/Default
+            web_port=None,
+            public_url=None,
+            money_max=None,
+            item_max=None,
+        )
+        # Laufzeit-Settings (werden in _start_webserver aus Config+ENV aufgelöst)
+        self.api_key = DEFAULT_API_KEY
+        self.web_port = DEFAULT_WEB_PORT
+        self.public_url = DEFAULT_PUBLIC_URL
+        self.money_max = DEFAULT_MONEY_MAX
+        self.item_max = DEFAULT_ITEM_MAX
         db.init_db()
         self.runner: web.AppRunner | None = None
         self._web_task = self.bot.loop.create_task(self._start_webserver())
         self._backup_task = self.bot.loop.create_task(self._backup_loop())
+
+    async def _resolve_settings(self):
+        """Effektive Settings = Config-Wert, sonst ENV/Default."""
+        self.api_key = await self.config.api_key() or DEFAULT_API_KEY
+        self.web_port = await self.config.web_port() or DEFAULT_WEB_PORT
+        self.public_url = (await self.config.public_url() or DEFAULT_PUBLIC_URL).rstrip("/")
+        self.money_max = await self.config.money_max() or DEFAULT_MONEY_MAX
+        self.item_max = await self.config.item_max() or DEFAULT_ITEM_MAX
+
+    def _key_ok(self, provided: str) -> bool:
+        """Konstanter-Zeit-Vergleich gegen Timing-Angriffe."""
+        return hmac.compare_digest(str(provided or ""), self.api_key)
 
     def cog_unload(self):
         if self._web_task:
@@ -174,6 +188,8 @@ class AdminPanel(commands.Cog):
     # --------------------------------------------------------------
 
     async def _start_webserver(self):
+        await self.bot.wait_until_ready()
+        await self._resolve_settings()
         app = web.Application(middlewares=[self._auth_middleware])
         # Panel (Browser)
         app.router.add_get("/", self.http_index)
@@ -201,22 +217,20 @@ class AdminPanel(commands.Cog):
 
         self.runner = web.AppRunner(app)
         await self.runner.setup()
-        site = web.TCPSite(self.runner, "0.0.0.0", WEB_PORT)
+        site = web.TCPSite(self.runner, "0.0.0.0", self.web_port)
         await site.start()
-        log.info(f"AdminPanel Webserver läuft auf Port {WEB_PORT}")
-        if API_KEY_IS_DEFAULT:
+        log.info(f"AdminPanel Webserver läuft auf Port {self.web_port}")
+        if self.api_key == "CHANGE_ME":
             log.warning(
-                "⚠️ ADMINPANEL_API_KEY ist NICHT gesetzt (Default 'CHANGE_ME')! "
-                "Der Kanal zur FiveM-Bridge ist damit ungeschützt. "
-                "Bitte ADMINPANEL_API_KEY als Umgebungsvariable setzen (z. B. `openssl rand -hex 32`) "
-                "und denselben Wert in der server.cfg als `adminpanel_key` eintragen."
+                "⚠️ Kein API-Key gesetzt (Default 'CHANGE_ME')! Der Kanal zur FiveM-Bridge ist ungeschützt. "
+                "Setze ihn per Discord: `!ap config key` (generiert einen und schickt ihn dir per DM)."
             )
 
     @web.middleware
     async def _auth_middleware(self, request: web.Request, handler):
         path = request.path
         if path.startswith("/api/bridge/") or path.startswith("/api/actions/"):
-            if not _key_ok(request.headers.get("X-API-Key")):
+            if not self._key_ok(request.headers.get("X-API-Key")):
                 return web.json_response({"error": "unauthorized"}, status=401)
         elif path.startswith("/api/panel/"):
             session = db.get_session(request.headers.get("X-Session", ""))
@@ -259,7 +273,7 @@ class AdminPanel(commands.Cog):
             "name": request["session"]["display_name"],
             "actions": db.get_recent_actions(),
             "server": None,
-            "limits": {"money": MONEY_MAX_PER_ACTION, "item": ITEM_MAX_PER_ACTION},
+            "limits": {"money": self.money_max, "item": self.item_max},
             "locked": await self.config.locked(),
         }
         if state:
@@ -311,15 +325,15 @@ class AdminPanel(commands.Cog):
         # Sicherheits-Limits: schützen vor kompromittierten Sessions / Vertippern
         if action_type == "money":
             amount = int(params.get("amount") or 0)
-            if amount > MONEY_MAX_PER_ACTION:
+            if amount > self.money_max:
                 return web.json_response(
-                    {"error": f"Limit überschritten: max. {MONEY_MAX_PER_ACTION:,} $ pro Aktion".replace(",", ".")},
+                    {"error": f"Limit überschritten: max. {self.money_max:,} $ pro Aktion".replace(",", ".")},
                     status=400)
         if action_type in ("give_item", "remove_item"):
             count = int(params.get("count") or 0)
-            if count > ITEM_MAX_PER_ACTION:
+            if count > self.item_max:
                 return web.json_response(
-                    {"error": f"Limit überschritten: max. {ITEM_MAX_PER_ACTION} Stück pro Aktion"},
+                    {"error": f"Limit überschritten: max. {self.item_max} Stück pro Aktion"},
                     status=400)
 
         member = request["member"]
@@ -558,9 +572,9 @@ class AdminPanel(commands.Cog):
         token = db.create_login_token(
             str(ctx.author.id), str(ctx.guild.id), ctx.author.display_name
         )
-        if PUBLIC_URL:
+        if self.public_url:
             text = (f"🔑 Dein Login-Link (5 Min gültig, einmalig):\n"
-                    f"{PUBLIC_URL}/?login={token}")
+                    f"{self.public_url}/?login={token}")
         else:
             text = (f"🔑 Dein Login-Token (5 Min gültig, einmalig):\n`{token}`\n"
                     f"Im Panel unter „Anmelden“ einfügen.")
@@ -672,8 +686,8 @@ class AdminPanel(commands.Cog):
         op = op.lower()
         if op not in ("add", "remove") or amount <= 0 or account not in ("cash", "bank"):
             return await ctx.send("Nutzung: `!ap money <citizenid> <add|remove> <betrag> [cash|bank]`")
-        if amount > MONEY_MAX_PER_ACTION:
-            return await ctx.send(f"❌ Limit: max. {MONEY_MAX_PER_ACTION:,} $ pro Aktion.".replace(",", "."))
+        if amount > self.money_max:
+            return await ctx.send(f"❌ Limit: max. {self.money_max:,} $ pro Aktion.".replace(",", "."))
         db.add_action("money", citizenid,
                       json.dumps({"op": op, "amount": amount, "account": account}),
                       f"discord:{ctx.author.display_name}")
@@ -686,8 +700,8 @@ class AdminPanel(commands.Cog):
             return
         if count < 1:
             return await ctx.send("Anzahl muss mindestens 1 sein.")
-        if count > ITEM_MAX_PER_ACTION:
-            return await ctx.send(f"❌ Limit: max. {ITEM_MAX_PER_ACTION} Stück pro Aktion.")
+        if count > self.item_max:
+            return await ctx.send(f"❌ Limit: max. {self.item_max} Stück pro Aktion.")
         db.add_action("give_item", citizenid,
                       json.dumps({"item": item, "count": count}),
                       f"discord:{ctx.author.display_name}")
@@ -700,8 +714,8 @@ class AdminPanel(commands.Cog):
             return
         if count < 1:
             return await ctx.send("Anzahl muss mindestens 1 sein.")
-        if count > ITEM_MAX_PER_ACTION:
-            return await ctx.send(f"❌ Limit: max. {ITEM_MAX_PER_ACTION} Stück pro Aktion.")
+        if count > self.item_max:
+            return await ctx.send(f"❌ Limit: max. {self.item_max} Stück pro Aktion.")
         db.add_action("remove_item", citizenid,
                       json.dumps({"item": item, "count": count}),
                       f"discord:{ctx.author.display_name}")
@@ -943,6 +957,85 @@ class AdminPanel(commands.Cog):
                       f"discord:{ctx.author.display_name}")
         await ctx.send("🅿️ Massen-Einparken angelegt – Ergebnis kommt gleich ins Protokoll "
                        "(`!ap status`). Besetzte und NPC-Fahrzeuge werden übersprungen.")
+
+    @ap.group(name="config")
+    @commands.guild_only()
+    @commands.has_permissions(administrator=True)
+    async def ap_config(self, ctx: commands.Context):
+        """Panel-Einstellungen per Befehl (kein Datei-Editieren nötig)."""
+
+    @ap_config.command(name="show")
+    async def ap_config_show(self, ctx: commands.Context):
+        """Zeigt die aktuellen Einstellungen."""
+        key = self.api_key
+        key_disp = "❌ nicht gesetzt (CHANGE_ME)" if key == "CHANGE_ME" else f"✓ gesetzt (…{key[-4:]})"
+        url = self.public_url or "— (Login nur per Token)"
+        embed = discord.Embed(title="AdminPanel – Einstellungen")
+        embed.add_field(name="API-Key (Bridge)", value=key_disp, inline=False)
+        embed.add_field(name="Web-Port", value=str(self.web_port), inline=True)
+        embed.add_field(name="Public-URL", value=url, inline=False)
+        embed.add_field(name="Geld-Limit / Aktion", value=f"{self.money_max:,} $".replace(",", "."), inline=True)
+        embed.add_field(name="Item-Limit / Aktion", value=str(self.item_max), inline=True)
+        embed.set_footer(text="Ändern: !ap config key | url | port | moneymax | itemmax")
+        await ctx.send(embed=embed)
+
+    @ap_config.command(name="key")
+    async def ap_config_key(self, ctx: commands.Context, custom_key: str = None):
+        """Generiert einen neuen API-Key (oder setzt einen eigenen) und schickt ihn per DM."""
+        import secrets
+        key = custom_key or secrets.token_hex(32)
+        await self.config.api_key.set(key)
+        self.api_key = key
+        try:
+            await ctx.author.send(
+                f"🔑 **Neuer AdminPanel API-Key:**\n```{key}```\n"
+                f"Trage ihn in deine `server.cfg` ein:\n"
+                f"```set adminpanel_key \"{key}\"```\n"
+                f"Danach die Resource neu starten: `restart ap_bridge` (oder Server-Neustart). "
+                f"Bis dahin kann sich die FiveM-Bridge nicht mehr verbinden."
+            )
+            note = "🔑 Neuer API-Key generiert und dir per DM geschickt."
+        except discord.Forbidden:
+            note = ("🔑 Key gesetzt, aber ich kann dir keine DM schicken. "
+                    "Aktiviere DMs und nutze `!ap config key` erneut, oder hol ihn dir sicher aus der Bot-Config.")
+        await ctx.send(note + " ⚠️ Vergiss nicht, `server.cfg` anzupassen und `ap_bridge` neu zu starten.")
+
+    @ap_config.command(name="url")
+    async def ap_config_url(self, ctx: commands.Context, url: str):
+        """Setzt die öffentliche Panel-URL für die Login-Links. Beispiel: !ap config url https://panel.example.com"""
+        url = url.rstrip("/")
+        if not url.startswith("http"):
+            return await ctx.send("Die URL muss mit http:// oder https:// beginnen.")
+        await self.config.public_url.set(url)
+        self.public_url = url
+        await ctx.send(f"✅ Public-URL gesetzt: {url}\nLogin-Links kommen jetzt als anklickbarer Link.")
+
+    @ap_config.command(name="port")
+    async def ap_config_port(self, ctx: commands.Context, port: int):
+        """Setzt den Web-Port (wird nach `[p]reload adminpanel` aktiv)."""
+        if not (1 <= port <= 65535):
+            return await ctx.send("Ungültiger Port.")
+        await self.config.web_port.set(port)
+        await ctx.send(f"✅ Web-Port auf {port} gesetzt. Wird nach `[p]reload adminpanel` aktiv "
+                       f"(der Server bindet den Port beim Start). Reverse-Proxy ggf. anpassen.")
+
+    @ap_config.command(name="moneymax")
+    async def ap_config_moneymax(self, ctx: commands.Context, amount: int):
+        """Setzt das Geld-Limit pro Aktion. Beispiel: !ap config moneymax 100000"""
+        if amount < 1:
+            return await ctx.send("Muss mindestens 1 sein.")
+        await self.config.money_max.set(amount)
+        self.money_max = amount
+        await ctx.send(f"✅ Geld-Limit: max. {amount:,} $ pro Aktion.".replace(",", "."))
+
+    @ap_config.command(name="itemmax")
+    async def ap_config_itemmax(self, ctx: commands.Context, count: int):
+        """Setzt das Item-Limit pro Aktion. Beispiel: !ap config itemmax 250"""
+        if count < 1:
+            return await ctx.send("Muss mindestens 1 sein.")
+        await self.config.item_max.set(count)
+        self.item_max = count
+        await ctx.send(f"✅ Item-Limit: max. {count} Stück pro Aktion.")
 
     @ap.command(name="diag")
     async def ap_diag(self, ctx: commands.Context):

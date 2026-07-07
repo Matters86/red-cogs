@@ -3,7 +3,7 @@
   "name": "AdminPanel",
   "short": "FiveM-Adminpanel: Web + Discord, gemeinsame Action-Queue.",
   "description": "Teleport & Garage-Verwaltung fuer QBox-Server per Discord-Command und eingebettetem Webpanel. Der FiveM-Server pollt die Action-Queue per HTTP.",
-  "install_msg": "ENV-Variablen ADMINPANEL_API_KEY und ADMINPANEL_WEB_PORT setzen, dann `[p]load adminpanel`.",
+  "install_msg": "Setup ohne Datei-Editieren: `[p]load adminpanel`, dann `[p]ap config key` (erzeugt den API-Key), `[p]ap config url https://deine-panel-url` und die Rollen mit `[p]ap roles set support @Rolle`. Details: `[p]ap config show`.",
   "requirements": ["aiohttp"],
   "min_bot_version": "3.5.0",
   "end_user_data_statement": "Speichert Admin-Aktionen (Typ, Ziel, Ersteller-ID) in einer lokalen SQLite-Datenbank."
