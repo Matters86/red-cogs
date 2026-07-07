@@ -1,0 +1,2375 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>DNP Admin</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#0E141B">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="DNP Admin">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:        #0E141B;
+    --panel:     #171F29;
+    --panel-2:   #1D2733;
+    --line:      #2A3644;
+    --text:      #E8EDF2;
+    --muted:     #8FA3B8;
+    --amber:     #E8A33D;
+    --ok:        #4CAF7D;
+    --err:       #E05252;
+    --radius:    6px;
+    --font-disp: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
+    --font-body: "Barlow", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, "Courier New", monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- Header ---------- */
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 22px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #131B24 0%, var(--bg) 100%);
+    flex-wrap: wrap;
+  }
+  .pulse {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--amber);
+    box-shadow: 0 0 0 0 rgba(232,163,61,.55);
+    animation: pulse 2.2s infinite;
+    flex-shrink: 0;
+  }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(232,163,61,.55); }
+    70%  { box-shadow: 0 0 0 9px rgba(232,163,61,0); }
+    100% { box-shadow: 0 0 0 0 rgba(232,163,61,0); }
+  }
+  h1 {
+    font-family: var(--font-disp);
+    font-weight: 600;
+    font-size: 24px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+  h1 span { color: var(--amber); }
+
+  .srv-chip {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 3px 12px;
+    max-width: 300px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .srv-chip b { color: var(--text); font-weight: 500; }
+
+  .who {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .who .conn { display: flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 12px; }
+  .who .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .who .conn.online .dot { background: var(--ok); }
+  .who .conn.offline .dot { background: var(--err); }
+  .who .name b { color: var(--text); font-weight: 500; }
+
+  /* ---------- Tabs ---------- */
+
+  nav.tabs {
+    display: flex;
+    gap: 4px;
+    padding: 0 22px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg);
+    overflow-x: auto;
+  }
+  .tab-btn {
+    position: relative;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+    font-family: var(--font-disp);
+    font-weight: 600;
+    font-size: 16px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 11px 16px 9px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--amber); border-bottom-color: var(--amber); }
+  .tab-btn:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+  .tab-btn .dot-alert {
+    position: absolute;
+    top: 9px; right: 6px;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--err);
+  }
+
+  /* ---------- Banner ---------- */
+
+  #bridge-warn {
+    background: rgba(224,82,82,.12);
+    border-bottom: 1px solid rgba(224,82,82,.4);
+    color: #f0a0a0;
+    padding: 8px 22px;
+    font-size: 13.5px;
+  }
+  #bridge-warn b { color: var(--err); }
+
+  /* ---------- Layout ---------- */
+
+  main {
+    display: grid;
+    grid-template-columns: 1fr 360px;
+    gap: 22px;
+    padding: 22px;
+    max-width: 1280px;
+    margin: 0 auto;
+    align-items: start;
+  }
+  main.single { grid-template-columns: 1fr; }
+  @media (max-width: 980px) {
+    main { grid-template-columns: 1fr; }
+  }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px;
+  }
+  .card + .card { margin-top: 18px; }
+  .card h2 {
+    font-family: var(--font-disp);
+    font-weight: 600;
+    font-size: 17px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--amber);
+    margin-bottom: 4px;
+  }
+  .card p.hint { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+
+  label {
+    display: block;
+    font-size: 12px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 12px 0 5px;
+  }
+  input, select, textarea {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 14px;
+    padding: 9px 11px;
+  }
+  textarea { font-family: var(--font-body); resize: vertical; min-height: 64px; }
+  input:focus, select:focus, textarea:focus {
+    outline: 2px solid var(--amber);
+    outline-offset: 1px;
+    border-color: var(--amber);
+  }
+  input::placeholder, textarea::placeholder { color: #4d5c6d; }
+
+  .btn {
+    padding: 9px 14px;
+    background: var(--amber);
+    color: #17130a;
+    border: none;
+    border-radius: var(--radius);
+    font-family: var(--font-disp);
+    font-weight: 600;
+    font-size: 15px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: filter .15s;
+  }
+  .btn.block { width: 100%; margin-top: 14px; }
+  .btn:hover { filter: brightness(1.12); }
+  .btn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .btn:disabled { filter: grayscale(.7) brightness(.7); cursor: wait; }
+  .btn.ghost {
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--line);
+  }
+  .btn.ghost:hover { color: var(--text); border-color: var(--muted); filter: none; }
+  .btn.small { padding: 5px 12px; font-size: 13px; }
+
+  .split { display: flex; gap: 10px; }
+  .split > * { flex: 1; }
+
+  .msg { margin-top: 10px; font-size: 13px; min-height: 18px; }
+  .msg.ok  { color: var(--ok); }
+  .msg.err { color: var(--err); }
+
+  .v.warn { color: var(--amber); }
+  .v.bad  { color: var(--err); }
+  .v.good { color: var(--ok); }
+
+  /* ---------- Kacheln (Statistik/Server) ---------- */
+
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 14px;
+    margin-bottom: 22px;
+  }
+  .tile {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+  }
+  .tile .k {
+    font-size: 11px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .tile .v {
+    font-family: var(--font-disp);
+    font-weight: 600;
+    font-size: 26px;
+    line-height: 1.2;
+    margin-top: 2px;
+  }
+  .tile .s {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  /* ---------- Listen/Tabellen ---------- */
+
+  .list-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 12px;
+  }
+  .list-head h2 {
+    font-family: var(--font-disp);
+    font-weight: 600;
+    font-size: 17px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--amber);
+  }
+  .list-head .count { font-family: var(--font-mono); font-size: 13px; color: var(--muted); }
+  .list-head input { max-width: 220px; margin-left: auto; padding: 7px 10px; }
+
+  table.t { width: 100%; border-collapse: collapse; }
+  table.t th {
+    text-align: left;
+    font-size: 11px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 500;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  table.t td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: middle;
+    font-size: 14px;
+  }
+  table.t tr:last-child td { border-bottom: none; }
+  table.t tr:hover td { background: var(--panel-2); }
+  .mono { font-family: var(--font-mono); font-size: 12.5px; }
+  .mono.dim { color: var(--muted); }
+  .num { font-family: var(--font-mono); text-align: right; white-space: nowrap; }
+
+  .p-name { font-weight: 500; }
+  .p-sub { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); }
+  .p-ping { font-family: var(--font-mono); font-size: 13px; color: var(--muted); white-space: nowrap; }
+
+  .scroll-y { max-height: 420px; overflow-y: auto; }
+
+  .row-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+  .abtn {
+    font-family: var(--font-disp);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+    transition: border-color .15s, color .15s;
+  }
+  .abtn:hover { border-color: var(--amber); color: var(--amber); }
+  .abtn:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+  .abtn.danger:hover { border-color: var(--err); color: var(--err); }
+  .abtn.confirm { border-color: var(--err); color: var(--err); }
+  .abtn.here { border-color: var(--amber); color: var(--amber); }
+
+  .empty {
+    color: var(--muted);
+    font-size: 14px;
+    border: 1px dashed var(--line);
+    border-radius: var(--radius);
+    padding: 26px;
+    text-align: center;
+  }
+
+  #tp-banner {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    background: rgba(232,163,61,.1);
+    border: 1px solid rgba(232,163,61,.45);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    font-size: 13.5px;
+  }
+  #tp-banner.active { display: flex; }
+  #tp-banner .cancel {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-family: var(--font-body);
+    font-size: 13px;
+    text-decoration: underline;
+  }
+  #tp-banner .cancel:hover { color: var(--text); }
+
+  /* ---------- Feed / Log ---------- */
+
+  .feed-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .feed-head h2 {
+    font-family: var(--font-disp);
+    font-weight: 600;
+    font-size: 16px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--amber);
+  }
+  .live-tag {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--amber);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .live-tag::before {
+    content: "";
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--amber);
+    animation: pulse 2.2s infinite;
+  }
+  .feed { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+  .frow {
+    display: grid;
+    grid-template-columns: 4px 1fr auto;
+    gap: 10px;
+    align-items: center;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 8px 12px 8px 0;
+    overflow: hidden;
+  }
+  .frow .bar { align-self: stretch; border-radius: var(--radius) 0 0 var(--radius); }
+  .frow.pending .bar { background: var(--amber); }
+  .frow.done    .bar { background: var(--ok); }
+  .frow.failed  .bar { background: var(--err); }
+  .frow.new { animation: flash .9s ease-out; }
+  @keyframes flash { 0% { background: var(--panel-2); } 100% { background: var(--bg); } }
+  .frow .l1 {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .frow .l1 .arrow { color: var(--amber); }
+  .frow .l2 {
+    font-size: 11.5px; color: var(--muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .frow .meta { text-align: right; }
+  .frow .status {
+    font-family: var(--font-disp);
+    font-size: 12px; font-weight: 600;
+    letter-spacing: .08em; text-transform: uppercase;
+  }
+  .frow.pending .status { color: var(--amber); }
+  .frow.done    .status { color: var(--ok); }
+  .frow.failed  .status { color: var(--err); }
+  .frow .time { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); }
+
+  /* ---------- Modals ---------- */
+
+  .modal {
+    position: fixed; inset: 0;
+    background: rgba(8, 12, 17, .78);
+    display: flex; align-items: center; justify-content: center;
+    padding: 22px; z-index: 20;
+  }
+  .modal-box { width: 100%; max-width: 520px; max-height: 80vh; display: flex; flex-direction: column; }
+  .modal-head { display: flex; align-items: center; margin-bottom: 12px; }
+  .modal-head h2 {
+    font-family: var(--font-disp);
+    font-weight: 600; font-size: 17px;
+    letter-spacing: .1em; text-transform: uppercase;
+    color: var(--amber);
+  }
+  .modal-head .mono-title { font-family: var(--font-mono); color: var(--text); letter-spacing: 0; text-transform: none; }
+  .modal-close {
+    margin-left: auto;
+    background: none; border: 1px solid var(--line); border-radius: 4px;
+    color: var(--muted); cursor: pointer;
+    width: 28px; height: 28px; font-size: 14px;
+  }
+  .modal-close:hover { color: var(--text); border-color: var(--muted); }
+  .modal-body { overflow-y: auto; }
+
+  /* ---------- Gate ---------- */
+
+  #gate {
+    position: fixed; inset: 0;
+    background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    padding: 22px; z-index: 30;
+  }
+  #gate .card { width: 100%; max-width: 400px; }
+  #gate h1 { font-size: 28px; margin-bottom: 2px; }
+  #gate .sub { color: var(--muted); font-size: 13.5px; margin: 6px 0 4px; }
+  #gate code {
+    font-family: var(--font-mono);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 6px;
+    color: var(--amber);
+    font-size: 13px;
+  }
+  .hidden { display: none !important; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pulse, .live-tag::before { animation: none; }
+    .frow.new { animation: none; }
+  }
+
+  /* ---------- PWA / Mobile ---------- */
+
+  #tab-log { grid-template-columns: 1fr 1fr; }
+
+  header { padding-top: calc(12px + env(safe-area-inset-top)); }
+  header, nav.tabs, #bridge-warn {
+    padding-left: calc(22px + env(safe-area-inset-left));
+    padding-right: calc(22px + env(safe-area-inset-right));
+  }
+  main {
+    padding-left: calc(22px + env(safe-area-inset-left));
+    padding-right: calc(22px + env(safe-area-inset-right));
+    padding-bottom: calc(22px + env(safe-area-inset-bottom));
+  }
+
+  @media (max-width: 640px) {
+    /* iOS zoomt bei Inputs < 16px – deshalb hier hochsetzen */
+    input, select, textarea { font-size: 16px; }
+    main { padding: 14px calc(14px + env(safe-area-inset-right)) calc(14px + env(safe-area-inset-bottom)) calc(14px + env(safe-area-inset-left)); gap: 14px; }
+    header, nav.tabs, #bridge-warn {
+      padding-left: calc(14px + env(safe-area-inset-left));
+      padding-right: calc(14px + env(safe-area-inset-right));
+    }
+    #tab-log { grid-template-columns: 1fr; }
+    .srv-chip { max-width: 160px; }
+    .who .name { display: none; }
+    .tiles { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+    .tile .v { font-size: 21px; }
+    .card { padding: 14px; }
+    table.t td { padding: 8px 6px; font-size: 13.5px; }
+    table.t th { padding: 5px 6px; }
+    .p-ping, .th-ping { display: none; }   /* Ping-Spalte auf dem Handy ausblenden */
+    .abtn { padding: 8px 11px; font-size: 13.5px; }   /* Touch-freundlicher */
+    .modal { padding: 12px; align-items: flex-end; }
+    .modal-box { max-height: 88vh; border-radius: 10px 10px 0 0; }
+    .list-head input { max-width: 140px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ================= Gate ================= -->
+<div id="gate">
+  <div class="card">
+    <h1>Admin <span>Dispatch</span></h1>
+    <p class="sub">Anmeldung läuft über Discord. Tippe auf dem Server:</p>
+    <p class="sub"><code>!ap login</code></p>
+    <p class="sub">Der Bot schickt dir per DM einen Login-Link. Alternativ Token hier einfügen:</p>
+    <label for="gate-token">Login-Token</label>
+    <input id="gate-token" placeholder="Token aus der DM" autocomplete="off">
+    <button class="btn block" id="gate-btn">Anmelden</button>
+    <div class="msg" id="gate-msg"></div>
+    <button class="btn block ghost" id="install-btn" style="display:none;margin-top:14px">📱 Als App installieren</button>
+    <p class="sub" id="install-hint" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
+      📱 <b style="color:var(--text)">Als App installieren:</b><br>
+      Android/Chrome: Menü ⋮ → „App installieren“<br>
+      iPhone/Safari: Teilen <span style="font-family:var(--font-mono)">⎋</span> → „Zum Home-Bildschirm“
+    </p>
+  </div>
+</div>
+
+<!-- ================= App ================= -->
+<div id="app" class="hidden">
+  <header>
+    <div class="pulse" aria-hidden="true"></div>
+    <h1>Admin <span>Dispatch</span></h1>
+    <div class="srv-chip" id="srv-chip">–</div>
+    <div class="who">
+      <div class="conn" id="conn"><span class="dot"></span><span id="conn-text">verbinde…</span></div>
+      <div class="name" id="who-name"></div>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab-btn active" data-tab="players">Spieler</button>
+    <button class="tab-btn" data-tab="stats" data-perm="view_stats">Statistiken</button>
+    <button class="tab-btn" data-tab="server" data-perm="server_status">Server</button>
+    <button class="tab-btn" data-tab="audit" data-perm="audit">Audit</button>
+    <button class="tab-btn" data-tab="log">Protokoll<span class="dot-alert hidden" id="log-dot"></span></button>
+  </nav>
+
+  <div id="lockdown-banner" class="hidden" style="background:rgba(224,82,82,.18);border-bottom:1px solid var(--err);color:#f0a0a0;padding:10px 22px;font-size:14px;text-align:center">
+    🔒 <b style="color:var(--err)">LOCKDOWN AKTIV</b> – alle Aktionen sind gesperrt. Aufheben über Discord: <span style="font-family:var(--font-mono)">!ap lockdown off</span>
+  </div>
+
+  <div id="bridge-warn" class="hidden">
+    <b>FiveM-Bridge offline</b> – der Gameserver hat sich seit <span id="bridge-age">?</span> nicht gemeldet.
+    Aktionen werden erst ausgeführt, wenn die Verbindung wieder steht.
+  </div>
+
+  <!-- ============ Tab: Spieler ============ -->
+  <main id="tab-players">
+    <div>
+    <section class="card">
+      <div class="list-head">
+        <h2>Spieler online</h2>
+        <span class="count" id="players-count"></span>
+        <input id="players-filter" placeholder="Suchen… (Name / CID / Discord)" autocomplete="off">
+      </div>
+      <div id="tp-banner">
+        <span>Teleport: <b id="tp-src-name"></b> → Ziel in der Liste wählen, oder:</span>
+        <select id="tp-place" style="max-width:170px">
+          <option value="">Ort wählen…</option>
+          <option value="298.6|-584.5|43.3">Pillbox Hospital</option>
+          <option value="428.3|-984.5|30.7">Mission Row PD</option>
+          <option value="195.2|-933.7|30.7">Legion Square</option>
+          <option value="-1037.7|-2737.8|20.2">Flughafen (LSIA)</option>
+          <option value="1960.1|3740.5|32.3">Sandy Shores</option>
+          <option value="-275.4|6228.4|31.5">Paleto Bay</option>
+        </select>
+        <input id="tp-coords" placeholder="x, y, z" style="max-width:150px" autocomplete="off">
+        <button class="abtn here" id="tp-go">Los</button>
+        <button class="cancel" id="tp-cancel">Abbrechen</button>
+      </div>
+      <div id="players-wrap"></div>
+      <div class="msg" id="players-msg"></div>
+    </section>
+
+    <section class="card">
+      <div class="list-head">
+        <h2>Spieler-Datenbank</h2>
+        <span class="count">auch offline</span>
+      </div>
+      <div class="split" style="align-items:flex-end">
+        <div style="flex:2 1 auto">
+          <label for="search-q" style="margin-top:0">Name oder CitizenID</label>
+          <input id="search-q" placeholder="z. B. Kevin, Brandt oder KVN20831" autocomplete="off">
+        </div>
+        <button class="btn" id="search-btn" style="flex:0 0 auto">Suchen</button>
+      </div>
+      <div id="search-wrap" style="margin-top:14px"></div>
+    </section>
+    </div>
+
+    <div>
+      <section class="card" data-perm="car_to_garage">
+        <h2>Fahrzeug einparken</h2>
+        <p class="hint">Per Kennzeichen in eine Garage setzen. Gespawnte Fahrzeuge werden entfernt.</p>
+        <label for="car-plate">Kennzeichen</label>
+        <input id="car-plate" placeholder="SA 1234" autocomplete="off">
+        <label for="car-garage">Garage</label>
+        <input id="car-garage" placeholder="downtown" autocomplete="off">
+        <button class="btn block" id="car-btn">Fahrzeug einparken</button>
+        <div class="msg" id="car-msg"></div>
+        <div data-perm="park_all" style="margin-top:14px;border-top:1px solid var(--line);padding-top:14px">
+          <p class="hint" style="margin-bottom:0">Räumt die Map: parkt <b style="color:var(--text)">alle</b> herumstehenden Spieler-Fahrzeuge in die jeweils nächste Garage. Besetzte und NPC-Fahrzeuge bleiben stehen.</p>
+          <button class="btn block ghost" id="parkall-btn" style="border-color:rgba(232,163,61,.5);color:var(--amber)">Alle Fahrzeuge einparken</button>
+        </div>
+      </section>
+
+      <section class="card" data-perm="announce">
+        <h2>Server-Ansage</h2>
+        <p class="hint">Nachricht an alle Spieler im Chat.</p>
+        <textarea id="ann-text" placeholder="z. B. Server-Restart in 10 Minuten"></textarea>
+        <button class="btn block" id="ann-btn">Ansage senden</button>
+        <div class="msg" id="ann-msg"></div>
+      </section>
+
+      <section class="card" data-perm="money">
+        <h2>Geld</h2>
+        <p class="hint" id="mo-hint">CitizenID per Klick auf einen Spielernamen übernehmen.</p>
+        <label for="mo-cid">CitizenID</label>
+        <input id="mo-cid" placeholder="ABC12345" autocomplete="off">
+        <div class="split">
+          <div>
+            <label for="mo-amount">Betrag</label>
+            <input id="mo-amount" type="number" min="1" placeholder="500">
+          </div>
+          <div>
+            <label for="mo-account">Konto</label>
+            <select id="mo-account">
+              <option value="cash">Cash</option>
+              <option value="bank">Bank</option>
+            </select>
+          </div>
+        </div>
+        <div class="split" style="margin-top:14px">
+          <button class="btn" id="mo-add">Geben</button>
+          <button class="btn ghost" id="mo-remove">Nehmen</button>
+        </div>
+        <div class="msg" id="mo-msg"></div>
+      </section>
+
+      <section class="card" data-perm="items">
+        <h2>Item</h2>
+        <p class="hint">Item aus der Liste wählen oder tippen (Liste kommt vom Server).</p>
+        <label for="it-cid">CitizenID</label>
+        <input id="it-cid" placeholder="ABC12345" autocomplete="off">
+        <div class="split">
+          <div>
+            <label for="it-name">Item</label>
+            <input id="it-name" list="item-list" placeholder="water" autocomplete="off">
+            <datalist id="item-list"></datalist>
+          </div>
+          <div style="max-width:110px">
+            <label for="it-count">Anzahl</label>
+            <input id="it-count" type="number" min="1" value="1">
+          </div>
+        </div>
+        <div class="split" style="margin-top:14px">
+          <button class="btn" id="it-add">Geben</button>
+          <button class="btn ghost" id="it-remove">Nehmen</button>
+        </div>
+        <div class="msg" id="it-msg"></div>
+      </section>
+
+      <section class="card" data-perm="setjob">
+        <h2>Job &amp; Gang</h2>
+        <p class="hint">Nur bei Online-Spielern möglich. CitizenID per Namensklick übernehmen.</p>
+        <label for="job-cid">CitizenID</label>
+        <input id="job-cid" placeholder="ABC12345" autocomplete="off">
+        <div class="split">
+          <div style="max-width:110px">
+            <label for="job-type">Typ</label>
+            <select id="job-type">
+              <option value="set_job">Job</option>
+              <option value="set_gang">Gang</option>
+            </select>
+          </div>
+          <div>
+            <label for="job-name">Name</label>
+            <input id="job-name" placeholder="police" autocomplete="off">
+          </div>
+          <div style="max-width:90px">
+            <label for="job-grade">Grade</label>
+            <input id="job-grade" type="number" min="0" value="0">
+          </div>
+        </div>
+        <button class="btn block" id="job-btn">Setzen</button>
+        <div class="msg" id="job-msg"></div>
+      </section>
+    </div>
+  </main>
+
+  <!-- ============ Tab: Statistiken ============ -->
+  <main id="tab-stats" class="single hidden">
+    <div>
+      <div class="list-head" style="margin-bottom:16px">
+        <h2 style="font-size:19px">Economy-Übersicht</h2>
+        <span class="count" id="stats-age"></span>
+        <button class="btn small" id="stats-refresh" style="margin-left:auto">Aktualisieren</button>
+      </div>
+      <div id="stats-loading" class="empty">Statistiken werden vom Server geladen – kann bei großen Datenbanken einige Sekunden dauern…</div>
+
+      <div id="stats-content" class="hidden">
+        <div class="tiles">
+          <div class="tile"><div class="k">Geld gesamt</div><div class="v" id="ti-total">–</div><div class="s">Cash + Bank + Fraktionen</div></div>
+          <div class="tile"><div class="k">Cash im Umlauf</div><div class="v" id="ti-cash">–</div><div class="s" id="ti-cash-s"></div></div>
+          <div class="tile"><div class="k">Bank</div><div class="v" id="ti-bank">–</div><div class="s" id="ti-bank-s"></div></div>
+          <div class="tile"><div class="k">Fraktionen &amp; Firmen</div><div class="v" id="ti-society">–</div><div class="s" id="ti-society-s"></div></div>
+          <div class="tile"><div class="k">Fahrzeuge</div><div class="v" id="ti-veh">–</div><div class="s" id="ti-veh-s"></div></div>
+          <div class="tile"><div class="k">Item-Arten</div><div class="v" id="ti-items">–</div><div class="s">in allen Inventaren</div></div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:22px;align-items:start">
+          <section class="card">
+            <div class="list-head">
+              <h2>Konten</h2>
+            </div>
+            <div class="scroll-y" id="accounts-wrap"></div>
+          </section>
+
+          <section class="card">
+            <div class="list-head">
+              <h2>Items</h2>
+              <span class="count" id="items-count"></span>
+              <input id="items-filter" placeholder="Item suchen…" autocomplete="off">
+            </div>
+            <div class="scroll-y" id="items-wrap"></div>
+          </section>
+
+          <section class="card">
+            <div class="list-head">
+              <h2>Fahrzeuge</h2>
+              <span class="count" id="veh-count"></span>
+              <input id="vehstats-filter" placeholder="Modell suchen…" autocomplete="off">
+            </div>
+            <div class="scroll-y" id="vehstats-wrap"></div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ============ Tab: Server ============ -->
+  <main id="tab-server" class="single hidden">
+    <div>
+      <div class="list-head" style="margin-bottom:16px">
+        <h2 style="font-size:19px">Server &amp; Datenbank</h2>
+      </div>
+      <div class="tiles">
+        <div class="tile"><div class="k">Spieler</div><div class="v" id="sv-players">–</div><div class="s" id="sv-players-s"></div></div>
+        <div class="tile"><div class="k">Uptime</div><div class="v" id="sv-uptime">–</div></div>
+        <div class="tile"><div class="k">Ressourcen</div><div class="v" id="sv-res">–</div><div class="s">laufend / gesamt</div></div>
+        <div class="tile"><div class="k">Letzter Sync</div><div class="v" id="sv-sync">–</div><div class="s">Bridge → Panel</div></div>
+        <div class="tile"><div class="k">DB-Ping</div><div class="v" id="sv-dbping">–</div><div class="s">SELECT 1, live</div></div>
+        <div class="tile" data-perm="view_stats"><div class="k">DB-Größe</div><div class="v" id="sv-dbsize">–</div><div class="s" id="sv-dbsize-s">Stand: Statistik-Abruf</div></div>
+        <div class="tile" data-perm="view_stats"><div class="k">DB-Verbindungen</div><div class="v" id="sv-dbconn">–</div></div>
+        <div class="tile" data-perm="view_stats"><div class="k">Charaktere in DB</div><div class="v" id="sv-chars">–</div></div>
+      </div>
+
+      <section class="card">
+        <div class="list-head">
+          <h2>Nicht laufende Ressourcen</h2>
+          <span class="count" id="res-count"></span>
+        </div>
+        <div id="res-wrap"><div class="empty">Alles läuft. 🎉</div></div>
+      </section>
+
+      <section class="card">
+        <div class="list-head">
+          <h2>Setup-Diagnose</h2>
+          <button class="btn small" id="diag-btn" style="margin-left:auto">Prüfen</button>
+        </div>
+        <p class="hint">Prüft, ob DB, Exports, Tabellen und das Society-System zu diesem Server passen – ideal beim ersten Livegang.</p>
+        <div id="diag-wrap"><div class="empty">Noch nicht geprüft.</div></div>
+      </section>
+    </div>
+  </main>
+
+  <!-- ============ Tab: Audit ============ -->
+  <main id="tab-audit" class="single hidden">
+    <div>
+      <div class="list-head" style="margin-bottom:16px">
+        <h2 style="font-size:19px">Audit &amp; Kontrolle</h2>
+        <button class="btn small" id="audit-refresh" style="margin-left:auto">Aktualisieren</button>
+      </div>
+
+      <section class="card">
+        <div class="list-head">
+          <h2>Aktive Bans</h2>
+          <span class="count" id="bans-count"></span>
+        </div>
+        <div id="bans-wrap"><div class="empty">Lade…</div></div>
+      </section>
+
+      <section class="card">
+        <div class="list-head">
+          <h2>Admin-Aktivität</h2>
+          <select id="audit-admin" style="max-width:200px;margin-left:auto"><option value="">Alle Admins</option></select>
+        </div>
+        <div id="audit-summary" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px"></div>
+        <div class="feed scroll-y" id="audit-wrap" style="max-height:460px"></div>
+      </section>
+    </div>
+  </main>
+
+  <!-- ============ Tab: Protokoll ============ -->
+  <main id="tab-log" class="hidden">
+    <section class="card">
+      <div class="feed-head">
+        <h2>Aktions-Protokoll</h2>
+        <span class="live-tag">Live</span>
+      </div>
+      <div class="feed" id="feed" style="max-height:70vh"></div>
+    </section>
+
+    <section class="card" data-perm="view_logs">
+      <div class="feed-head">
+        <h2>Ereignis-Log</h2>
+        <span class="live-tag">Live</span>
+        <input id="log-filter" placeholder="Filtern… (Alert / Name / Typ)" autocomplete="off" style="margin-left:auto;max-width:200px;padding:6px 10px">
+      </div>
+      <div class="feed" id="log-wrap" style="max-height:70vh">
+        <div class="empty">Noch keine Ereignisse von der Bridge.</div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ================= Inventar-Modal ================= -->
+<div id="inv-modal" class="modal hidden">
+  <div class="modal-box card">
+    <div class="modal-head">
+      <h2>Inventar · <span class="mono-title" id="inv-cid"></span></h2>
+      <button class="modal-close" id="inv-close" aria-label="Schließen">✕</button>
+    </div>
+    <div class="modal-body" id="inv-body"><div class="empty">Lade Inventar…</div></div>
+  </div>
+</div>
+
+<!-- ================= Fahrzeug-Modal ================= -->
+<div id="veh-modal" class="modal hidden">
+  <div class="modal-box card">
+    <div class="modal-head">
+      <h2>Fahrzeuge · <span class="mono-title" id="veh-cid"></span></h2>
+      <button class="modal-close" id="veh-close" aria-label="Schließen">✕</button>
+    </div>
+    <div class="split" style="align-items:flex-end;margin-bottom:12px">
+      <div>
+        <label for="veh-garage" style="margin-top:0">Ziel-Garage fürs Einparken</label>
+        <input id="veh-garage" placeholder="downtown" autocomplete="off">
+      </div>
+    </div>
+    <div class="modal-body" id="veh-body"><div class="empty">Lade Fahrzeuge…</div></div>
+  </div>
+</div>
+
+<!-- ================= Akte-Modal ================= -->
+<div id="hist-modal" class="modal hidden">
+  <div class="modal-box card" style="max-width:640px">
+    <div class="modal-head">
+      <h2>Akte · <span class="mono-title" id="hist-title"></span> <span id="hist-warns" style="color:var(--err);font-size:14px;letter-spacing:0"></span></h2>
+      <button class="modal-close" id="hist-close" aria-label="Schließen">✕</button>
+    </div>
+    <div class="modal-body" style="display:flex;flex-direction:column;gap:14px">
+      <div id="hist-ban"></div>
+      <div id="hist-notes"></div>
+      <div id="hist-note-form" class="hidden">
+        <textarea id="note-text" placeholder="Notiz oder Verwarnungsgrund…" style="min-height:52px"></textarea>
+        <div class="split" style="margin-top:8px">
+          <button class="btn small" id="note-add">Notiz speichern</button>
+          <button class="btn small ghost" id="warn-add" style="color:var(--err);border-color:rgba(224,82,82,.5)">⚠ Verwarnung</button>
+        </div>
+        <div class="msg" id="note-msg"></div>
+      </div>
+      <div class="feed" id="hist-body" style="max-height:45vh">
+        <div class="empty">Lade Akte…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= Nachricht-Modal ================= -->
+<div id="msg-modal" class="modal hidden">
+  <div class="modal-box card" style="max-width:440px">
+    <div class="modal-head">
+      <h2>Nachricht · <span class="mono-title" id="msg-title"></span></h2>
+      <button class="modal-close" id="msg-close" aria-label="Schließen">✕</button>
+    </div>
+    <textarea id="msg-text" placeholder="z. B. Bitte melde dich kurz im Support-Warteraum."></textarea>
+    <button class="btn block" id="msg-send">Nachricht senden</button>
+    <div class="msg" id="msg-msg"></div>
+  </div>
+</div>
+
+<!-- ================= Ban-Modal ================= -->
+<div id="ban-modal" class="modal hidden">
+  <div class="modal-box card" style="max-width:440px">
+    <div class="modal-head">
+      <h2 style="color:var(--err)">🔨 Bannen · <span class="mono-title" id="ban-title"></span></h2>
+      <button class="modal-close" id="ban-close" aria-label="Schließen">✕</button>
+    </div>
+    <label for="ban-duration">Dauer</label>
+    <select id="ban-duration">
+      <option value="1">1 Stunde</option>
+      <option value="3">3 Stunden</option>
+      <option value="12">12 Stunden</option>
+      <option value="24">1 Tag</option>
+      <option value="72">3 Tage</option>
+      <option value="168">7 Tage</option>
+      <option value="720">30 Tage</option>
+      <option value="0">Permanent</option>
+    </select>
+    <label for="ban-reason">Grund</label>
+    <textarea id="ban-reason" placeholder="z. B. Cheating, RDM, Regelverstoß §4"></textarea>
+    <button class="btn block" id="ban-send" style="background:var(--err);color:#fff">Ban aussprechen</button>
+    <div class="msg" id="ban-msg"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- PWA ---------- */
+
+  if ("serviceWorker" in navigator) {
+    try { navigator.serviceWorker.register("/sw.js").catch(function () {}); } catch (e) {}
+  }
+
+  // Echter Install-Button: Chrome feuert beforeinstallprompt, wenn die App
+  // installierbar ist. Wir fangen das Event ab und zeigen den Button an.
+  var deferredPrompt = null;
+  window.addEventListener("beforeinstallprompt", function (e) {
+    e.preventDefault();
+    deferredPrompt = e;
+    var btn = document.getElementById("install-btn");
+    var hint = document.getElementById("install-hint");
+    if (btn) btn.style.display = "block";
+    if (hint) hint.style.display = "none";  // Text-Anleitung nicht nötig, Button da
+  });
+  window.addEventListener("appinstalled", function () {
+    var btn = document.getElementById("install-btn");
+    if (btn) btn.style.display = "none";
+    deferredPrompt = null;
+  });
+  document.addEventListener("DOMContentLoaded", function () {
+    var btn = document.getElementById("install-btn");
+    if (btn) btn.addEventListener("click", function () {
+      if (!deferredPrompt) return;
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.finally(function () {
+        deferredPrompt = null;
+        btn.style.display = "none";
+      });
+    });
+  });
+
+  try {
+    if (window.matchMedia("(display-mode: standalone)").matches || navigator.standalone) {
+      var _hint = document.getElementById("install-hint");
+      if (_hint) _hint.style.display = "none";
+    }
+  } catch (e) {}
+
+  /* ---------- State ---------- */
+
+  var session = null;
+  var myName = "";
+  var perms = [];
+  var players = [];
+  var tpSource = null;
+  var confirmKick = {};
+  var knownIds = {};
+  var firstRender = true;
+  var pollTimer = null;
+  var activeTab = "players";
+  var statsData = null;
+  var statsLoading = false;
+  var catalogLoaded = false;
+  var catalogMap = {};
+  var lastLogSeen = 0;
+
+  var store = (function () {
+    try {
+      var t = "__t" + Date.now();
+      sessionStorage.setItem(t, "1");
+      sessionStorage.removeItem(t);
+      return sessionStorage;
+    } catch (e) {
+      var mem = {};
+      return {
+        getItem: function (k) { return mem[k] || null; },
+        setItem: function (k, v) { mem[k] = String(v); },
+        removeItem: function (k) { delete mem[k]; }
+      };
+    }
+  })();
+
+  /* ---------- Helpers ---------- */
+
+  function $(id) { return document.getElementById(id); }
+  function can(p) { return perms.indexOf(p) !== -1; }
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function api(path, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign({
+      "X-Session": session || "",
+      "Content-Type": "application/json"
+    }, opts.headers || {});
+    return fetch(path, opts).then(function (r) {
+      if (r.status === 401) throw new Error("unauthorized");
+      if (r.status === 403) throw new Error("forbidden");
+      if (!r.ok) throw new Error("http " + r.status);
+      return r.json();
+    });
+  }
+
+  function setMsg(id, text, cls) {
+    var el = $(id);
+    el.textContent = text;
+    el.className = "msg" + (cls ? " " + cls : "");
+    if (text) setTimeout(function () {
+      if (el.textContent === text) { el.textContent = ""; el.className = "msg"; }
+    }, 6000);
+  }
+
+  function relTime(ts) {
+    var diff = Math.max(0, Date.now() / 1000 - ts);
+    if (diff < 60) return "gerade eben";
+    if (diff < 3600) return "vor " + Math.floor(diff / 60) + " min";
+    if (diff < 86400) return "vor " + Math.floor(diff / 3600) + " h";
+    var d = new Date(ts * 1000);
+    return d.toLocaleDateString("de-DE");
+  }
+
+  function fmtUptime(sec) {
+    if (sec == null) return "–";
+    var d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
+    return (d ? d + "d " : "") + h + "h " + m + "m";
+  }
+
+  function fmtMoney(n) {
+    if (n == null) return "–";
+    return Number(n).toLocaleString("de-DE") + " $";
+  }
+
+  function errText(e) {
+    if (e.message === "unauthorized") return "Sitzung abgelaufen – bitte neu per !ap login anmelden.";
+    if (e.message === "forbidden") return "Keine Berechtigung für diese Aktion.";
+    return "Server nicht erreichbar.";
+  }
+
+  /* ---------- Tabs ---------- */
+
+  function showTab(name) {
+    activeTab = name;
+    ["players", "stats", "server", "audit", "log"].forEach(function (t) {
+      $("tab-" + t).classList.toggle("hidden", t !== name);
+    });
+    var btns = document.querySelectorAll(".tab-btn");
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].classList.toggle("active", btns[i].getAttribute("data-tab") === name);
+    }
+    if (name === "log") {
+      lastLogSeen = Date.now() / 1000;
+      $("log-dot").classList.add("hidden");
+    }
+    if ((name === "stats" || name === "server") && can("view_stats") && !statsData && !statsLoading) {
+      loadStats();
+    }
+    if (name === "audit" && can("audit")) {
+      loadAudit();
+    }
+  }
+
+  $("tabs").addEventListener("click", function (ev) {
+    var btn = ev.target.closest(".tab-btn");
+    if (btn) showTab(btn.getAttribute("data-tab"));
+  });
+
+  /* ---------- Aktionen ---------- */
+
+  function createAction(type, target, params, msgId) {
+    return api("/api/panel/action", {
+      method: "POST",
+      body: JSON.stringify({ action_type: type, target: target, params: params })
+    }).then(function (data) {
+      if (msgId) setMsg(msgId, "Auftrag angelegt.", "ok");
+      poll();
+      return data;
+    }).catch(function (e) {
+      if (e.message === "unauthorized") return logout();
+      if (msgId) setMsg(msgId, errText(e), "err");
+      throw e;
+    });
+  }
+
+  /* ---------- Spielerliste ---------- */
+
+  function renderPlayers() {
+    var wrap = $("players-wrap");
+    var q = $("players-filter").value.trim().toLowerCase();
+    var list = players.filter(function (p) {
+      if (!q) return true;
+      return (p.charname || "").toLowerCase().indexOf(q) !== -1 ||
+             (p.name || "").toLowerCase().indexOf(q) !== -1 ||
+             (p.citizenid || "").toLowerCase().indexOf(q) !== -1 ||
+             (p.discord_name || "").toLowerCase().indexOf(q) !== -1 ||
+             (p.discord || "").indexOf(q) !== -1 ||
+             String(p.source).indexOf(q) !== -1;
+    });
+
+    $("players-count").textContent = players.length ? players.length + " online" : "";
+
+    if (!can("view_players")) {
+      wrap.innerHTML = '<div class="empty">Keine Berechtigung für die Spielerliste.</div>';
+      return;
+    }
+    if (!players.length) {
+      wrap.innerHTML = '<div class="empty">Keine Spieler online – oder die Bridge hat noch keinen Zustand gemeldet.</div>';
+      return;
+    }
+    if (!list.length) {
+      wrap.innerHTML = '<div class="empty">Kein Treffer für „' + esc(q) + '“.</div>';
+      return;
+    }
+
+    var html = '<table class="t"><thead><tr>' +
+      '<th>Spieler</th><th class="th-ping" style="text-align:right">Ping</th><th style="text-align:right">Aktionen</th>' +
+      '</tr></thead><tbody>';
+
+    list.forEach(function (p) {
+      var cid = esc(p.citizenid || "");
+      var actions = "";
+
+      if (tpSource) {
+        if (p.citizenid && p.citizenid !== tpSource.citizenid) {
+          actions = '<button class="abtn here" data-act="tp-here" data-cid="' + cid + '">Hierher</button>';
+        }
+      } else {
+        if (can("teleport") && p.citizenid)
+          actions += '<button class="abtn" data-act="tp" data-cid="' + cid + '" data-name="' + esc(p.charname || p.name) + '">TP →</button>';
+        if (can("heal") && p.citizenid)
+          actions += '<button class="abtn" data-act="heal" data-cid="' + cid + '">Heal</button>';
+        if (can("revive") && p.citizenid)
+          actions += '<button class="abtn" data-act="revive" data-cid="' + cid + '">Revive</button>';
+        if (can("view_inventory") && p.citizenid)
+          actions += '<button class="abtn" data-act="inv" data-cid="' + cid + '">Inv</button>';
+        if (can("car_to_garage") && p.citizenid)
+          actions += '<button class="abtn" data-act="veh" data-cid="' + cid + '">Fzg</button>';
+        if (can("message") && p.citizenid)
+          actions += '<button class="abtn" data-act="msg" data-cid="' + cid + '" data-name="' + esc(p.charname || p.name) + '">Msg</button>';
+        if (p.citizenid)
+          actions += '<button class="abtn" data-act="hist" data-cid="' + cid + '" data-name="' + esc(p.charname || p.name) + '">Akte</button>';
+        if (can("kick") && p.citizenid) {
+          var confirming = confirmKick[p.citizenid];
+          actions += '<button class="abtn danger' + (confirming ? " confirm" : "") + '" data-act="kick" data-cid="' + cid + '">' +
+            (confirming ? "Sicher?" : "Kick") + '</button>';
+        }
+        if (can("ban") && p.citizenid)
+          actions += '<button class="abtn danger" data-act="ban" data-cid="' + cid + '" data-name="' + esc(p.charname || p.name) + '">Ban</button>';
+      }
+
+      var sub = cid + ' · ID ' + esc(p.source);
+      if (p.discord_name) sub += ' · <span style="color:#7d93f5">@' + esc(p.discord_name) + '</span>';
+      else if (p.name && p.charname) sub += ' · ' + esc(p.name);
+
+      html += '<tr>' +
+        '<td><div class="p-name" data-act="pick" data-cid="' + cid + '" style="cursor:pointer">' +
+          esc(p.charname || p.name || "?") + '</div>' +
+          '<div class="p-sub">' + sub + '</div></td>' +
+        '<td class="p-ping" style="text-align:right">' + esc(p.ping != null ? p.ping + " ms" : "–") + '</td>' +
+        '<td><div class="row-actions">' + actions + '</div></td>' +
+      '</tr>';
+    });
+
+    wrap.innerHTML = html + "</tbody></table>";
+  }
+
+  function handlePlayerAction(ev) {
+    var el = ev.target.closest("[data-act]");
+    if (!el) return;
+    var act = el.getAttribute("data-act");
+    var cid = el.getAttribute("data-cid");
+
+    if (act === "pick") {
+      var picked = false;
+      if (can("money")) { $("mo-cid").value = cid; picked = true; }
+      if (can("items")) { $("it-cid").value = cid; picked = true; }
+      if (can("setjob")) { $("job-cid").value = cid; picked = true; }
+      if (picked) setMsg("players-msg", "CitizenID " + cid + " übernommen.", "ok");
+      return;
+    }
+    if (act === "inv") return void openInventory(cid);
+    if (act === "veh") return void openVehicles(cid);
+    if (act === "hist") return void openHistory(cid, el.getAttribute("data-name"));
+    if (act === "msg") return void openMessage(cid, el.getAttribute("data-name"));
+    if (act === "ban") return void openBan(cid, el.getAttribute("data-name"));
+    if (act === "tp") {
+      tpSource = { citizenid: cid, name: el.getAttribute("data-name") };
+      $("tp-src-name").textContent = tpSource.name + " (" + cid + ")";
+      $("tp-banner").classList.add("active");
+      renderPlayers();
+      return;
+    }
+    if (act === "tp-here") {
+      var src = tpSource; tpSource = null;
+      $("tp-banner").classList.remove("active");
+      createAction("teleport", src.citizenid, { to_citizenid: cid }, "players-msg");
+      renderPlayers();
+      return;
+    }
+    if (act === "heal")   return void createAction("heal", cid, {}, "players-msg");
+    if (act === "revive") return void createAction("revive", cid, {}, "players-msg");
+    if (act === "kick") {
+      if (confirmKick[cid]) {
+        clearTimeout(confirmKick[cid]);
+        delete confirmKick[cid];
+        createAction("kick", cid, { reason: "Vom Support gekickt" }, "players-msg");
+      } else {
+        confirmKick[cid] = setTimeout(function () { delete confirmKick[cid]; renderPlayers(); }, 3000);
+      }
+      renderPlayers();
+    }
+  }
+  $("players-wrap").addEventListener("click", handlePlayerAction);
+  $("search-wrap").addEventListener("click", handlePlayerAction);
+
+  $("players-filter").addEventListener("input", renderPlayers);
+  $("tp-cancel").addEventListener("click", function () {
+    tpSource = null;
+    $("tp-banner").classList.remove("active");
+    renderPlayers();
+  });
+
+  $("tp-go").addEventListener("click", function () {
+    if (!tpSource) return;
+    var x, y, z;
+    var coords = $("tp-coords").value.trim();
+    if (coords) {
+      var parts = coords.split(/[,;\s]+/).map(parseFloat);
+      if (parts.length < 3 || parts.some(isNaN))
+        return setMsg("players-msg", "Koordinaten als „x, y, z“ angeben.", "err");
+      x = parts[0]; y = parts[1]; z = parts[2];
+    } else {
+      var v = $("tp-place").value;
+      if (!v) return setMsg("players-msg", "Ort wählen oder Koordinaten eingeben.", "err");
+      var pp = v.split("|");
+      x = parseFloat(pp[0]); y = parseFloat(pp[1]); z = parseFloat(pp[2]);
+    }
+    var src = tpSource; tpSource = null;
+    $("tp-banner").classList.remove("active");
+    $("tp-coords").value = ""; $("tp-place").value = "";
+    createAction("teleport_coords", src.citizenid, { x: x, y: y, z: z }, "players-msg");
+    renderPlayers();
+  });
+
+  /* ---------- Formulare rechts ---------- */
+
+  $("car-btn").addEventListener("click", function () {
+    var plate = $("car-plate").value.trim().toUpperCase();
+    var garage = $("car-garage").value.trim() || "downtown";
+    if (!plate) return setMsg("car-msg", "Kennzeichen angeben.", "err");
+    createAction("car_to_garage", plate, { garage: garage }, "car-msg");
+  });
+
+  var parkallConfirm = null;
+  $("parkall-btn").addEventListener("click", function () {
+    var btn = $("parkall-btn");
+    if (parkallConfirm) {
+      clearTimeout(parkallConfirm);
+      parkallConfirm = null;
+      btn.textContent = "Alle Fahrzeuge einparken";
+      btn.style.borderColor = "rgba(232,163,61,.5)";
+      btn.style.color = "var(--amber)";
+      var fallback = $("car-garage").value.trim() || "downtown";
+      createAction("park_all", "*", { garage: fallback }, "car-msg");
+      return;
+    }
+    btn.textContent = "Sicher? Nochmal tippen";
+    btn.style.borderColor = "var(--err)";
+    btn.style.color = "var(--err)";
+    parkallConfirm = setTimeout(function () {
+      parkallConfirm = null;
+      btn.textContent = "Alle Fahrzeuge einparken";
+      btn.style.borderColor = "rgba(232,163,61,.5)";
+      btn.style.color = "var(--amber)";
+    }, 5000);
+  });
+
+  $("ann-btn").addEventListener("click", function () {
+    var text = $("ann-text").value.trim();
+    if (!text) return setMsg("ann-msg", "Nachricht eingeben.", "err");
+    createAction("announce", "*", { message: text }, "ann-msg").then(function () {
+      $("ann-text").value = "";
+    });
+  });
+
+  function moneyOp(op) {
+    var cid = $("mo-cid").value.trim();
+    var amount = parseInt($("mo-amount").value, 10);
+    if (!cid) return setMsg("mo-msg", "CitizenID angeben.", "err");
+    if (!amount || amount <= 0) return setMsg("mo-msg", "Gültigen Betrag angeben.", "err");
+    createAction("money", cid, { op: op, amount: amount, account: $("mo-account").value }, "mo-msg");
+  }
+  $("mo-add").addEventListener("click", function () { moneyOp("add"); });
+  $("mo-remove").addEventListener("click", function () { moneyOp("remove"); });
+
+  function itemOp(op) {
+    var cid = $("it-cid").value.trim();
+    var item = $("it-name").value.trim().toLowerCase();
+    var count = parseInt($("it-count").value, 10) || 1;
+    if (!cid) return setMsg("it-msg", "CitizenID angeben.", "err");
+    if (!item) return setMsg("it-msg", "Item wählen.", "err");
+    if (count < 1) return setMsg("it-msg", "Anzahl mindestens 1.", "err");
+    createAction(op, cid, { item: item, count: count }, "it-msg");
+  }
+  $("it-add").addEventListener("click", function () { itemOp("give_item"); });
+  $("it-remove").addEventListener("click", function () { itemOp("remove_item"); });
+
+  function loadCatalog() {
+    if (catalogLoaded || (!can("items") && !can("view_inventory"))) return;
+    catalogLoaded = true;
+    api("/api/panel/catalog").then(function (data) {
+      var items = data.items || [];
+      var html = "";
+      items.forEach(function (i) {
+        catalogMap[i.name] = i.label || i.name;
+        html += '<option value="' + esc(i.name) + '">' + esc(i.label || i.name) + '</option>';
+      });
+      $("item-list").innerHTML = html;
+    }).catch(function () { catalogLoaded = false; });
+  }
+
+  /* ---------- Offline-Suche ---------- */
+
+  function runSearch() {
+    var q = $("search-q").value.trim();
+    if (q.length < 2) {
+      $("search-wrap").innerHTML = '<div class="empty">Mindestens 2 Zeichen eingeben.</div>';
+      return;
+    }
+    $("search-btn").disabled = true;
+    $("search-wrap").innerHTML = '<div class="empty">Suche läuft…</div>';
+    createAction("search_player", q, {}).then(function (data) {
+      if (data && data.id) trackQuery(data.id, function (a) {
+        $("search-btn").disabled = false;
+        var results = [];
+        try { results = (JSON.parse(a.result || "{}").results) || []; } catch (e) {}
+        renderSearchResults(results);
+      }, function (msg) {
+        $("search-btn").disabled = false;
+        $("search-wrap").innerHTML = '<div class="empty">' + esc(msg) + '</div>';
+      });
+    }).catch(function () {
+      $("search-btn").disabled = false;
+      $("search-wrap").innerHTML = '<div class="empty">Abfrage konnte nicht angelegt werden.</div>';
+    });
+  }
+  $("search-btn").addEventListener("click", runSearch);
+  $("search-q").addEventListener("keydown", function (e) { if (e.key === "Enter") runSearch(); });
+
+  function renderSearchResults(results) {
+    if (!results.length) {
+      $("search-wrap").innerHTML = '<div class="empty">Keine Treffer in der Datenbank.</div>';
+      return;
+    }
+    var onlineCids = {};
+    players.forEach(function (p) { if (p.citizenid) onlineCids[p.citizenid] = true; });
+
+    var html = '<table class="t"><thead><tr>' +
+      '<th>Charakter</th><th>Job / Gang</th><th style="text-align:right">Cash / Bank</th><th style="text-align:right">Aktionen</th>' +
+      '</tr></thead><tbody>';
+    results.forEach(function (r) {
+      var cid = esc(r.citizenid || "");
+      var online = !!onlineCids[r.citizenid];
+      var actions = "";
+      if (can("view_inventory")) actions += '<button class="abtn" data-act="inv" data-cid="' + cid + '">Inv</button>';
+      if (can("car_to_garage")) actions += '<button class="abtn" data-act="veh" data-cid="' + cid + '">Fzg</button>';
+      if (online && can("message")) actions += '<button class="abtn" data-act="msg" data-cid="' + cid + '" data-name="' + esc(r.charname) + '">Msg</button>';
+      if (can("ban")) actions += '<button class="abtn danger" data-act="ban" data-cid="' + cid + '" data-name="' + esc(r.charname) + '">Ban</button>';
+      actions += '<button class="abtn" data-act="hist" data-cid="' + cid + '" data-name="' + esc(r.charname) + '">Akte</button>';
+
+      html += '<tr>' +
+        '<td><div class="p-name" data-act="pick" data-cid="' + cid + '" style="cursor:pointer">' + esc(r.charname || "?") +
+          (online ? ' <span class="v good" style="font-size:11px;font-family:var(--font-mono)">● online</span>' : '') + '</div>' +
+          '<div class="p-sub">' + cid + (r.account ? ' · ' + esc(r.account) : '') + '</div></td>' +
+        '<td class="mono dim">' + esc(r.job || '–') + (r.gang && r.gang !== 'Keine Gang' ? ' / ' + esc(r.gang) : '') + '</td>' +
+        '<td class="num">' + fmtMoney(r.cash) + '<br><span style="color:var(--muted)">' + fmtMoney(r.bank) + '</span></td>' +
+        '<td><div class="row-actions">' + actions + '</div></td>' +
+      '</tr>';
+    });
+    $("search-wrap").innerHTML = html + "</tbody></table>";
+  }
+
+  /* ---------- Job & Gang ---------- */
+
+  $("job-btn").addEventListener("click", function () {
+    var cid = $("job-cid").value.trim();
+    var name = $("job-name").value.trim().toLowerCase();
+    var grade = parseInt($("job-grade").value, 10) || 0;
+    var type = $("job-type").value;
+    if (!cid) return setMsg("job-msg", "CitizenID angeben.", "err");
+    if (!name) return setMsg("job-msg", "Job-/Gang-Namen angeben.", "err");
+    var params = type === "set_job" ? { job: name, grade: grade } : { gang: name, grade: grade };
+    createAction(type, cid, params, "job-msg");
+  });
+
+  /* ---------- Private Nachricht ---------- */
+
+  var msgTarget = null;
+
+  function openMessage(cid, name) {
+    msgTarget = cid;
+    $("msg-title").textContent = (name ? name + " · " : "") + cid;
+    $("msg-text").value = "";
+    $("msg-modal").classList.remove("hidden");
+    $("msg-text").focus();
+  }
+  $("msg-send").addEventListener("click", function () {
+    var text = $("msg-text").value.trim();
+    if (!text) return setMsg("msg-msg", "Nachricht eingeben.", "err");
+    createAction("notify", msgTarget, { message: text }, "msg-msg").then(function () {
+      closeModal("msg-modal");
+      setMsg("players-msg", "Nachricht angelegt.", "ok");
+    });
+  });
+
+  /* ---------- Ban ---------- */
+
+  var banTarget = null;
+
+  function openBan(cid, name) {
+    banTarget = cid;
+    $("ban-title").textContent = (name ? name + " · " : "") + cid;
+    $("ban-reason").value = "";
+    $("ban-duration").value = "24";
+    $("ban-modal").classList.remove("hidden");
+    $("ban-reason").focus();
+  }
+  $("ban-send").addEventListener("click", function () {
+    var reason = $("ban-reason").value.trim();
+    var hours = parseInt($("ban-duration").value, 10);
+    if (!reason) return setMsg("ban-msg", "Grund angeben.", "err");
+    createAction("ban", banTarget, { hours: hours, reason: reason }, "ban-msg").then(function () {
+      closeModal("ban-modal");
+      setMsg("players-msg", "Ban angelegt – wird beim nächsten Sync ausgeführt.", "ok");
+    });
+  });
+
+  /* ---------- Abfrage-Modals (Inventar / Fahrzeuge / Stats) ---------- */
+
+  var pendingQueries = {};
+
+  function trackQuery(actionId, onDone, onFail) {
+    pendingQueries[actionId] = { onDone: onDone, onFail: onFail, startedAt: Date.now() };
+  }
+
+  function checkQueryResults(actions) {
+    var ids = Object.keys(pendingQueries);
+    if (!ids.length) return;
+    var byId = {};
+    actions.forEach(function (a) { byId[a.id] = a; });
+    ids.forEach(function (id) {
+      var q = pendingQueries[id];
+      var a = byId[id];
+      if (a && a.status === "done") {
+        delete pendingQueries[id];
+        q.onDone(a);
+      } else if (a && a.status === "failed") {
+        delete pendingQueries[id];
+        q.onFail(a.result || "Abfrage fehlgeschlagen.");
+      } else if (Date.now() - q.startedAt > 45000) {
+        delete pendingQueries[id];
+        q.onFail("Keine Antwort von der FiveM-Bridge – läuft der Server?");
+      }
+    });
+  }
+
+  function openInventory(cid) {
+    $("inv-cid").textContent = cid;
+    $("inv-body").innerHTML = '<div class="empty">Lade Inventar…</div>';
+    $("inv-modal").classList.remove("hidden");
+    createAction("get_inventory", cid, {}).then(function (data) {
+      if (data && data.id) trackQuery(data.id, function (a) {
+        var items = [];
+        try { items = (JSON.parse(a.result || "{}").items) || []; } catch (e) {}
+        renderInventory(items);
+      }, function (msg) {
+        $("inv-body").innerHTML = '<div class="empty">' + esc(msg) + '</div>';
+      });
+    }).catch(function () {
+      $("inv-body").innerHTML = '<div class="empty">Abfrage konnte nicht angelegt werden.</div>';
+    });
+  }
+
+  function renderInventory(items) {
+    if (!items.length) {
+      $("inv-body").innerHTML = '<div class="empty">Inventar ist leer.</div>';
+      return;
+    }
+    var html = '<table class="t"><thead><tr>' +
+      '<th>Item</th><th style="text-align:right">Anzahl</th><th style="text-align:right">Slot</th>' +
+      '</tr></thead><tbody>';
+    items.forEach(function (i) {
+      var label = i.label || catalogMap[i.name] || i.name;
+      html += '<tr>' +
+        '<td>' + esc(label) +
+          (i.name !== label ? ' <span class="mono dim">' + esc(i.name) + '</span>' : '') + '</td>' +
+        '<td class="num">×' + esc(i.count || 1) + '</td>' +
+        '<td class="num" style="color:var(--muted)">' + esc(i.slot != null ? i.slot : "–") + '</td>' +
+      '</tr>';
+    });
+    $("inv-body").innerHTML = html + "</tbody></table>";
+  }
+
+  var VEH_STATE = { 0: "Draußen", 1: "Garage", 2: "Beschlagnahmt" };
+
+  function openVehicles(cid) {
+    $("veh-cid").textContent = cid;
+    $("veh-body").innerHTML = '<div class="empty">Lade Fahrzeuge…</div>';
+    $("veh-modal").classList.remove("hidden");
+    createAction("get_vehicles", cid, {}).then(function (data) {
+      if (data && data.id) trackQuery(data.id, function (a) {
+        var vehicles = [];
+        try { vehicles = (JSON.parse(a.result || "{}").vehicles) || []; } catch (e) {}
+        renderVehicles(vehicles);
+      }, function (msg) {
+        $("veh-body").innerHTML = '<div class="empty">' + esc(msg) + '</div>';
+      });
+    }).catch(function () {
+      $("veh-body").innerHTML = '<div class="empty">Abfrage konnte nicht angelegt werden.</div>';
+    });
+  }
+
+  function renderVehicles(vehicles) {
+    if (!vehicles.length) {
+      $("veh-body").innerHTML = '<div class="empty">Keine Fahrzeuge auf diesen Charakter registriert.</div>';
+      return;
+    }
+    var html = '<table class="t"><thead><tr>' +
+      '<th>Modell</th><th>Kennzeichen</th><th>Status</th><th></th>' +
+      '</tr></thead><tbody>';
+    vehicles.forEach(function (v) {
+      var st = VEH_STATE[v.state] != null ? VEH_STATE[v.state] : "?";
+      var stCls = v.state === 1 ? "good" : (v.state === 0 ? "warn" : "bad");
+      if (v.state === 1 && v.garage) st += ": " + esc(v.garage);
+      html += '<tr>' +
+        '<td>' + esc(v.vehicle || "?") + '</td>' +
+        '<td class="mono dim">' + esc(v.plate || "?") + '</td>' +
+        '<td><span class="v ' + stCls + '" style="font-family:var(--font-mono);font-size:12.5px">' + st + '</span></td>' +
+        '<td style="text-align:right"><button class="abtn" data-vplate="' + esc(v.plate || "") + '">Einparken</button></td>' +
+      '</tr>';
+    });
+    $("veh-body").innerHTML = html + "</tbody></table>";
+  }
+
+  $("veh-body").addEventListener("click", function (ev) {
+    var el = ev.target.closest("[data-vplate]");
+    if (!el) return;
+    var plate = el.getAttribute("data-vplate");
+    var garage = $("veh-garage").value.trim() || "downtown";
+    el.disabled = true;
+    el.textContent = "→ " + garage;
+    createAction("car_to_garage", plate, { garage: garage }, "players-msg");
+  });
+
+  function closeModal(id) { $(id).classList.add("hidden"); }
+  $("inv-close").addEventListener("click", function () { closeModal("inv-modal"); });
+  $("veh-close").addEventListener("click", function () { closeModal("veh-modal"); });
+  $("hist-close").addEventListener("click", function () { closeModal("hist-modal"); });
+  $("msg-close").addEventListener("click", function () { closeModal("msg-modal"); });
+  $("ban-close").addEventListener("click", function () { closeModal("ban-modal"); });
+  ["inv-modal", "veh-modal", "hist-modal", "msg-modal", "ban-modal"].forEach(function (id) {
+    $(id).addEventListener("click", function (ev) { if (ev.target === this) closeModal(id); });
+  });
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key !== "Escape") return;
+    closeModal("inv-modal");
+    closeModal("veh-modal");
+    closeModal("hist-modal");
+    closeModal("msg-modal");
+    closeModal("ban-modal");
+  });
+
+  /* ---------- Spieler-Akte ---------- */
+
+  var histCid = null;
+
+  function openHistory(cid, name) {
+    histCid = cid;
+    $("hist-title").textContent = (name ? name + " · " : "") + cid;
+    $("hist-warns").textContent = "";
+    $("hist-notes").innerHTML = "";
+    $("hist-note-form").classList.add("hidden");
+    $("hist-body").innerHTML = '<div class="empty">Lade Akte…</div>';
+    $("hist-modal").classList.remove("hidden");
+    loadHistory();
+  }
+
+  function loadHistory() {
+    api("/api/panel/player_history?cid=" + encodeURIComponent(histCid)).then(function (d) {
+      renderBanStatus(d.ban, d.can_ban);
+      renderNotes(d.notes || [], d.can_note);
+      renderHistory(d.actions || [], d.events || []);
+    }).catch(function (e) {
+      if (e.message === "unauthorized") return logout();
+      $("hist-body").innerHTML = '<div class="empty">' + errText(e) + '</div>';
+    });
+  }
+
+  function renderBanStatus(ban, canBan) {
+    var el = $("hist-ban");
+    if (ban) {
+      var until = ban.expires_at
+        ? "bis " + new Date(ban.expires_at * 1000).toLocaleString("de-DE")
+        : "permanent";
+      el.innerHTML = '<div style="background:rgba(224,82,82,.12);border:1px solid rgba(224,82,82,.4);border-radius:var(--radius);padding:10px 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">' +
+        '<span style="color:var(--err);font-weight:600">🔨 Gebannt</span>' +
+        '<span style="font-size:13px;color:var(--muted)">' + esc(ban.reason) + ' · ' + until + ' · von ' + creator(ban.banned_by) + '</span>' +
+        (canBan ? '<button class="abtn" id="hist-unban" style="margin-left:auto">Entbannen</button>' : '') +
+        '</div>';
+      if (canBan) $("hist-unban").addEventListener("click", function () {
+        api("/api/panel/unban", { method: "POST", body: JSON.stringify({ cid: histCid }) })
+          .then(loadHistory).catch(function () {});
+      });
+    } else {
+      el.innerHTML = canBan
+        ? '<button class="btn small ghost" id="hist-ban-btn" style="border-color:rgba(224,82,82,.5);color:var(--err)">🔨 Diesen Spieler bannen</button>'
+        : '';
+      if (canBan) $("hist-ban-btn").addEventListener("click", function () {
+        closeModal("hist-modal");
+        openBan(histCid, $("hist-title").textContent.split(" · ")[0]);
+      });
+    }
+  }
+
+  function renderNotes(notes, canNote) {
+    var warns = notes.filter(function (n) { return n.kind === "warn"; }).length;
+    $("hist-warns").textContent = warns ? "⚠ " + warns + " Verwarnung" + (warns > 1 ? "en" : "") : "";
+    $("hist-note-form").classList.toggle("hidden", !canNote);
+
+    if (!notes.length) {
+      $("hist-notes").innerHTML = '<div class="empty" style="padding:14px">Keine Notizen oder Verwarnungen.</div>';
+      return;
+    }
+    var html = '<div class="feed" style="max-height:180px">';
+    notes.forEach(function (n) {
+      var isWarn = n.kind === "warn";
+      html += '<div class="frow ' + (isWarn ? "failed" : "done") + '">' +
+        '<div class="bar"></div>' +
+        '<div><div class="l1" style="white-space:normal">' + esc(n.text) + '</div>' +
+        '<div class="l2">' + (isWarn ? "Verwarnung" : "Notiz") + ' · ' + creator(n.created_by) + '</div></div>' +
+        '<div class="meta"><div class="time">' + relTime(n.created_at) + '</div>' +
+        (canNote ? '<button class="abtn danger" data-delnote="' + n.id + '" style="margin-top:4px">✕</button>' : '') +
+        '</div></div>';
+    });
+    $("hist-notes").innerHTML = html + '</div>';
+  }
+
+  $("hist-notes").addEventListener("click", function (ev) {
+    var el = ev.target.closest("[data-delnote]");
+    if (!el) return;
+    api("/api/panel/notes/delete", {
+      method: "POST",
+      body: JSON.stringify({ id: parseInt(el.getAttribute("data-delnote"), 10) })
+    }).then(loadHistory).catch(function () {});
+  });
+
+  function submitNote(kind) {
+    var text = $("note-text").value.trim();
+    if (!text) return setMsg("note-msg", "Text eingeben.", "err");
+    api("/api/panel/notes", {
+      method: "POST",
+      body: JSON.stringify({ cid: histCid, kind: kind, text: text })
+    }).then(function () {
+      $("note-text").value = "";
+      setMsg("note-msg", kind === "warn" ? "Verwarnung gespeichert." : "Notiz gespeichert.", "ok");
+      loadHistory();
+    }).catch(function (e) {
+      setMsg("note-msg", errText(e), "err");
+    });
+  }
+  $("note-add").addEventListener("click", function () { submitNote("note"); });
+  $("warn-add").addEventListener("click", function () { submitNote("warn"); });
+
+  function renderHistory(actions, events) {
+    var rows = [];
+    actions.forEach(function (a) { rows.push({ t: a.created_at, kind: "action", a: a }); });
+    events.forEach(function (e) { rows.push({ t: e.at, kind: "event", e: e }); });
+    rows.sort(function (x, y) { return y.t - x.t; });
+
+    if (!rows.length) {
+      $("hist-body").innerHTML = '<div class="empty">Keine Einträge zu diesem Spieler – weder Admin-Aktionen noch Watchdog-Ereignisse.</div>';
+      return;
+    }
+    var html = "";
+    rows.slice(0, 100).forEach(function (r) {
+      if (r.kind === "action") {
+        var a = r.a;
+        html += '<div class="frow ' + esc(a.status) + '">' +
+          '<div class="bar"></div>' +
+          '<div><div class="l1">' + describe(a) + '</div>' +
+          '<div class="l2">Aktion · ' + (TYPE_DE[a.action_type] || esc(a.action_type)) + ' · ' + creator(a.created_by) +
+            (a.result && ["get_inventory", "get_vehicles", "get_stats"].indexOf(a.action_type) === -1 ? " · " + esc(a.result) : "") + '</div></div>' +
+          '<div class="meta"><div class="status">' + (STATUS_DE[a.status] || esc(a.status)) + '</div>' +
+          '<div class="time">' + relTime(a.created_at) + '</div></div>' +
+        '</div>';
+      } else {
+        var e = r.e;
+        var sev = e.severity === "alert" ? "failed" : (e.severity === "warn" ? "pending" : "done");
+        html += '<div class="frow ' + sev + '">' +
+          '<div class="bar"></div>' +
+          '<div><div class="l1">' + esc(e.message) + '</div>' +
+          '<div class="l2">Ereignis · ' + esc(e.type) + '</div></div>' +
+          '<div class="meta"><div class="status">' + (SEV_LABEL[e.severity] || esc(e.severity)) + '</div>' +
+          '<div class="time">' + relTime(e.at) + '</div></div>' +
+        '</div>';
+      }
+    });
+    $("hist-body").innerHTML = html;
+  }
+
+  /* ---------- Statistiken ---------- */
+
+  function loadStats() {
+    if (statsLoading) return;
+    statsLoading = true;
+    $("stats-loading").classList.remove("hidden");
+    $("stats-refresh").disabled = true;
+    createAction("get_stats", "*", {}).then(function (data) {
+      if (data && data.id) trackQuery(data.id, function (a) {
+        statsLoading = false;
+        $("stats-refresh").disabled = false;
+        try { statsData = JSON.parse(a.result || "{}"); } catch (e) { statsData = null; }
+        renderStats();
+      }, function (msg) {
+        statsLoading = false;
+        $("stats-refresh").disabled = false;
+        $("stats-loading").textContent = msg;
+      });
+    }).catch(function () {
+      statsLoading = false;
+      $("stats-refresh").disabled = false;
+      $("stats-loading").textContent = "Abfrage konnte nicht angelegt werden.";
+    });
+  }
+  $("stats-refresh").addEventListener("click", loadStats);
+
+  function renderStats() {
+    if (!statsData) return;
+    $("stats-loading").classList.add("hidden");
+    $("stats-content").classList.remove("hidden");
+    $("stats-age").textContent = statsData.generated_at ? "Stand: " + relTime(statsData.generated_at) : "";
+
+    var m = statsData.money || {};
+    var cash = m.cash || 0, bank = m.bank || 0, society = m.society || 0;
+    $("ti-total").textContent = fmtMoney(cash + bank + society);
+    $("ti-cash").textContent = fmtMoney(cash);
+    $("ti-bank").textContent = fmtMoney(bank);
+    $("ti-society").textContent = m.society != null ? fmtMoney(society) : "–";
+    $("ti-society-s").textContent = m.society_source ? "Quelle: " + m.society_source : "kein System erkannt";
+    var db = statsData.db || {};
+    $("ti-cash-s").textContent = db.players_total != null ? "über " + db.players_total + " Charaktere" : "";
+    $("ti-bank-s").textContent = "";
+    $("ti-veh").textContent = db.vehicles_total != null ? db.vehicles_total.toLocaleString("de-DE") : "–";
+    $("ti-veh-s").textContent = (statsData.vehicles || []).length + " Modelle";
+    $("ti-items").textContent = statsData.items_distinct != null ? statsData.items_distinct : "–";
+
+    renderAccounts();
+    renderItemStats();
+    renderVehStats();
+    renderServerTab(); // DB-Kacheln aktualisieren
+  }
+
+  function renderAccounts() {
+    var html = "";
+    var society = statsData.society || [];
+    if (society.length) {
+      html += '<table class="t"><thead><tr><th>Fraktion / Firma</th><th style="text-align:right">Kontostand</th></tr></thead><tbody>';
+      society.forEach(function (s) {
+        html += '<tr><td>' + esc(s.name) + '</td><td class="num">' + fmtMoney(s.amount) + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    var accounts = statsData.accounts || [];
+    if (accounts.length) {
+      html += '<table class="t" style="margin-top:' + (society.length ? '18px' : '0') + '">' +
+        '<thead><tr><th>Top-Spieler</th><th style="text-align:right">Cash</th><th style="text-align:right">Bank</th></tr></thead><tbody>';
+      accounts.forEach(function (a) {
+        html += '<tr><td><div class="p-name">' + esc(a.name || "?") + '</div>' +
+          '<div class="p-sub">' + esc(a.citizenid) + '</div></td>' +
+          '<td class="num">' + fmtMoney(a.cash) + '</td>' +
+          '<td class="num">' + fmtMoney(a.bank) + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    $("accounts-wrap").innerHTML = html || '<div class="empty">Keine Kontodaten.</div>';
+  }
+
+  function renderItemStats() {
+    var items = statsData.items || [];
+    var q = $("items-filter").value.trim().toLowerCase();
+    var list = q ? items.filter(function (i) { return i.name.toLowerCase().indexOf(q) !== -1; }) : items;
+    $("items-count").textContent = statsData.items_distinct != null ? statsData.items_distinct + " Arten" : "";
+    if (!list.length) {
+      $("items-wrap").innerHTML = '<div class="empty">' + (q ? 'Kein Treffer.' : 'Keine Items gefunden.') + '</div>';
+      return;
+    }
+    var html = '<table class="t"><thead><tr><th>Item</th><th style="text-align:right">Gesamt</th></tr></thead><tbody>';
+    list.slice(0, 300).forEach(function (i) {
+      html += '<tr><td class="mono">' + esc(i.name) + '</td><td class="num">' + Number(i.count).toLocaleString("de-DE") + '</td></tr>';
+    });
+    $("items-wrap").innerHTML = html + '</tbody></table>';
+  }
+  $("items-filter").addEventListener("input", renderItemStats);
+
+  function renderVehStats() {
+    var vehicles = statsData.vehicles || [];
+    var q = $("vehstats-filter").value.trim().toLowerCase();
+    var list = q ? vehicles.filter(function (v) { return (v.model || "").toLowerCase().indexOf(q) !== -1; }) : vehicles;
+    $("veh-count").textContent = vehicles.length + " Modelle";
+    if (!list.length) {
+      $("vehstats-wrap").innerHTML = '<div class="empty">' + (q ? 'Kein Treffer.' : 'Keine Fahrzeuge gefunden.') + '</div>';
+      return;
+    }
+    var html = '<table class="t"><thead><tr><th>Modell</th><th style="text-align:right">Anzahl</th></tr></thead><tbody>';
+    list.forEach(function (v) {
+      html += '<tr><td class="mono">' + esc(v.model) + '</td><td class="num">' + Number(v.count).toLocaleString("de-DE") + '</td></tr>';
+    });
+    $("vehstats-wrap").innerHTML = html + '</tbody></table>';
+  }
+  $("vehstats-filter").addEventListener("input", renderVehStats);
+
+  /* ---------- Server-Tab ---------- */
+
+  var lastServer = null;
+
+  function renderServerTab() {
+    var s = lastServer;
+    if (s) {
+      $("sv-players").textContent = s.player_count + " / " + (s.max_slots || "?");
+      $("sv-players-s").textContent = s.server_name || "";
+      $("sv-uptime").textContent = fmtUptime(s.uptime);
+      var total = s.resources_total, bad = (s.resources_not_running || []).length;
+      $("sv-res").textContent = total != null ? (total - bad) + " / " + total : "–";
+      var age = Date.now() / 1000 - (s.synced_at || 0);
+      var syncEl = $("sv-sync");
+      syncEl.textContent = age > 10 ? relTime(s.synced_at) : "live";
+      syncEl.className = "v " + (age > 10 ? "bad" : "good");
+      var pingEl = $("sv-dbping");
+      if (s.db_ping_ms != null) {
+        pingEl.textContent = s.db_ping_ms + " ms";
+        pingEl.className = "v " + (s.db_ping_ms > 50 ? "warn" : "good");
+      } else {
+        pingEl.textContent = "–";
+        pingEl.className = "v";
+      }
+
+      var resWrap = $("res-wrap");
+      var nr = s.resources_not_running || [];
+      $("res-count").textContent = nr.length ? nr.length + " betroffen" : "";
+      if (!nr.length) {
+        resWrap.innerHTML = '<div class="empty">Alles läuft. 🎉</div>';
+      } else {
+        var html = '<table class="t"><thead><tr><th>Ressource</th><th style="text-align:right">Status</th></tr></thead><tbody>';
+        nr.forEach(function (r) {
+          html += '<tr><td class="mono">' + esc(r.name) + '</td>' +
+            '<td class="num"><span class="v warn">' + esc(r.state) + '</span></td></tr>';
+        });
+        resWrap.innerHTML = html + '</tbody></table>';
+      }
+    }
+    if (statsData && statsData.db) {
+      var db = statsData.db;
+      $("sv-dbsize").textContent = db.size_mb != null ? db.size_mb.toLocaleString("de-DE") + " MB" : "–";
+      $("sv-dbconn").textContent = db.connections != null ? db.connections : "–";
+      $("sv-chars").textContent = db.players_total != null ? db.players_total.toLocaleString("de-DE") : "–";
+      if (statsData.generated_at) $("sv-dbsize-s").textContent = "Stand: " + relTime(statsData.generated_at);
+    }
+  }
+
+  /* ---------- Diagnose ---------- */
+
+  function runDiag() {
+    $("diag-btn").disabled = true;
+    $("diag-wrap").innerHTML = '<div class="empty">Diagnose läuft…</div>';
+    createAction("diag", "*", {}).then(function (data) {
+      if (data && data.id) trackQuery(data.id, function (a) {
+        $("diag-btn").disabled = false;
+        var checks = [];
+        try { checks = (JSON.parse(a.result || "{}").checks) || []; } catch (e) {}
+        renderDiag(checks);
+      }, function (msg) {
+        $("diag-btn").disabled = false;
+        $("diag-wrap").innerHTML = '<div class="empty">' + esc(msg) + '</div>';
+      });
+    }).catch(function () {
+      $("diag-btn").disabled = false;
+      $("diag-wrap").innerHTML = '<div class="empty">Abfrage konnte nicht angelegt werden.</div>';
+    });
+  }
+  $("diag-btn").addEventListener("click", runDiag);
+
+  var DIAG_ICON = { ok: "✅", warn: "⚠️", fail: "❌", info: "ℹ️" };
+  var DIAG_CLS = { ok: "done", warn: "pending", fail: "failed", info: "done" };
+
+  function renderDiag(checks) {
+    if (!checks.length) {
+      $("diag-wrap").innerHTML = '<div class="empty">Keine Ergebnisse.</div>';
+      return;
+    }
+    var fails = checks.filter(function (c) { return c.status === "fail"; }).length;
+    var warns = checks.filter(function (c) { return c.status === "warn"; }).length;
+    var head = fails ? '<div style="color:var(--err);margin-bottom:10px">' + fails + ' Problem(e) gefunden – bitte beheben.</div>'
+             : warns ? '<div style="color:var(--amber);margin-bottom:10px">Läuft, mit ' + warns + ' Hinweis(en).</div>'
+             : '<div style="color:var(--ok);margin-bottom:10px">Alles in Ordnung. ✔</div>';
+    var html = '<div class="feed">';
+    checks.forEach(function (c) {
+      html += '<div class="frow ' + (DIAG_CLS[c.status] || "done") + '">' +
+        '<div class="bar"></div>' +
+        '<div><div class="l1">' + (DIAG_ICON[c.status] || "•") + ' ' + esc(c.label) + '</div>' +
+        '<div class="l2" style="white-space:normal">' + esc(c.detail) + '</div></div>' +
+      '</div>';
+    });
+    $("diag-wrap").innerHTML = head + html + '</div>';
+  }
+
+  /* ---------- Audit ---------- */
+
+  var auditData = null;
+
+  function loadAudit() {
+    if (!can("audit")) return;
+    api("/api/panel/audit").then(function (d) {
+      auditData = d;
+      renderAudit();
+    }).catch(function (e) {
+      if (e.message === "unauthorized") return logout();
+    });
+  }
+  $("audit-refresh").addEventListener("click", loadAudit);
+  $("audit-admin").addEventListener("change", renderAudit);
+
+  function renderAudit() {
+    if (!auditData) return;
+    var bans = auditData.bans || [];
+    var actions = auditData.actions || [];
+
+    // Bans
+    $("bans-count").textContent = bans.length ? bans.length + " aktiv" : "";
+    if (!bans.length) {
+      $("bans-wrap").innerHTML = '<div class="empty">Keine aktiven Bans.</div>';
+    } else {
+      var bh = '<table class="t"><thead><tr><th>Spieler</th><th>Grund</th><th>Läuft ab</th><th></th></tr></thead><tbody>';
+      bans.forEach(function (b) {
+        var until = b.expires_at ? new Date(b.expires_at * 1000).toLocaleString("de-DE") : "permanent";
+        bh += '<tr><td><div class="p-name">' + esc(b.name || "?") + '</div>' +
+          '<div class="p-sub">' + esc(b.citizenid || "?") + '</div></td>' +
+          '<td style="max-width:200px">' + esc(b.reason) + '</td>' +
+          '<td class="mono dim">' + esc(until) + '</td>' +
+          '<td style="text-align:right"><button class="abtn" data-unban="' + esc(b.citizenid || "") + '">Entbannen</button></td></tr>';
+      });
+      $("bans-wrap").innerHTML = bh + '</tbody></table>';
+    }
+
+    // Admin-Filter-Optionen (created_by, nur web:/discord:)
+    var admins = {};
+    actions.forEach(function (a) {
+      if (a.created_by) admins[a.created_by] = (admins[a.created_by] || 0) + 1;
+    });
+    var sel = $("audit-admin");
+    var current = sel.value;
+    var opts = '<option value="">Alle Admins</option>';
+    Object.keys(admins).sort().forEach(function (k) {
+      opts += '<option value="' + esc(k) + '"' + (k === current ? " selected" : "") + '>' + creator(k) + ' (' + admins[k] + ')</option>';
+    });
+    sel.innerHTML = opts;
+
+    // Zusammenfassung (Aktionen pro Admin, Top 6)
+    var sum = Object.keys(admins).map(function (k) { return { k: k, n: admins[k] }; })
+      .sort(function (x, y) { return y.n - x.n; }).slice(0, 6);
+    $("audit-summary").innerHTML = sum.map(function (s) {
+      return '<div class="tile" style="flex:1;min-width:120px;padding:10px 12px">' +
+        '<div class="k">' + creator(s.k) + '</div><div class="v" style="font-size:20px">' + s.n + '</div></div>';
+    }).join("");
+
+    // Aktivitätsliste (gefiltert)
+    var filtered = current ? actions.filter(function (a) { return a.created_by === current; }) : actions;
+    if (!filtered.length) {
+      $("audit-wrap").innerHTML = '<div class="empty">Keine Aktionen.</div>';
+      return;
+    }
+    var html = "";
+    filtered.slice(0, 200).forEach(function (a) {
+      var sensitive = ["money", "give_item", "remove_item", "park_all", "set_job", "set_gang", "ban"].indexOf(a.action_type) !== -1;
+      var extra = a.result && ["get_inventory", "get_vehicles", "get_stats", "search_player"].indexOf(a.action_type) === -1 ? " · " + esc(a.result) : "";
+      html += '<div class="frow ' + esc(a.status) + '">' +
+        '<div class="bar"' + (sensitive ? ' style="background:var(--amber)"' : '') + '></div>' +
+        '<div><div class="l1">' + (sensitive ? '⚠ ' : '') + describe(a) + '</div>' +
+        '<div class="l2">' + (TYPE_DE[a.action_type] || esc(a.action_type)) + ' · ' + creator(a.created_by) + extra + '</div></div>' +
+        '<div class="meta"><div class="status">' + (STATUS_DE[a.status] || esc(a.status)) + '</div>' +
+        '<div class="time">' + relTime(a.created_at) + '</div></div>' +
+      '</div>';
+    });
+    $("audit-wrap").innerHTML = html;
+  }
+
+  $("bans-wrap").addEventListener("click", function (ev) {
+    var el = ev.target.closest("[data-unban]");
+    if (!el) return;
+    api("/api/panel/unban", { method: "POST", body: JSON.stringify({ cid: el.getAttribute("data-unban") }) })
+      .then(loadAudit).catch(function () {});
+  });
+
+  var STATUS_DE = { pending: "Wartet", done: "Erledigt", failed: "Fehlgeschlagen" };
+  var TYPE_DE = {
+    teleport: "Teleport", teleport_coords: "TP Koordinaten", car_to_garage: "Einparken",
+    get_vehicles: "Fahrzeuge", heal: "Heal", revive: "Revive", kick: "Kick",
+    announce: "Ansage", money: "Geld", get_stats: "Statistik",
+    give_item: "Item geben", remove_item: "Item nehmen", get_inventory: "Inventar",
+    search_player: "Suche", set_job: "Job", set_gang: "Gang", notify: "Nachricht",
+    park_all: "Massen-Einparken", ban: "Ban", diag: "Diagnose"
+  };
+
+  function describe(a) {
+    var p = {};
+    try { p = a.params ? JSON.parse(a.params) : {}; } catch (e) {}
+    var t = esc(a.target);
+    if (a.action_type === "teleport")
+      return t + ' <span class="arrow">→</span> ' + esc(p.to_citizenid || "?");
+    if (a.action_type === "teleport_coords")
+      return t + ' <span class="arrow">→</span> ' + esc(p.x) + ", " + esc(p.y) + ", " + esc(p.z);
+    if (a.action_type === "car_to_garage")
+      return t + ' <span class="arrow">→</span> ' + esc(p.garage || "?");
+    if (a.action_type === "announce")
+      return '„' + esc((p.message || "").slice(0, 40)) + ((p.message || "").length > 40 ? "…" : "") + '“';
+    if (a.action_type === "money")
+      return t + ' <span class="arrow">' + (p.op === "remove" ? "−" : "+") + '</span>' + esc(p.amount) + "$ " + esc(p.account || "");
+    if (a.action_type === "kick")
+      return t + (p.reason ? ' · ' + esc(p.reason) : '');
+    if (a.action_type === "give_item")
+      return t + ' <span class="arrow">+</span>' + esc(p.item || "?") + " ×" + esc(p.count || 1);
+    if (a.action_type === "remove_item")
+      return t + ' <span class="arrow">−</span>' + esc(p.item || "?") + " ×" + esc(p.count || 1);
+    if (a.action_type === "get_inventory")
+      return 'Inventar von ' + t;
+    if (a.action_type === "get_vehicles")
+      return 'Fahrzeuge von ' + t;
+    if (a.action_type === "get_stats")
+      return 'Economy-Statistik';
+    if (a.action_type === "search_player")
+      return 'Suche: „' + t + '“';
+    if (a.action_type === "set_job")
+      return t + ' <span class="arrow">→</span> Job ' + esc(p.job || "?") + " (" + esc(p.grade != null ? p.grade : 0) + ")";
+    if (a.action_type === "set_gang")
+      return t + ' <span class="arrow">→</span> Gang ' + esc(p.gang || "?") + " (" + esc(p.grade != null ? p.grade : 0) + ")";
+    if (a.action_type === "notify")
+      return t + ' · „' + esc((p.message || "").slice(0, 35)) + ((p.message || "").length > 35 ? "…" : "") + '“';
+    if (a.action_type === "park_all")
+      return 'Alle Fahrzeuge einparken';
+    if (a.action_type === "ban") {
+      var dur = !p.hours || p.hours === 0 ? "permanent" : p.hours + "h";
+      return t + ' <span class="arrow">🔨</span> ' + dur + (p.reason ? ' · ' + esc(p.reason) : '');
+    }
+    return t;
+  }
+
+  function creator(c) {
+    if (!c) return "";
+    if (c.indexOf("web:") === 0) return "Web · " + esc(c.slice(4));
+    if (c.indexOf("discord:") === 0) return "Discord · " + esc(c.slice(8));
+    return esc(c);
+  }
+
+  function renderFeed(actions) {
+    var feed = $("feed");
+    if (!actions.length) {
+      feed.innerHTML = '<div class="empty">Noch keine Aktionen.</div>';
+      return;
+    }
+    var html = "";
+    actions.forEach(function (a) {
+      var isNew = !firstRender && !knownIds[a.id];
+      knownIds[a.id] = true;
+      var extra = "";
+      if (a.result) {
+        if (a.action_type === "get_inventory" && a.status === "done") {
+          var n = 0;
+          try { n = (JSON.parse(a.result).items || []).length; } catch (e) {}
+          extra = " · " + n + " Items";
+        } else if (a.action_type === "get_vehicles" && a.status === "done") {
+          var nv = 0;
+          try { nv = (JSON.parse(a.result).vehicles || []).length; } catch (e) {}
+          extra = " · " + nv + " Fahrzeuge";
+        } else if (a.action_type === "get_stats" && a.status === "done") {
+          extra = "";
+        } else if (a.action_type === "search_player" && a.status === "done") {
+          var ns = 0;
+          try { ns = (JSON.parse(a.result).results || []).length; } catch (e) {}
+          extra = " · " + ns + " Treffer";
+        } else {
+          extra = " · " + esc(a.result);
+        }
+      }
+      html += '<div class="frow ' + esc(a.status) + (isNew ? " new" : "") + '">' +
+        '<div class="bar"></div>' +
+        '<div><div class="l1">' + describe(a) + '</div>' +
+        '<div class="l2">' + (TYPE_DE[a.action_type] || esc(a.action_type)) + ' · ' + creator(a.created_by) + extra + '</div></div>' +
+        '<div class="meta"><div class="status">' + (STATUS_DE[a.status] || esc(a.status)) + '</div>' +
+        '<div class="time">' + relTime(a.created_at) + '</div></div>' +
+      '</div>';
+    });
+    feed.innerHTML = html;
+    if (firstRender) { firstRender = false; }
+  }
+
+  var SEV_LABEL = { alert: "Alert", warn: "Warnung", info: "Info" };
+  var logKnown = {};
+  var logFirst = true;
+
+  function renderLogs(evts) {
+    if (!can("view_logs")) return;
+    var wrap = $("log-wrap");
+    var q = ($("log-filter").value || "").trim().toLowerCase();
+
+    // Alert-Dot am Tab, wenn neue warn/alert-Events und Tab nicht offen
+    var hasNew = evts.some(function (e) {
+      return (e.severity === "alert" || e.severity === "warn") && e.at > lastLogSeen;
+    });
+    $("log-dot").classList.toggle("hidden", !(hasNew && activeTab !== "log"));
+
+    var list = evts.filter(function (e) {
+      if (!q) return true;
+      return (e.message || "").toLowerCase().indexOf(q) !== -1 ||
+             (e.name || "").toLowerCase().indexOf(q) !== -1 ||
+             (e.citizenid || "").toLowerCase().indexOf(q) !== -1 ||
+             (e.type || "").toLowerCase().indexOf(q) !== -1 ||
+             (e.severity || "").toLowerCase().indexOf(q) !== -1 ||
+             (SEV_LABEL[e.severity] || "").toLowerCase().indexOf(q) !== -1;
+    });
+    if (!evts.length) {
+      wrap.innerHTML = '<div class="empty">Noch keine Ereignisse von der Bridge.</div>';
+      return;
+    }
+    if (!list.length) {
+      wrap.innerHTML = '<div class="empty">Kein Treffer für „' + esc(q) + '“.</div>';
+      return;
+    }
+    var html = "";
+    list.forEach(function (e) {
+      var key = e.id != null ? e.id : (e.at + "|" + e.message);
+      var isNew = !logFirst && !logKnown[key];
+      logKnown[key] = true;
+      var sev = e.severity === "alert" ? "failed" : (e.severity === "warn" ? "pending" : "done");
+      var who = e.name ? esc(e.name) + (e.citizenid ? ' <span class="mono dim">' + esc(e.citizenid) + '</span>' : '') : (e.citizenid ? esc(e.citizenid) : "System");
+      html += '<div class="frow ' + sev + (isNew ? " new" : "") + '"' +
+        (e.citizenid ? ' data-logcid="' + esc(e.citizenid) + '" style="cursor:pointer" title="Klick: auf diesen Spieler filtern"' : '') + '>' +
+        '<div class="bar"></div>' +
+        '<div><div class="l1">' + esc(e.message) + '</div>' +
+        '<div class="l2">' + who + ' · ' + esc(e.type) + '</div></div>' +
+        '<div class="meta"><div class="status">' + (SEV_LABEL[e.severity] || esc(e.severity)) + '</div>' +
+        '<div class="time">' + relTime(e.at) + '</div></div>' +
+      '</div>';
+    });
+    wrap.innerHTML = html;
+    if (logFirst) logFirst = false;
+  }
+  $("log-filter").addEventListener("input", function () { poll(); });
+  $("log-wrap").addEventListener("click", function (ev) {
+    var row = ev.target.closest("[data-logcid]");
+    if (!row) return;
+    $("log-filter").value = row.getAttribute("data-logcid");
+    poll();
+  });
+
+  /* ---------- Status / Poll ---------- */
+
+  function renderServer(server) {
+    var warn = $("bridge-warn");
+    if (!server) {
+      $("srv-chip").innerHTML = "Bridge: <b>noch kein Sync</b>";
+      warn.classList.add("hidden");
+      lastServer = null;
+      renderServerTab();
+      return;
+    }
+    var age = Date.now() / 1000 - (server.synced_at || 0);
+    var offline = age > 10;
+
+    $("srv-chip").innerHTML = esc(server.server_name || "FiveM") +
+      " · <b>" + esc(server.player_count) + "/" + esc(server.max_slots || "?") + "</b>";
+
+    if (offline) {
+      $("bridge-age").textContent = age < 120 ? Math.floor(age) + " s" : Math.floor(age / 60) + " min";
+      warn.classList.remove("hidden");
+    } else {
+      warn.classList.add("hidden");
+    }
+
+    players = server.players || [];
+    renderPlayers();
+
+    lastServer = server;
+    renderServerTab();
+  }
+
+  function poll() {
+    api("/api/panel/state").then(function (data) {
+      perms = data.permissions || [];
+      applyPerms();
+      if (data.limits) applyLimits(data.limits);
+      $("lockdown-banner").classList.toggle("hidden", !data.locked);
+      renderFeed(data.actions || []);
+      checkQueryResults(data.actions || []);
+      renderLogs(data.events || []);
+      renderServer(data.server);
+      setConn(true);
+    }).catch(function (e) {
+      if (e.message === "unauthorized") return logout();
+      setConn(false);
+    });
+  }
+
+  function setConn(online) {
+    var c = $("conn");
+    c.className = "conn " + (online ? "online" : "offline");
+    $("conn-text").textContent = online ? "verbunden" : "getrennt";
+  }
+
+  function applyPerms() {
+    var els = document.querySelectorAll("[data-perm]");
+    for (var i = 0; i < els.length; i++) {
+      els[i].classList.toggle("hidden", !can(els[i].getAttribute("data-perm")));
+    }
+    loadCatalog();
+  }
+
+  var limitsApplied = false;
+  function applyLimits(limits) {
+    if (limitsApplied) return;
+    limitsApplied = true;
+    var moHint = $("mo-hint");
+    if (moHint && limits.money) moHint.textContent = "Max. " + Number(limits.money).toLocaleString("de-DE") + " $ pro Aktion. CitizenID per Namensklick übernehmen.";
+    var itHint = document.querySelector('[data-perm="items"] .hint');
+    if (itHint && limits.item) itHint.textContent = "Max. " + limits.item + " Stück pro Aktion. Item aus der Liste wählen oder tippen.";
+  }
+
+  /* ---------- Login / Logout ---------- */
+
+  function unlock() {
+    $("gate").classList.add("hidden");
+    $("app").classList.remove("hidden");
+    $("who-name").innerHTML = "<b>" + esc(myName) + "</b>";
+    applyPerms();
+    showTab("players");
+    poll();
+    pollTimer = setInterval(poll, 3000);
+  }
+
+  function logout() {
+    if (pollTimer) clearInterval(pollTimer);
+    store.removeItem("ap_session");
+    store.removeItem("ap_name");
+    session = null;
+    $("app").classList.add("hidden");
+    $("gate").classList.remove("hidden");
+    setMsg("gate-msg", "Sitzung abgelaufen – bitte neu anmelden.", "err");
+  }
+
+  function redeem(token) {
+    return fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: token })
+    }).then(function (r) {
+      if (!r.ok) throw new Error(r.status === 401 ? "invalid" : (r.status === 403 ? "noperm" : "http"));
+      return r.json();
+    }).then(function (data) {
+      session = data.session;
+      myName = data.name;
+      perms = data.permissions || [];
+      store.setItem("ap_session", session);
+      store.setItem("ap_name", myName);
+      unlock();
+    });
+  }
+
+  $("gate-btn").addEventListener("click", function () {
+    var token = $("gate-token").value.trim();
+    if (!token) return setMsg("gate-msg", "Token eingeben oder Login-Link nutzen.", "err");
+    redeem(token).catch(function (e) {
+      setMsg("gate-msg",
+        e.message === "invalid" ? "Token ungültig oder abgelaufen – neu per !ap login anfordern." :
+        e.message === "noperm" ? "Keine Panel-Berechtigung für deinen Account." :
+        "Server nicht erreichbar.", "err");
+    });
+  });
+  $("gate-token").addEventListener("keydown", function (e) { if (e.key === "Enter") $("gate-btn").click(); });
+
+  // 1) Login-Link? (?login=TOKEN)
+  var m = location.search.match(/[?&]login=([^&]+)/);
+  if (m) {
+    history.replaceState(null, "", location.pathname); // Token aus der URL entfernen
+    redeem(decodeURIComponent(m[1])).catch(function () {
+      setMsg("gate-msg", "Login-Link ungültig oder abgelaufen – neu per !ap login anfordern.", "err");
+    });
+  } else {
+    // 2) Bestehende Session aus dieser Browser-Session?
+    var saved = store.getItem("ap_session");
+    if (saved) {
+      session = saved;
+      myName = store.getItem("ap_name") || "";
+      api("/api/panel/state").then(function (data) {
+        perms = data.permissions || [];
+        myName = data.name || myName;
+        unlock();
+      }).catch(function () {
+        store.removeItem("ap_session");
+        session = null;
+      });
+    }
+  }
+})();
+</script>
+</body>
+</html>
