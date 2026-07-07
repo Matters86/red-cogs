@@ -29,7 +29,11 @@ import json
 import os
 import logging
 import hmac
+import time
+import secrets
+import urllib.parse
 
+import aiohttp
 import discord
 from aiohttp import web
 from redbot.core import commands, Config
@@ -109,7 +113,11 @@ class AdminPanel(commands.Cog):
             public_url=None,
             money_max=None,
             item_max=None,
+            oauth_client_id=None,
+            oauth_client_secret=None,
         )
+        # OAuth-CSRF-States (state -> Ablaufzeit), kurzlebig, nur im RAM
+        self._oauth_states: dict = {}
         # Laufzeit-Settings (werden in _start_webserver aus Config+ENV aufgelöst)
         self.api_key = DEFAULT_API_KEY
         self.web_port = DEFAULT_WEB_PORT
@@ -201,6 +209,8 @@ class AdminPanel(commands.Cog):
                            lambda r: web.FileResponse(os.path.join(pwa_dir, "sw.js")))
         app.router.add_static("/icons/", os.path.join(pwa_dir, "icons"))
         app.router.add_post("/api/auth/login", self.http_login)
+        app.router.add_get("/api/auth/discord", self.http_oauth_start)
+        app.router.add_get("/api/auth/callback", self.http_oauth_callback)
         app.router.add_get("/api/panel/state", self.http_panel_state)
         app.router.add_get("/api/panel/catalog", self.http_panel_catalog)
         app.router.add_get("/api/panel/player_history", self.http_player_history)
@@ -250,6 +260,92 @@ class AdminPanel(commands.Cog):
         html_path = os.path.join(os.path.dirname(__file__), "panel.html")
         with open(html_path, "r", encoding="utf-8") as f:
             return web.Response(text=f.read(), content_type="text/html")
+
+    # ---------------- Discord OAuth2 ("Mit Discord anmelden") ----------------
+
+    async def _oauth_creds(self):
+        cid = await self.config.oauth_client_id()
+        secret = await self.config.oauth_client_secret()
+        return (str(cid), secret) if cid and secret else (None, None)
+
+    def _oauth_redirect_uri(self) -> str:
+        return f"{self.public_url}/api/auth/callback"
+
+    async def http_oauth_start(self, request: web.Request):
+        """Leitet zu Discords Autorisierungsseite weiter."""
+        cid, secret = await self._oauth_creds()
+        if not cid or not secret or not self.public_url:
+            return web.HTTPFound("/?oauth=missing")
+        # CSRF-Schutz: zufälliger State, 10 Minuten gültig
+        now = time.time()
+        self._oauth_states = {s: exp for s, exp in self._oauth_states.items() if exp > now}
+        state = secrets.token_urlsafe(24)
+        self._oauth_states[state] = now + 600
+        params = urllib.parse.urlencode({
+            "client_id": cid,
+            "redirect_uri": self._oauth_redirect_uri(),
+            "response_type": "code",
+            "scope": "identify",
+            "state": state,
+        })
+        return web.HTTPFound(f"https://discord.com/oauth2/authorize?{params}")
+
+    async def http_oauth_callback(self, request: web.Request):
+        """Discord-Rücksprung: Code gegen User tauschen, Rechte prüfen, einloggen."""
+        if request.query.get("error"):
+            return web.HTTPFound("/?oauth=denied")
+        state = request.query.get("state", "")
+        if self._oauth_states.pop(state, 0) < time.time():
+            return web.HTTPFound("/?oauth=state")
+        code = request.query.get("code", "")
+        cid, secret = await self._oauth_creds()
+        if not code or not cid:
+            return web.HTTPFound("/?oauth=missing")
+
+        try:
+            async with aiohttp.ClientSession() as http:
+                async with http.post(
+                    "https://discord.com/api/oauth2/token",
+                    data={
+                        "client_id": cid,
+                        "client_secret": secret,
+                        "grant_type": "authorization_code",
+                        "code": code,
+                        "redirect_uri": self._oauth_redirect_uri(),
+                    },
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                ) as resp:
+                    tok = await resp.json()
+                access = tok.get("access_token")
+                if not access:
+                    log.warning(f"OAuth-Token-Tausch fehlgeschlagen: {tok.get('error_description') or tok}")
+                    return web.HTTPFound("/?oauth=exchange")
+                async with http.get(
+                    "https://discord.com/api/users/@me",
+                    headers={"Authorization": f"Bearer {access}"},
+                ) as resp:
+                    me = await resp.json()
+        except aiohttp.ClientError:
+            return web.HTTPFound("/?oauth=exchange")
+
+        user_id = me.get("id")
+        if not user_id:
+            return web.HTTPFound("/?oauth=exchange")
+
+        # Auf welchem Server hat dieser User Panel-Rechte? (Bot-seitig, kein extra Scope nötig)
+        for guild in self.bot.guilds:
+            member = guild.get_member(int(user_id))
+            if member is None:
+                try:
+                    member = await guild.fetch_member(int(user_id))
+                except (discord.NotFound, discord.HTTPException):
+                    continue
+            perms = await self.member_permissions(member)
+            if perms:
+                token = db.create_login_token(str(user_id), str(guild.id), member.display_name)
+                return web.HTTPFound(f"/?login={token}")
+
+        return web.HTTPFound("/?oauth=noperm")
 
     async def http_login(self, request: web.Request):
         data = await request.json()
@@ -1036,6 +1132,26 @@ class AdminPanel(commands.Cog):
         await self.config.item_max.set(count)
         self.item_max = count
         await ctx.send(f"✅ Item-Limit: max. {count} Stück pro Aktion.")
+
+    @ap_config.command(name="oauth")
+    async def ap_config_oauth(self, ctx: commands.Context, client_id: str, client_secret: str):
+        """Aktiviert 'Mit Discord anmelden'. Client-ID + Secret aus dem Developer Portal."""
+        # Nachricht sofort löschen – das Secret soll nicht im Chat stehen bleiben
+        try:
+            await ctx.message.delete()
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+        if not client_id.isdigit():
+            return await ctx.send("Die Client-ID ist die lange Zahl deiner Bot-Application (Developer Portal → General Information → Application ID).")
+        await self.config.oauth_client_id.set(client_id)
+        await self.config.oauth_client_secret.set(client_secret)
+        redirect = self._oauth_redirect_uri() if self.public_url else "⚠️ Erst `!ap config url …` setzen!"
+        await ctx.send(
+            "✅ **Discord-Login aktiviert.** (Deine Nachricht mit dem Secret habe ich gelöscht.)\n\n"
+            "Letzter Schritt im **Developer Portal** (discord.com/developers) → deine Application → **OAuth2** → **Redirects** → hinzufügen:\n"
+            f"```{redirect}```\n"
+            "Speichern – danach erscheint der Login sofort im Panel. Muss exakt übereinstimmen (inkl. Port)."
+        )
 
     @ap.command(name="diag")
     async def ap_diag(self, ctx: commands.Context):

@@ -543,9 +543,11 @@
 <div id="gate">
   <div class="card">
     <h1>Admin <span>Dispatch</span></h1>
-    <p class="sub">Anmeldung läuft über Discord. Tippe auf dem Server:</p>
-    <p class="sub"><code>!ap login</code></p>
-    <p class="sub">Der Bot schickt dir per DM einen Login-Link. Alternativ Token hier einfügen:</p>
+    <a href="/api/auth/discord" class="btn block" id="discord-login" style="background:#5865F2;border-color:#5865F2;color:#fff;text-align:center;text-decoration:none;display:block;margin-top:18px">Mit Discord anmelden</a>
+    <div style="display:flex;align-items:center;gap:10px;margin:16px 0 4px;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase">
+      <span style="flex:1;height:1px;background:var(--line)"></span>oder per Token<span style="flex:1;height:1px;background:var(--line)"></span>
+    </div>
+    <p class="sub">Auf dem Server <code>!ap login</code> tippen – der Bot schickt dir per DM einen Link:</p>
     <label for="gate-token">Login-Token</label>
     <input id="gate-token" placeholder="Token aus der DM" autocomplete="off">
     <button class="btn block" id="gate-btn">Anmelden</button>
@@ -2348,11 +2350,22 @@
 
   // 1) Login-Link? (?login=TOKEN)
   var m = location.search.match(/[?&]login=([^&]+)/);
+  var oauthErr = location.search.match(/[?&]oauth=([^&]+)/);
   if (m) {
     history.replaceState(null, "", location.pathname); // Token aus der URL entfernen
     redeem(decodeURIComponent(m[1])).catch(function () {
       setMsg("gate-msg", "Login-Link ungültig oder abgelaufen – neu per !ap login anfordern.", "err");
     });
+  } else if (oauthErr) {
+    history.replaceState(null, "", location.pathname);
+    var OAUTH_ERR = {
+      missing: "Discord-Login ist noch nicht eingerichtet – ein Admin muss !ap config oauth ausführen. Bis dahin: Token-Weg unten.",
+      denied: "Discord-Anmeldung abgebrochen.",
+      state: "Anmeldung abgelaufen – bitte nochmal auf „Mit Discord anmelden“ klicken.",
+      exchange: "Discord hat die Anmeldung nicht bestätigt – Client-ID/Secret oder Redirect-URL prüfen (!ap config oauth).",
+      noperm: "Dein Discord-Account hat keine Panel-Berechtigung auf diesem Server."
+    };
+    setMsg("gate-msg", OAUTH_ERR[oauthErr[1]] || "Discord-Anmeldung fehlgeschlagen.", "err");
   } else {
     // 2) Bestehende Session aus dieser Browser-Session?
     var saved = store.getItem("ap_session");
