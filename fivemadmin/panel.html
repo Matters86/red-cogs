@@ -641,7 +641,8 @@
         <label for="car-plate">Kennzeichen</label>
         <input id="car-plate" placeholder="SA 1234" autocomplete="off">
         <label for="car-garage">Garage</label>
-        <input id="car-garage" placeholder="downtown" autocomplete="off">
+        <input id="car-garage" list="garage-list" placeholder="Garage wählen…" autocomplete="off">
+        <datalist id="garage-list"></datalist>
         <button class="btn block" id="car-btn">Fahrzeug einparken</button>
         <div class="msg" id="car-msg"></div>
         <div data-perm="park_all" style="margin-top:14px;border-top:1px solid var(--line);padding-top:14px">
@@ -902,7 +903,7 @@
     <div class="split" style="align-items:flex-end;margin-bottom:12px">
       <div>
         <label for="veh-garage" style="margin-top:0">Ziel-Garage fürs Einparken</label>
-        <input id="veh-garage" placeholder="downtown" autocomplete="off">
+        <input id="veh-garage" list="garage-list" placeholder="Garage wählen…" autocomplete="off">
       </div>
     </div>
     <div class="modal-body" id="veh-body"><div class="empty">Lade Fahrzeuge…</div></div>
@@ -1033,6 +1034,7 @@
   var statsLoading = false;
   var catalogLoaded = false;
   var catalogMap = {};
+  var defaultGarage = "downtown";
   var lastLogSeen = 0;
 
   var store = (function () {
@@ -1331,7 +1333,7 @@
 
   $("car-btn").addEventListener("click", function () {
     var plate = $("car-plate").value.trim().toUpperCase();
-    var garage = $("car-garage").value.trim() || "downtown";
+    var garage = $("car-garage").value.trim() || defaultGarage;
     if (!plate) return setMsg("car-msg", "Kennzeichen angeben.", "err");
     createAction("car_to_garage", plate, { garage: garage }, "car-msg");
   });
@@ -1345,7 +1347,7 @@
       btn.textContent = "Alle Fahrzeuge einparken";
       btn.style.borderColor = "rgba(232,163,61,.5)";
       btn.style.color = "var(--amber)";
-      var fallback = $("car-garage").value.trim() || "downtown";
+      var fallback = $("car-garage").value.trim() || defaultGarage;
       createAction("park_all", "*", { garage: fallback }, "car-msg");
       return;
     }
@@ -1401,6 +1403,17 @@
         html += '<option value="' + esc(i.name) + '">' + esc(i.label || i.name) + '</option>';
       });
       $("item-list").innerHTML = html;
+      // Echte Garagen dieses Servers (aus der DB der Bridge) -> keine Phantom-Garagen mehr
+      var g = data.garages || [];
+      if (g.length) {
+        defaultGarage = g[0];
+        var gh = "";
+        g.forEach(function (name) { gh += '<option value="' + esc(name) + '"></option>'; });
+        $("garage-list").innerHTML = gh;
+        $("car-garage").placeholder = "z. B. " + g[0];
+        var vg = $("veh-garage");
+        if (vg) vg.placeholder = "z. B. " + g[0];
+      }
     }).catch(function () { catalogLoaded = false; });
   }
 
@@ -1447,6 +1460,7 @@
       var cid = esc(r.citizenid || "");
       var online = !!onlineCids[r.citizenid];
       var actions = "";
+      if (can("teleport")) actions += '<button class="abtn" data-act="tp" data-cid="' + cid + '" data-name="' + esc(r.charname) + '">TP→</button>';
       if (can("view_inventory")) actions += '<button class="abtn" data-act="inv" data-cid="' + cid + '">Inv</button>';
       if (can("car_to_garage")) actions += '<button class="abtn" data-act="veh" data-cid="' + cid + '">Fzg</button>';
       if (online && can("message")) actions += '<button class="abtn" data-act="msg" data-cid="' + cid + '" data-name="' + esc(r.charname) + '">Msg</button>';
@@ -1631,7 +1645,7 @@
     var el = ev.target.closest("[data-vplate]");
     if (!el) return;
     var plate = el.getAttribute("data-vplate");
-    var garage = $("veh-garage").value.trim() || "downtown";
+    var garage = $("veh-garage").value.trim() || defaultGarage;
     el.disabled = true;
     el.textContent = "→ " + garage;
     createAction("car_to_garage", plate, { garage: garage }, "players-msg");
@@ -2146,12 +2160,27 @@
     park_all: "Massen-Einparken", ban: "Ban", diag: "Diagnose"
   };
 
+  // Anzeige-Name für ein Action-Target: gespeicherter Name > Online-Spieler > CID.
+  // Die CID bleibt als Tooltip erhalten (hilft bei doppelten Namen).
+  function dispTarget(cid, storedName) {
+    if (!cid) return "?";
+    var name = storedName;
+    if (!name) {
+      for (var i = 0; i < players.length; i++) {
+        if (players[i].citizenid === cid) { name = players[i].charname || players[i].name; break; }
+      }
+    }
+    if (name && name !== cid)
+      return '<span title="' + esc(cid) + '">' + esc(name) + '</span>';
+    return esc(cid);
+  }
+
   function describe(a) {
     var p = {};
     try { p = a.params ? JSON.parse(a.params) : {}; } catch (e) {}
-    var t = esc(a.target);
+    var t = dispTarget(a.target, a.target_name);
     if (a.action_type === "teleport")
-      return t + ' <span class="arrow">→</span> ' + esc(p.to_citizenid || "?");
+      return t + ' <span class="arrow">→</span> ' + dispTarget(p.to_citizenid);
     if (a.action_type === "teleport_coords")
       return t + ' <span class="arrow">→</span> ' + esc(p.x) + ", " + esc(p.y) + ", " + esc(p.z);
     if (a.action_type === "car_to_garage")

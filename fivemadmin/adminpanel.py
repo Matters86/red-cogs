@@ -598,8 +598,12 @@ class AdminPanel(commands.Cog):
     async def http_bridge_catalog(self, request: web.Request):
         data = await request.json()
         items = data.get("items")
+        garages = data.get("garages")
         if isinstance(items, list):
-            db.save_catalog({"items": items[:5000]})
+            db.save_catalog({
+                "items": items[:5000],
+                "garages": garages[:100] if isinstance(garages, list) else [],
+            })
         return web.json_response({"ok": True})
 
     async def http_panel_catalog(self, request: web.Request):
@@ -619,7 +623,7 @@ class AdminPanel(commands.Cog):
         # Name -> CID: aufgelöstes Target übernehmen (wichtig für Akte, Audit und Bans)
         resolved = data.get("resolved_target")
         if resolved:
-            db.update_action_target(action_id, str(resolved))
+            db.update_action_target(action_id, str(resolved), data.get("resolved_name"))
 
         action = db.get_action(action_id)
         if action:

@@ -100,6 +100,12 @@ def init_db():
         );
     """)
     conn.commit()
+    # Migration für Bestands-Installationen: Namens-Spalte nachrüsten
+    try:
+        conn.execute("ALTER TABLE actions ADD COLUMN target_name TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Spalte existiert bereits
     conn.close()
 
 
@@ -263,10 +269,14 @@ def remove_ban(citizenid: str) -> bool:
 # Audit (Admin-Aktivität)
 # ------------------------------------------------------------------
 
-def update_action_target(action_id: str, target: str):
-    """Ersetzt das Target einer Action (z. B. Name -> aufgelöste CitizenID)."""
+def update_action_target(action_id: str, target: str, target_name: str = None):
+    """Ersetzt das Target einer Action (Name -> aufgelöste CitizenID) und speichert den Anzeigenamen."""
     conn = get_conn()
-    conn.execute("UPDATE actions SET target = ? WHERE id = ?", (target, action_id))
+    if target_name:
+        conn.execute("UPDATE actions SET target = ?, target_name = ? WHERE id = ?",
+                     (target, target_name, action_id))
+    else:
+        conn.execute("UPDATE actions SET target = ? WHERE id = ?", (target, action_id))
     conn.commit()
     conn.close()
 
