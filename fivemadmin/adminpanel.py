@@ -25,6 +25,7 @@ ENV:
                          z. B. https://panel.deinedomain.tld
 """
 
+import asyncio
 import json
 import os
 import logging
@@ -103,7 +104,10 @@ class AdminPanel(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=0xA0D141)
-        self.config.register_guild(role_map={})  # {role_id(str): preset_name}
+        self.config.register_guild(
+            role_map={},   # {role_id(str): preset_name}
+            user_map={},   # {user_id(str): preset_name} – Einzelpersonen-Zugriffe
+        )
         self.config.register_global(
             alert_channel=None,
             audit_channel=None,
@@ -176,6 +180,11 @@ class AdminPanel(commands.Cog):
             preset = role_map.get(str(role.id))
             if preset in PRESETS:
                 perms |= PRESETS[preset]
+        # Einzelpersonen-Zugriff: addiert sich zu evtl. Rollen-Presets
+        user_map = await self.config.guild(member.guild).user_map()
+        preset = user_map.get(str(member.id))
+        if preset in PRESETS:
+            perms |= PRESETS[preset]
         return perms
 
     async def session_permissions(self, session: dict):
@@ -221,6 +230,8 @@ class AdminPanel(commands.Cog):
         app.router.add_get("/api/panel/audit", self.http_audit)
         app.router.add_get("/api/panel/roles", self.http_get_role_map)
         app.router.add_post("/api/panel/roles", self.http_set_role_map)
+        app.router.add_post("/api/panel/users", self.http_set_user_map)
+        app.router.add_get("/api/panel/user_search", self.http_user_search)
         app.router.add_post("/api/panel/action", self.http_panel_action)
         # Bridge (FiveM-Server)
         app.router.add_post("/api/bridge/sync", self.http_bridge_sync)
@@ -572,7 +583,89 @@ class AdminPanel(commands.Cog):
                 "members": len(r.members),
                 "preset": role_map.get(str(r.id)),
             })
-        return web.json_response({"roles": roles, "presets": sorted(PRESETS.keys())})
+        # Einzelpersonen-Zugriffe (Namen live auflösen; weg vom Server = kennzeichnen)
+        user_map = await self.config.guild(guild).user_map()
+        users = []
+        for uid, preset in user_map.items():
+            m = guild.get_member(int(uid)) if uid.isdigit() else None
+            users.append({
+                "id": uid,
+                "name": m.display_name if m else f"nicht mehr auf dem Server ({uid})",
+                "on_guild": m is not None,
+                "is_admin": bool(m and m.guild_permissions.administrator),
+                "preset": preset,
+            })
+        users.sort(key=lambda u: u["name"].lower())
+        return web.json_response({"roles": roles, "users": users, "presets": sorted(PRESETS.keys())})
+
+    async def http_user_search(self, request: web.Request):
+        """Mitglieder-Suche für Einzelpersonen-Zugriffe (nur Discord-Admins)."""
+        member = request["member"]
+        if not member.guild_permissions.administrator:
+            return web.json_response({"error": "Nur Discord-Administratoren"}, status=403)
+        q = (request.query.get("q") or "").strip()
+        if len(q) < 2:
+            return web.json_response({"results": []})
+        guild = member.guild
+        results, seen = [], set()
+
+        def push(m):
+            if m.bot or m.id in seen:
+                return
+            seen.add(m.id)
+            results.append({
+                "id": str(m.id),
+                "name": m.display_name,
+                "username": m.name,
+                "is_admin": m.guild_permissions.administrator,
+            })
+
+        needle = q.lower()
+        # 1) lokaler Member-Cache (deckt die meisten Fälle sofort ab)
+        for m in guild.members:
+            if needle in m.display_name.lower() or needle in m.name.lower():
+                push(m)
+                if len(results) >= 10:
+                    break
+        # 2) Gateway-Suche als Ergänzung (findet auch nicht gecachte Mitglieder)
+        if len(results) < 10:
+            try:
+                for m in await guild.query_members(query=q, limit=10):
+                    push(m)
+            except (discord.HTTPException, asyncio.TimeoutError):
+                pass
+        return web.json_response({"results": results[:10]})
+
+    async def http_set_user_map(self, request: web.Request):
+        """Einzelperson ein Preset geben/entziehen (nur Discord-Admins)."""
+        member = request["member"]
+        if not member.guild_permissions.administrator:
+            return web.json_response({"error": "Nur Discord-Administratoren"}, status=403)
+        data = await request.json()
+        user_id = str(data.get("user_id", "")).strip()
+        preset = data.get("preset") or None
+        if not user_id.isdigit():
+            return web.json_response({"error": "Ungültige Nutzer-ID"}, status=400)
+        if preset is not None and preset not in PRESETS:
+            return web.json_response({"error": "Unbekanntes Preset"}, status=400)
+        guild = member.guild
+        target = guild.get_member(int(user_id))
+        if target is None and preset is not None:
+            # Beim ENTFERNEN darf der Nutzer den Server bereits verlassen haben
+            try:
+                target = await guild.fetch_member(int(user_id))
+            except (discord.NotFound, discord.HTTPException):
+                return web.json_response({"error": "Nutzer nicht auf diesem Server"}, status=400)
+        if target is not None and target.bot:
+            return web.json_response({"error": "Bots bekommen keinen Panel-Zugriff"}, status=400)
+        async with self.config.guild(guild).user_map() as user_map:
+            if preset:
+                user_map[user_id] = preset
+            else:
+                user_map.pop(user_id, None)
+        label = target.display_name if target else user_id
+        await self._audit(f"🔧 **Einzel-Zugriff** · {label} (`{user_id}`) → {preset or '— entfernt'} · von {member.display_name} (Panel)")
+        return web.json_response({"ok": True})
 
     async def http_set_role_map(self, request: web.Request):
         member = request["member"]

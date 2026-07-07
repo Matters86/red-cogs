@@ -321,6 +321,7 @@
   table.t tr:hover td { background: var(--panel-2); }
   .mono { font-family: var(--font-mono); font-size: 12.5px; }
   .mono.dim { color: var(--muted); }
+  .dim { color: var(--muted); }
   .num { font-family: var(--font-mono); text-align: right; white-space: nowrap; }
 
   .p-name { font-weight: 500; }
@@ -640,8 +641,8 @@
         <p class="hint">Per Kennzeichen in eine Garage setzen. Gespawnte Fahrzeuge werden entfernt.</p>
         <label for="car-plate">Kennzeichen</label>
         <input id="car-plate" placeholder="SA 1234" autocomplete="off">
-        <label for="car-garage">Garage</label>
-        <input id="car-garage" list="garage-list" placeholder="Garage wählen…" autocomplete="off">
+        <label for="car-garage">Garage <span class="dim" style="font-weight:400">(leer = automatisch: letzte bzw. nächste passende)</span></label>
+        <input id="car-garage" list="garage-list" placeholder="leer = automatisch" autocomplete="off">
         <datalist id="garage-list"></datalist>
         <button class="btn block" id="car-btn">Fahrzeug einparken</button>
         <div class="msg" id="car-msg"></div>
@@ -838,6 +839,18 @@
         <p class="hint">Weise Discord-Rollen ein Berechtigungs-Preset zu – gilt sofort für alle Mitglieder der Rolle. Discord-Administratoren haben immer vollen Zugriff. <b style="color:var(--text)">support</b>: TP/Heal/Revive/Inventar/Nachricht · <b style="color:var(--text)">moderator</b>: + Kick/Ban/Notizen/Job · <b style="color:var(--text)">admin</b>: + Geld/Items/Audit · <b style="color:var(--text)">editor</b>: nur Statistiken.</p>
         <div id="roles-wrap"><div class="empty">Lade Rollen…</div></div>
         <div class="msg" id="roles-msg"></div>
+
+        <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
+          <div class="list-head">
+            <h2 style="font-size:15px">Einzelpersonen</h2>
+            <span class="count" id="users-count"></span>
+          </div>
+          <p class="hint">Gib einzelnen Discord-Nutzern ein Preset – unabhängig von ihren Rollen (Rechte addieren sich). Praktisch für Probezeit-Supporter oder Ausnahmen.</p>
+          <input id="user-search" placeholder="Discord-Namen suchen… (min. 2 Zeichen)" autocomplete="off">
+          <div id="user-suggest"></div>
+          <div id="users-wrap" style="margin-top:10px"></div>
+          <div class="msg" id="users-msg"></div>
+        </div>
       </section>
 
       <section class="card">
@@ -902,8 +915,8 @@
     </div>
     <div class="split" style="align-items:flex-end;margin-bottom:12px">
       <div>
-        <label for="veh-garage" style="margin-top:0">Ziel-Garage fürs Einparken</label>
-        <input id="veh-garage" list="garage-list" placeholder="Garage wählen…" autocomplete="off">
+        <label for="veh-garage" style="margin-top:0">Ziel-Garage fürs Einparken <span class="dim" style="font-weight:400">(leer = automatisch)</span></label>
+        <input id="veh-garage" list="garage-list" placeholder="leer = automatisch" autocomplete="off">
       </div>
     </div>
     <div class="modal-body" id="veh-body"><div class="empty">Lade Fahrzeuge…</div></div>
@@ -1333,7 +1346,8 @@
 
   $("car-btn").addEventListener("click", function () {
     var plate = $("car-plate").value.trim().toUpperCase();
-    var garage = $("car-garage").value.trim() || defaultGarage;
+    // Leer = Bridge entscheidet: letzte Garage des Fahrzeugs bzw. nächste passende
+    var garage = $("car-garage").value.trim();
     if (!plate) return setMsg("car-msg", "Kennzeichen angeben.", "err");
     createAction("car_to_garage", plate, { garage: garage }, "car-msg");
   });
@@ -1347,7 +1361,8 @@
       btn.textContent = "Alle Fahrzeuge einparken";
       btn.style.borderColor = "rgba(232,163,61,.5)";
       btn.style.color = "var(--amber)";
-      var fallback = $("car-garage").value.trim() || defaultGarage;
+      // Leer = automatisch (letzte Garage des Fahrzeugs bzw. nächste passende)
+      var fallback = $("car-garage").value.trim();
       createAction("park_all", "*", { garage: fallback }, "car-msg");
       return;
     }
@@ -1403,16 +1418,16 @@
         html += '<option value="' + esc(i.name) + '">' + esc(i.label || i.name) + '</option>';
       });
       $("item-list").innerHTML = html;
-      // Echte Garagen dieses Servers (aus der DB der Bridge) -> keine Phantom-Garagen mehr
+      // Echte Garagen dieses Servers (matters-garage-Registry via Bridge) -> keine Phantom-Garagen
       var g = data.garages || [];
       if (g.length) {
         defaultGarage = g[0];
         var gh = "";
         g.forEach(function (name) { gh += '<option value="' + esc(name) + '"></option>'; });
         $("garage-list").innerHTML = gh;
-        $("car-garage").placeholder = "z. B. " + g[0];
+        $("car-garage").placeholder = "leer = automatisch · z. B. " + g[0];
         var vg = $("veh-garage");
-        if (vg) vg.placeholder = "z. B. " + g[0];
+        if (vg) vg.placeholder = "leer = automatisch · z. B. " + g[0];
       }
     }).catch(function () { catalogLoaded = false; });
   }
@@ -1645,9 +1660,10 @@
     var el = ev.target.closest("[data-vplate]");
     if (!el) return;
     var plate = el.getAttribute("data-vplate");
-    var garage = $("veh-garage").value.trim() || defaultGarage;
+    // Leer = Bridge entscheidet (letzte Garage des Fahrzeugs bzw. nächste passende)
+    var garage = $("veh-garage").value.trim();
     el.disabled = true;
-    el.textContent = "→ " + garage;
+    el.textContent = "→ " + (garage || "automatisch");
     createAction("car_to_garage", plate, { garage: garage }, "players-msg");
   });
 
@@ -2019,10 +2035,22 @@
   function loadRoles() {
     if (!isAdmin) return;
     api("/api/panel/roles").then(function (d) {
-      renderRoles(d.roles || [], d.presets || []);
+      rolePresets = d.presets || [];
+      renderRoles(d.roles || [], rolePresets);
+      renderUsers(d.users || [], rolePresets);
     }).catch(function (e) {
       $("roles-wrap").innerHTML = '<div class="empty">' + errText(e) + '</div>';
     });
+  }
+
+  var rolePresets = [];
+
+  function presetOptions(selected, withEmpty) {
+    var opts = withEmpty ? '<option value="">— kein Zugriff</option>' : '<option value="" selected disabled>Preset wählen…</option>';
+    rolePresets.forEach(function (p) {
+      opts += '<option value="' + esc(p) + '"' + (selected === p ? ' selected' : '') + '>' + esc(PRESET_LABEL[p] || p) + '</option>';
+    });
+    return opts;
   }
 
   var PRESET_LABEL = { support: "Support", moderator: "Moderator", admin: "Admin", editor: "Editor (Statistik)" };
@@ -2060,6 +2088,84 @@
       sel.disabled = false;
       setMsg("roles-msg", errText(e), "err");
       loadRoles();
+    });
+  });
+
+  /* ---------- Einzelpersonen-Zugriffe (nur Discord-Admins) ---------- */
+
+  function renderUsers(users, presets) {
+    $("users-count").textContent = users.length ? users.length + " Nutzer" : "";
+    if (!users.length) {
+      $("users-wrap").innerHTML = '<div class="empty">Noch keine Einzelpersonen-Zugriffe. Oben nach einem Discord-Namen suchen.</div>';
+      return;
+    }
+    var html = '<table class="t"><thead><tr><th>Discord-Nutzer</th><th style="text-align:right">Preset</th></tr></thead><tbody>';
+    users.forEach(function (u) {
+      var name = esc(u.name) + (u.is_admin ? ' <span class="dim">(Discord-Admin – hat ohnehin alles)</span>' : '');
+      if (!u.on_guild) name = '<span class="dim">' + esc(u.name) + '</span>';
+      html += '<tr><td>' + name + '</td>' +
+        '<td style="text-align:right"><select data-user="' + esc(u.id) + '" style="max-width:190px;display:inline-block;width:auto">' +
+        presetOptions(u.preset, true) + '</select></td></tr>';
+    });
+    $("users-wrap").innerHTML = html + '</tbody></table>';
+  }
+
+  function setUserPreset(userId, preset, done) {
+    api("/api/panel/users", {
+      method: "POST",
+      body: JSON.stringify({ user_id: userId, preset: preset || null })
+    }).then(function () {
+      setMsg("users-msg", preset ? "Gespeichert – gilt sofort." : "Zugriff entfernt.", "ok");
+      loadRoles();
+      if (done) done(true);
+    }).catch(function (e) {
+      setMsg("users-msg", errText(e), "err");
+      loadRoles();
+      if (done) done(false);
+    });
+  }
+
+  $("users-wrap").addEventListener("change", function (ev) {
+    var sel = ev.target.closest("select[data-user]");
+    if (!sel) return;
+    sel.disabled = true;
+    setUserPreset(sel.getAttribute("data-user"), sel.value);
+  });
+
+  var userSearchTimer = null;
+  $("user-search").addEventListener("input", function () {
+    var q = this.value.trim();
+    clearTimeout(userSearchTimer);
+    if (q.length < 2) { $("user-suggest").innerHTML = ""; return; }
+    userSearchTimer = setTimeout(function () {
+      api("/api/panel/user_search?q=" + encodeURIComponent(q)).then(function (d) {
+        var res = d.results || [];
+        if (!res.length) {
+          $("user-suggest").innerHTML = '<div class="empty" style="padding:10px">Kein Mitglied gefunden.</div>';
+          return;
+        }
+        var html = "";
+        res.forEach(function (u) {
+          var hint = u.is_admin ? ' <span class="dim">(Discord-Admin – hat ohnehin alles)</span>' : '';
+          html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid var(--line)">' +
+            '<div style="flex:1;min-width:0">' + esc(u.name) + hint + ' <span class="dim">@' + esc(u.username) + '</span></div>' +
+            '<select data-adduser="' + esc(u.id) + '" style="max-width:170px;width:auto;display:inline-block">' + presetOptions(null, false) + '</select>' +
+            '</div>';
+        });
+        $("user-suggest").innerHTML = html;
+      }).catch(function (e) {
+        $("user-suggest").innerHTML = '<div class="empty" style="padding:10px">' + errText(e) + '</div>';
+      });
+    }, 300);
+  });
+
+  $("user-suggest").addEventListener("change", function (ev) {
+    var sel = ev.target.closest("select[data-adduser]");
+    if (!sel || !sel.value) return;
+    sel.disabled = true;
+    setUserPreset(sel.getAttribute("data-adduser"), sel.value, function () {
+      $("user-suggest").innerHTML = "";
+      $("user-search").value = "";
     });
   });
 
