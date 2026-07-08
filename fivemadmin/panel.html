@@ -1420,14 +1420,22 @@
       $("item-list").innerHTML = html;
       // Echte Garagen dieses Servers (matters-garage-Registry via Bridge) -> keine Phantom-Garagen
       var g = data.garages || [];
+      var vg = $("veh-garage");
       if (g.length) {
         defaultGarage = g[0];
         var gh = "";
         g.forEach(function (name) { gh += '<option value="' + esc(name) + '"></option>'; });
         $("garage-list").innerHTML = gh;
         $("car-garage").placeholder = "leer = automatisch · z. B. " + g[0];
-        var vg = $("veh-garage");
         if (vg) vg.placeholder = "leer = automatisch · z. B. " + g[0];
+      } else {
+        // Katalog (noch) leer -- z. B. weil matters-garage beim letzten Bridge-Push
+        // noch nicht bereit war. ap_bridge sendet den Katalog inzwischen alle 5 Minuten
+        // erneut (selbstheilend), Automatik funktioniert trotzdem -- nur die
+        // Namens-Vorschlagsliste fehlt bis zum nächsten Push.
+        $("garage-list").innerHTML = "";
+        $("car-garage").placeholder = "leer = automatisch (Namensliste lädt noch, in ein paar Minuten erneut versuchen)";
+        if (vg) vg.placeholder = "leer = automatisch (Namensliste lädt noch)";
       }
     }).catch(function () { catalogLoaded = false; });
   }
