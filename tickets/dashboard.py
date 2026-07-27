@@ -71,13 +71,22 @@ async def dashboard_handler(cog, request):
     return await _render(cog, request)
 
 
-def _selected_guild(cog, request):
+async def _visible_guilds(cog, request):
+    """Nur die für den eingeloggten User sichtbaren Server (WebCore-Rechtemodell)."""
+    webcore = request.app.get("webcore")
+    if webcore is not None:
+        guilds = await webcore.visible_guilds(request)
+    else:  # Fallback (sollte im Normalbetrieb nicht eintreten)
+        guilds = list(cog.bot.guilds)
+    return sorted(guilds, key=lambda g: g.name.lower())
+
+
+def _selected_guild(guilds, request):
     gid = request.query.get("guild")
-    if gid:
-        g = cog.bot.get_guild(int(gid)) if gid.isdigit() else None
-        if g is not None:
-            return g
-    guilds = sorted(cog.bot.guilds, key=lambda g: g.name.lower())
+    if gid and gid.isdigit():
+        for g in guilds:
+            if g.id == int(gid):
+                return g
     return guilds[0] if guilds else None
 
 
@@ -85,22 +94,33 @@ def _selected_guild(cog, request):
 #  Rendern (GET)
 # --------------------------------------------------------------------------- #
 async def _render(cog, request):
-    guild = _selected_guild(cog, request)
+    guilds = await _visible_guilds(cog, request)
+    guild = _selected_guild(guilds, request)
     if guild is None:
-        return {"title": "Tickets", "content": "<div class='card-x'>Der Bot ist auf keinem Server.</div>"}
+        return {"title": "Tickets", "content": "<div class='card-x'>Keine Server verfügbar.</div>"}
 
     conf = await cog.config.guild(guild).all()
     csrf = request.get("webcore_csrf", "")
 
     # Auswahllisten
     guild_opts = _options(
-        [(g.id, g.name) for g in sorted(cog.bot.guilds, key=lambda g: g.name.lower())],
+        [(g.id, g.name) for g in guilds],
         [guild.id],
     )
     role_items = [(r.id, r.name) for r in sorted(guild.roles, key=lambda r: r.position, reverse=True) if not r.is_default()]
     text_items = [(c.id, f"#{c.name}") for c in guild.text_channels]
     cat_items = [(c.id, c.name) for c in guild.categories]
     forum_items = [(c.id, f"#{c.name}") for c in getattr(guild, "forums", [])]
+
+    # Einzelnes Panel bearbeiten? (eigene, fokussierte Ansicht)
+    pid = request.query.get("panel")
+    if pid:
+        panel = cog._find_panel(conf, pid)
+        if panel is not None:
+            return {
+                "title": "Tickets · Panel bearbeiten",
+                "content": _FORM_STYLE + _render_panel_editor(guild, panel, text_items, csrf),
+            }
 
     flash = ""
     if request.query.get("ok"):
@@ -261,14 +281,15 @@ def _render_panels(guild, conf, role_items, text_items, csrf) -> str:
             f"<td>{_esc(p.get('mode'))}</td>"
             f"<td class='mono'>{n_reasons}</td>"
             f"<td class='mono'>{n_q}</td>"
-            "<td>"
-            f"<form method='post' action='/cogs/tickets' onsubmit=\"return confirm('Panel löschen?')\">"
+            "<td><div style='display:flex;gap:6px;align-items:center'>"
+            f"<a class='btn-accent' style='padding:5px 12px' href='/cogs/tickets?guild={guild.id}&panel={_esc(p.get('id'))}'>Bearbeiten</a>"
+            f"<form method='post' action='/cogs/tickets' style='margin:0' onsubmit=\"return confirm('Panel löschen?')\">"
             f"<input type='hidden' name='csrf_token' value='{_esc(csrf)}'>"
             f"<input type='hidden' name='form' value='panel_delete'>"
             f"<input type='hidden' name='guild' value='{guild.id}'>"
             f"<input type='hidden' name='panel_id' value='{_esc(p.get('id'))}'>"
             "<button class='btn-accent' style='padding:5px 12px'>Löschen</button>"
-            "</form></td>"
+            "</form></div></td>"
             "</tr>"
         )
     table = (
@@ -306,6 +327,71 @@ def _render_panels(guild, conf, role_items, text_items, csrf) -> str:
     """
 
     return f"<div class='card-x'><div class='tk-section-title'>Panels</div>{table}{create}</div>"
+
+
+def _reasons_to_text(reasons) -> str:
+    """Gründe-Liste zurück in das ``Label | Emoji | Beschreibung``-Textformat."""
+    lines = []
+    for r in reasons or []:
+        parts = [r.get("label") or "", r.get("emoji") or "", r.get("description") or ""]
+        while len(parts) > 1 and not parts[-1]:
+            parts.pop()
+        lines.append(" | ".join(parts))
+    return "\n".join(lines)
+
+
+def _questions_to_text(questions) -> str:
+    """Modal-Fragen zurück in das ``Label | Platzhalter | pflicht | lang``-Textformat."""
+    lines = []
+    for q in questions or []:
+        req = "ja" if q.get("required", True) else "nein"
+        style = "lang" if q.get("style") == "long" else "kurz"
+        lines.append(" | ".join([q.get("label") or "", q.get("placeholder") or "", req, style]))
+    return "\n".join(lines)
+
+
+def _render_panel_editor(guild, panel, text_items, csrf) -> str:
+    """Editor für ein bestehendes Panel (Titel, Text, Modus, Kanal, Gründe, Fragen)."""
+    pid = panel.get("id")
+    mode = panel.get("mode", "button")
+    ch_opts = _options(text_items, [panel.get("channel_id")] if panel.get("channel_id") else [])
+    reasons_text = _reasons_to_text(panel.get("reasons") or [])
+    questions_text = _questions_to_text(panel.get("modal_questions") or [])
+
+    def msel(value):
+        return " selected" if mode == value else ""
+
+    return f"""
+    <div class='card-x'>
+      <div class='tk-section-title'>Panel bearbeiten</div>
+      <form class='tk-form' method='post' action='/cogs/tickets'>
+        <input type='hidden' name='csrf_token' value='{csrf}'>
+        <input type='hidden' name='form' value='panel_save'>
+        <input type='hidden' name='guild' value='{guild.id}'>
+        <input type='hidden' name='panel_id' value='{_esc(pid)}'>
+        <div class='row2'>
+          <div><label>Kanal (wo das Panel steht)</label>
+            <select name='channel_id'>{ch_opts}</select></div>
+          <div><label>Modus</label>
+            <select name='mode'>
+              <option value='button'{msel('button')}>Buttons</option>
+              <option value='dropdown'{msel('dropdown')}>Dropdown</option>
+            </select></div>
+        </div>
+        <label>Titel</label><input name='title' value='{_esc(panel.get('title') or '')}'>
+        <label>Beschreibung</label><textarea name='description'>{_esc(panel.get('description') or '')}</textarea>
+        <label>Gründe (eine Zeile je Grund)</label>
+        <textarea name='reasons'>{_esc(reasons_text)}</textarea>
+        <div class='hint'>Format: <code>Label | Emoji | Beschreibung</code> (Emoji/Beschreibung optional). Leer = ein einzelner „Ticket öffnen“-Button.</div>
+        <label>Modal-Fragen (max. 5, eine je Zeile)</label>
+        <textarea name='questions'>{_esc(questions_text)}</textarea>
+        <div class='hint'>Format: <code>Label | Platzhalter | pflicht(ja/nein) | lang(ja/nein)</code>.</div>
+        <div class='tk-spacer'></div>
+        <button class='btn-accent' type='submit'>Speichern &amp; Nachricht aktualisieren</button>
+        <a href='/cogs/tickets?guild={guild.id}' style='margin-left:12px;color:var(--muted)'>Abbrechen</a>
+      </form>
+    </div>
+    """
 
 
 def _render_transcripts(guild, conf) -> str:
@@ -395,7 +481,13 @@ async def _handle_post(cog, request):
     data = await request.post()
     form = data.get("form")
     gid = data.get("guild")
-    guild = cog.bot.get_guild(int(gid)) if gid and gid.isdigit() else None
+    guilds = await _visible_guilds(cog, request)
+    guild = None
+    if gid and gid.isdigit():
+        for g in guilds:
+            if g.id == int(gid):
+                guild = g
+                break
     if guild is None:
         raise web.HTTPFound("/cogs/tickets?ok=Server+nicht+gefunden")
 
@@ -450,6 +542,42 @@ async def _handle_post(cog, request):
         async with gconf.panels() as panels:
             panels.append(panel)
         ok = "Panel+erstellt" if msg_id else "Panel+gespeichert+(Posten+fehlgeschlagen)"
+        raise web.HTTPFound(f"/cogs/tickets?guild={guild.id}&ok={ok}")
+
+    if form == "panel_save":
+        pid = data.get("panel_id")
+        new_channel_id = _one_id(data.get("channel_id"))
+        old_channel_id = None
+        panel_copy = None
+        # 1) Felder im gespeicherten Panel aktualisieren
+        async with gconf.panels() as panels:
+            for p in panels:
+                if p.get("id") == pid:
+                    old_channel_id = p.get("channel_id")
+                    p["title"] = (data.get("title") or "Support-Ticket").strip()
+                    p["description"] = (data.get("description") or "").strip()
+                    p["mode"] = "dropdown" if data.get("mode") == "dropdown" else "button"
+                    p["channel_id"] = new_channel_id
+                    p["reasons"] = _parse_reasons(data.get("reasons", ""))
+                    p["modal_questions"] = _parse_questions(data.get("questions", ""))
+                    panel_copy = dict(p)
+                    break
+        if panel_copy is None:
+            raise web.HTTPFound(f"/cogs/tickets?guild={guild.id}&ok=Panel+nicht+gefunden")
+        # 2) Kanalwechsel: alte Nachricht entfernen und neu posten
+        if old_channel_id and old_channel_id != new_channel_id and panel_copy.get("message_id"):
+            await cog.delete_panel_message(
+                guild, {"channel_id": old_channel_id, "message_id": panel_copy["message_id"]}
+            )
+            panel_copy["message_id"] = None
+        # 3) Nachricht aktualisieren (edit an Ort und Stelle bzw. neu posten)
+        new_msg_id = await cog.update_panel_message(guild, panel_copy)
+        async with gconf.panels() as panels:
+            for p in panels:
+                if p.get("id") == pid:
+                    p["message_id"] = new_msg_id
+                    break
+        ok = "Panel+aktualisiert" if new_msg_id else "Panel+gespeichert+(Nachricht+nicht+aktualisiert)"
         raise web.HTTPFound(f"/cogs/tickets?guild={guild.id}&ok={ok}")
 
     if form == "panel_delete":
@@ -517,7 +645,8 @@ def _parse_questions(raw: str) -> list[dict]:
 #  Transcript ausliefern
 # --------------------------------------------------------------------------- #
 async def _serve_transcript(cog, request):
-    guild = _selected_guild(cog, request)
+    guilds = await _visible_guilds(cog, request)
+    guild = _selected_guild(guilds, request)
     num = request.query.get("transcript")
     if guild is None or not num:
         return web.Response(text="Nicht gefunden.", status=404)

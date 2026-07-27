@@ -130,13 +130,21 @@ async def dashboard_handler(cog, request):
     return await _render(cog, request)
 
 
-def _selected_guild(cog, request):
+async def _visible_guilds(cog, request):
+    webcore = request.app.get("webcore")
+    if webcore is not None:
+        guilds = await webcore.visible_guilds(request)
+    else:  # Fallback (sollte im Normalbetrieb nicht eintreten)
+        guilds = list(cog.bot.guilds)
+    return sorted(guilds, key=lambda g: g.name.lower())
+
+
+def _pick_guild(guilds, request):
     gid = request.query.get("guild")
     if gid and gid.isdigit():
-        g = cog.bot.get_guild(int(gid))
-        if g is not None:
-            return g
-    guilds = sorted(cog.bot.guilds, key=lambda g: g.name.lower())
+        for g in guilds:
+            if g.id == int(gid):
+                return g
     return guilds[0] if guilds else None
 
 
@@ -144,7 +152,8 @@ def _selected_guild(cog, request):
 #  Rendern (GET)
 # --------------------------------------------------------------------------- #
 async def _render(cog, request):
-    guild = _selected_guild(cog, request)
+    guilds = await _visible_guilds(cog, request)
+    guild = _pick_guild(guilds, request)
     if guild is None:
         return {"title": "Guard", "content": "<div class='card-x'>Der Bot ist auf keinem Server.</div>"}
 
@@ -155,7 +164,7 @@ async def _render(cog, request):
     if request.query.get("ok"):
         flash = f"<div class='gd-flash'>{_esc(request.query.get('ok'))}</div>"
 
-    guild_opts = _options([(g.id, g.name) for g in sorted(cog.bot.guilds, key=lambda g: g.name.lower())], guild.id)
+    guild_opts = _options([(g.id, g.name) for g in guilds], guild.id)
     bar = (
         "<div class='gd-bar'>"
         "<form method='get' action='/cogs/guard' class='gd-form' style='margin:0'>"
@@ -423,7 +432,14 @@ async def _handle_post(cog, request):
     data = await request.post()
     form = data.get("form")
     gid = data.get("guild")
-    guild = cog.bot.get_guild(int(gid)) if gid and gid.isdigit() else None
+    # Server-Auswahl serverseitig gegen die sichtbaren Server prüfen.
+    guilds = await _visible_guilds(cog, request)
+    guild = None
+    if gid and gid.isdigit():
+        for g in guilds:
+            if g.id == int(gid):
+                guild = g
+                break
     if guild is None:
         raise web.HTTPFound("/cogs/guard?ok=" + quote("Server nicht gefunden"))
 

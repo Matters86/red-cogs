@@ -92,10 +92,12 @@ def build_signup_view(event: dict, lang: str, *, emojis: dict | None = None) -> 
 
 
 def build_spec_view(event_id: str, class_id: str, game_id: str, lang: str,
-                    emojis: dict | None = None) -> discord.ui.View:
+                    emojis: dict | None = None, default_spec: str | None = None) -> discord.ui.View:
     """Kurzlebige Spec-Auswahl (ephemer), erscheint bei Klassen mit mehreren Specs.
 
     Jede Spec-Option erhält ihr eigenes Spec-Icon (Schlüssel ``"<class>:<spec>"``).
+    ``default_spec`` wählt – falls gesetzt – die passende Option vor (gemerkte
+    Spec); ein Wechsel bleibt möglich.
     """
     view = discord.ui.View(timeout=180)
     options = []
@@ -105,6 +107,8 @@ def build_spec_view(event_id: str, class_id: str, game_id: str, lang: str,
             value=sid,
             description=role_name(lang, role)[:100],
         )
+        if default_spec is not None and sid == default_spec:
+            opt.default = True
         if emojis and emojis.get(f"{class_id}:{sid}"):
             try:
                 opt.emoji = discord.PartialEmoji.from_str(emojis[f"{class_id}:{sid}"])

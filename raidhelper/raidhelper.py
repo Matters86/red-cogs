@@ -10,6 +10,7 @@ import discord
 from discord.ext import tasks
 from redbot.core import Config, commands
 from redbot.core.bot import Red
+from redbot.core.utils.chat_formatting import pagify
 
 from . import games
 from .dashboard import dashboard_handler
@@ -91,6 +92,29 @@ class RaidHelper(commands.Cog):
 
     async def dashboard_page(self, request):
         return await dashboard_handler(self, request)
+
+    # ----------------------------------------------------------------- #
+    #  Datenschutz (Red-API)
+    # ----------------------------------------------------------------- #
+    async def red_delete_data_for_user(self, *, requester, user_id: int):
+        """Entfernt alle personenbezogenen Daten eines Nutzers.
+
+        - Anmeldungen/Status des Nutzers aus allen Events aller Guilds
+        - Teilnahme-Zähler (``stats.attended``) des Nutzers
+        - gemerkte Specs in der Nutzer-Config
+        """
+        uid = str(user_id)
+        for guild_id in await self.config.all_guilds():
+            gconf = self.config.guild_from_id(guild_id)
+            async with gconf.events() as events:
+                for event in events.values():
+                    if isinstance(event, dict) and isinstance(event.get("signups"), dict):
+                        event["signups"].pop(uid, None)
+            async with gconf.stats() as stats:
+                attended = stats.get("attended")
+                if isinstance(attended, dict):
+                    attended.pop(uid, None)
+        await self.config.user_from_id(user_id).clear()
 
     # ----------------------------------------------------------------- #
     #  Helfer
@@ -336,9 +360,13 @@ class RaidHelper(commands.Cog):
             return
         # Vorauswahl der gemerkten Spec? Trotzdem Auswahl anbieten (Wechsel möglich).
         emojis = await self._spec_emojis()
+        remembered = await self.config.user_from_id(interaction.user.id).remember()
+        default_spec = remembered.get(f"{game_id}:{class_id}")
+        if default_spec not in {sid for sid, _label, _role in specs}:
+            default_spec = None
         await interaction.response.send_message(
             t(lang, "pick_spec", cls=games.class_label(game_id, class_id)),
-            view=build_spec_view(event_id, class_id, game_id, lang, emojis),
+            view=build_spec_view(event_id, class_id, game_id, lang, emojis, default_spec=default_spec),
             ephemeral=True,
         )
 
@@ -471,31 +499,45 @@ class RaidHelper(commands.Cog):
             events = conf.get("events") or {}
             if not events:
                 continue
-            changed = False
             for eid, event in list(events.items()):
                 start = event.get("start_ts") or 0
                 # Erinnerungen
+                sent_now: list[int] = []
                 if conf.get("reminders") and not event.get("completed"):
                     for off in REMINDER_OFFSETS:
                         due = start - off * 60
                         if due <= now < start and off not in event.get("reminders_sent", []):
                             await self._send_reminder(guild, event, off, conf)
-                            event.setdefault("reminders_sent", []).append(off)
-                            changed = True
+                            sent_now.append(off)
+                # Nur das Flag der tatsächlich gesendeten Erinnerungen auf dem
+                # FRISCH gelesenen Eintrag setzen – niemals den veralteten
+                # Snapshot komplett zurückschreiben (sonst gehen parallele
+                # Anmeldungen verloren). Reminder bleiben so genau einmalig.
+                if sent_now:
+                    async with self.config.guild(guild).events() as stored:
+                        cur = stored.get(eid)
+                        if isinstance(cur, dict):
+                            rs = cur.setdefault("reminders_sent", [])
+                            for off in sent_now:
+                                if off not in rs:
+                                    rs.append(off)
                 # Abschluss + Statistik + Wiederholung
                 if not event.get("completed") and start and now >= start:
-                    event["completed"] = True
-                    event["closed"] = True
-                    await self._count_attendance(guild, event)
-                    await self.refresh_event_message(guild, event)
-                    changed = True
-                    if event.get("recurrence") in RECURRENCE_DELTA:
-                        await self._spawn_next(guild, event)
-            if changed:
-                async with self.config.guild(guild).events() as stored:
-                    for eid, event in events.items():
-                        if eid in stored:
-                            stored[eid] = event
+                    # Abschluss atomar auf dem frischen Eintrag beanspruchen,
+                    # damit genau einmal abgeschlossen/gezählt wird und die
+                    # aktuellen Anmeldungen erhalten bleiben.
+                    snapshot = None
+                    async with self.config.guild(guild).events() as stored:
+                        cur = stored.get(eid)
+                        if isinstance(cur, dict) and not cur.get("completed"):
+                            cur["completed"] = True
+                            cur["closed"] = True
+                            snapshot = dict(cur)
+                    if snapshot is not None:
+                        await self._count_attendance(guild, snapshot)
+                        await self.refresh_event_message(guild, snapshot)
+                        if snapshot.get("recurrence") in RECURRENCE_DELTA:
+                            await self._spawn_next(guild, snapshot)
 
     @_reminder_tick.before_loop
     async def _before_reminder(self):
@@ -538,7 +580,16 @@ class RaidHelper(commands.Cog):
         delta = RECURRENCE_DELTA.get(event.get("recurrence"))
         if not delta:
             return
-        new_start = int((datetime.fromtimestamp(event["start_ts"], tz=timezone.utc) + delta).timestamp())
+        # In der Guild-Zeitzone rechnen: das Intervall als Kalenderarithmetik auf
+        # die lokale Zeit addieren, damit die Uhrzeit über DST-Wechsel stabil
+        # bleibt (fixe UTC-Addition würde nach Zeitumstellung um 1 h driften).
+        tz_name = await self.config.guild(guild).timezone()
+        try:
+            tz = ZoneInfo(tz_name)
+        except (ZoneInfoNotFoundError, ValueError):
+            tz = timezone.utc
+        local_start = datetime.fromtimestamp(event["start_ts"], tz=tz)
+        new_start = int((local_start + delta).timestamp())
         shift = new_start - event["start_ts"]
         await self.create_event(
             guild,
@@ -615,7 +666,8 @@ class RaidHelper(commands.Cog):
             status = t(lang, "status_closed" if e.get("closed") else "status_open")
             rows.append(t(lang, "list_row", id=e["id"], game=games.game_label(e["game"]),
                           time=f"<t:{e.get('start_ts',0)}:f>", signups=total, status=status))
-        await ctx.send("\n".join(rows[:30]))
+        for page in pagify("\n".join(rows), delimiters=["\n"], page_length=1900):
+            await ctx.send(page)
 
     @raid.command(name="close")
     async def raid_close(self, ctx, event_id: str):
@@ -712,6 +764,8 @@ class RaidHelper(commands.Cog):
         """Anmeldungen als CSV exportieren."""
         guild = ctx.guild
         lang = await self._lang(guild)
+        if not await self._is_manager(ctx.author):
+            return await ctx.send(t(lang, "no_permission"))
         event = await self._get_event(guild, event_id)
         if event is None:
             return await ctx.send(t(lang, "not_found", id=event_id))
@@ -731,6 +785,140 @@ class RaidHelper(commands.Cog):
         buf.seek(0)
         file = discord.File(io.BytesIO(buf.getvalue().encode("utf-8")), filename=f"{event_id}.csv")
         await ctx.send(file=file)
+
+    # ----- Event nachträglich konfigurieren --------------------------- #
+    @raid.command(name="description")
+    async def raid_description(self, ctx, event_id: str, *, text: str = ""):
+        """Beschreibung eines Events setzen (leer lassen = entfernen)."""
+        guild = ctx.guild
+        lang = await self._lang(guild)
+        if not await self._is_manager(ctx.author):
+            return await ctx.send(t(lang, "no_permission"))
+        event = await self._get_event(guild, event_id)
+        if event is None:
+            return await ctx.send(t(lang, "not_found", id=event_id))
+        new_desc = text.strip() or None
+        async with self.config.guild(guild).events() as events:
+            cur = events.get(event_id)
+            if cur is None:
+                return await ctx.send(t(lang, "not_found", id=event_id))
+            cur["description"] = new_desc
+            events[event_id] = cur
+            snapshot = dict(cur)
+        await self.refresh_event_message(guild, snapshot)
+        await ctx.send(t(lang, "description_set" if new_desc else "description_cleared", id=event_id))
+
+    @raid.command(name="deadline")
+    async def raid_deadline(self, ctx, event_id: str, date: str, time: str):
+        """Anmeldeschluss setzen.  Beispiel: [p]raid deadline rh-0001 13.06.2026 19:30"""
+        guild = ctx.guild
+        lang = await self._lang(guild)
+        if not await self._is_manager(ctx.author):
+            return await ctx.send(t(lang, "no_permission"))
+        event = await self._get_event(guild, event_id)
+        if event is None:
+            return await ctx.send(t(lang, "not_found", id=event_id))
+        tz_name = await self.config.guild(guild).timezone()
+        deadline_ts = self._parse_dt(date, time, tz_name)
+        if deadline_ts is None:
+            return await ctx.send(t(lang, "create_bad_date"))
+        async with self.config.guild(guild).events() as events:
+            cur = events.get(event_id)
+            if cur is None:
+                return await ctx.send(t(lang, "not_found", id=event_id))
+            cur["deadline_ts"] = deadline_ts
+            events[event_id] = cur
+            snapshot = dict(cur)
+        await self.refresh_event_message(guild, snapshot)
+        await ctx.send(t(lang, "deadline_set", id=event_id, time=f"<t:{deadline_ts}:f>"))
+
+    @raid.command(name="recurrence")
+    async def raid_recurrence(self, ctx, event_id: str, value: str):
+        """Wiederholung setzen: none, daily, weekly, biweekly."""
+        guild = ctx.guild
+        lang = await self._lang(guild)
+        if not await self._is_manager(ctx.author):
+            return await ctx.send(t(lang, "no_permission"))
+        event = await self._get_event(guild, event_id)
+        if event is None:
+            return await ctx.send(t(lang, "not_found", id=event_id))
+        value = value.lower()
+        if value in ("none", "off", "aus"):
+            new_rec = None
+        elif value in RECURRENCE_DELTA:
+            new_rec = value
+        else:
+            allowed = ", ".join(["none", *RECURRENCE_DELTA])
+            return await ctx.send(t(lang, "recurrence_bad", value=value, allowed=allowed))
+        async with self.config.guild(guild).events() as events:
+            cur = events.get(event_id)
+            if cur is None:
+                return await ctx.send(t(lang, "not_found", id=event_id))
+            cur["recurrence"] = new_rec
+            events[event_id] = cur
+            snapshot = dict(cur)
+        await self.refresh_event_message(guild, snapshot)
+        await ctx.send(
+            t(lang, "recurrence_set", id=event_id, value=new_rec)
+            if new_rec else t(lang, "recurrence_cleared", id=event_id)
+        )
+
+    @raid.command(name="maxsignups")
+    async def raid_maxsignups(self, ctx, event_id: str, count: int):
+        """Maximale Anmeldungen setzen (0 oder weniger = unbegrenzt)."""
+        guild = ctx.guild
+        lang = await self._lang(guild)
+        if not await self._is_manager(ctx.author):
+            return await ctx.send(t(lang, "no_permission"))
+        event = await self._get_event(guild, event_id)
+        if event is None:
+            return await ctx.send(t(lang, "not_found", id=event_id))
+        new_max = count if count > 0 else None
+        async with self.config.guild(guild).events() as events:
+            cur = events.get(event_id)
+            if cur is None:
+                return await ctx.send(t(lang, "not_found", id=event_id))
+            cur["max_signups"] = new_max
+            events[event_id] = cur
+            snapshot = dict(cur)
+        await self.refresh_event_message(guild, snapshot)
+        await ctx.send(
+            t(lang, "maxsignups_set", id=event_id, max=new_max)
+            if new_max else t(lang, "maxsignups_cleared", id=event_id)
+        )
+
+    @raid.command(name="rolelimit")
+    async def raid_rolelimit(self, ctx, event_id: str, role: str, count: int):
+        """Rollen-Limit setzen (0 oder weniger = Limit entfernen)."""
+        guild = ctx.guild
+        lang = await self._lang(guild)
+        if not await self._is_manager(ctx.author):
+            return await ctx.send(t(lang, "no_permission"))
+        event = await self._get_event(guild, event_id)
+        if event is None:
+            return await ctx.send(t(lang, "not_found", id=event_id))
+        game_id = event["game"]
+        role = role.lower()
+        valid_roles = games.role_order(game_id)
+        if role not in valid_roles:
+            return await ctx.send(t(lang, "rolelimit_bad_role", role=role, roles=", ".join(valid_roles)))
+        label = games.role_meta(game_id, role).get("label", role)
+        async with self.config.guild(guild).events() as events:
+            cur = events.get(event_id)
+            if cur is None:
+                return await ctx.send(t(lang, "not_found", id=event_id))
+            limits = cur.setdefault("role_limits", {})
+            if count > 0:
+                limits[role] = count
+            else:
+                limits.pop(role, None)
+            events[event_id] = cur
+            snapshot = dict(cur)
+        await self.refresh_event_message(guild, snapshot)
+        await ctx.send(
+            t(lang, "rolelimit_set", id=event_id, label=label, max=count)
+            if count > 0 else t(lang, "rolelimit_cleared", id=event_id, label=label)
+        )
 
     # ----------------------------------------------------------------- #
     #  Befehle: Einstellungen

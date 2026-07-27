@@ -142,16 +142,26 @@ class AdminPanel(commands.Cog):
         self.item_max = await self.config.item_max() or DEFAULT_ITEM_MAX
 
     def _key_ok(self, provided: str) -> bool:
-        """Konstanter-Zeit-Vergleich gegen Timing-Angriffe."""
+        """Konstanter-Zeit-Vergleich gegen Timing-Angriffe.
+        Solange kein echter Key gesetzt ist (Default 'CHANGE_ME' oder leer),
+        wird JEDER Zugriff abgelehnt statt den Platzhalter zu akzeptieren."""
+        if not self.api_key or self.api_key == "CHANGE_ME":
+            return False
         return hmac.compare_digest(str(provided or ""), self.api_key)
 
-    def cog_unload(self):
+    async def cog_unload(self):
         if self._web_task:
             self._web_task.cancel()
         if getattr(self, "_backup_task", None):
             self._backup_task.cancel()
+        # Runner/Site sauber stoppen und DARAUF WARTEN, damit der Port bei
+        # einem [p]reload wirklich frei ist, bevor die neue Instanz bindet.
         if self.runner:
-            self.bot.loop.create_task(self.runner.cleanup())
+            try:
+                await self.runner.cleanup()
+            except Exception as e:
+                log.warning(f"AdminPanel Webserver-Cleanup fehlgeschlagen: {e}")
+            self.runner = None
 
     async def _backup_loop(self):
         """Sichert die DB alle 24h automatisch."""
@@ -160,7 +170,7 @@ class AdminPanel(commands.Cog):
         while True:
             try:
                 await asyncio.sleep(24 * 3600)
-                path, count = db.backup_db()
+                path, count = await asyncio.to_thread(db.backup_db)
                 log.info(f"AdminPanel DB-Backup erstellt: {path} ({count} Backups vorhanden)")
             except asyncio.CancelledError:
                 break
@@ -207,7 +217,7 @@ class AdminPanel(commands.Cog):
     async def _start_webserver(self):
         await self.bot.wait_until_ready()
         await self._resolve_settings()
-        app = web.Application(middlewares=[self._auth_middleware])
+        app = web.Application(middlewares=[self._security_headers, self._auth_middleware])
         # Panel (Browser)
         app.router.add_get("/", self.http_index)
         # PWA (Handy-App)
@@ -241,7 +251,20 @@ class AdminPanel(commands.Cog):
         self.runner = web.AppRunner(app)
         await self.runner.setup()
         site = web.TCPSite(self.runner, "0.0.0.0", self.web_port)
-        await site.start()
+        # Bei [p]reload kann der Port kurz noch vom alten Prozess belegt sein –
+        # ein paar Versuche mit kurzem Warten, statt sofort aufzugeben.
+        for attempt in range(3):
+            try:
+                await site.start()
+                break
+            except OSError as e:
+                if attempt == 2:
+                    log.error(f"AdminPanel Webserver konnte Port {self.web_port} nicht binden: {e}")
+                    await self.runner.cleanup()
+                    self.runner = None
+                    return
+                log.warning(f"Port {self.web_port} noch belegt ({e}) – neuer Versuch in 2s…")
+                await asyncio.sleep(2)
         log.info(f"AdminPanel Webserver läuft auf Port {self.web_port}")
         if self.api_key == "CHANGE_ME":
             log.warning(
@@ -253,10 +276,15 @@ class AdminPanel(commands.Cog):
     async def _auth_middleware(self, request: web.Request, handler):
         path = request.path
         if path.startswith("/api/bridge/") or path.startswith("/api/actions/"):
+            # Kein echter API-Key gesetzt -> Bridge-Kanal komplett dicht (503),
+            # statt den Platzhalter 'CHANGE_ME' als gültig durchzuwinken.
+            if not self.api_key or self.api_key == "CHANGE_ME":
+                return web.json_response(
+                    {"error": "bridge disabled: no API key configured"}, status=503)
             if not self._key_ok(request.headers.get("X-API-Key")):
                 return web.json_response({"error": "unauthorized"}, status=401)
         elif path.startswith("/api/panel/"):
-            session = db.get_session(request.headers.get("X-Session", ""))
+            session = await asyncio.to_thread(db.get_session, request.headers.get("X-Session", ""))
             if not session:
                 return web.json_response({"error": "unauthorized"}, status=401)
             member, perms = await self.session_permissions(session)
@@ -266,6 +294,30 @@ class AdminPanel(commands.Cog):
             request["member"] = member
             request["perms"] = perms
         return await handler(request)
+
+    @web.middleware
+    async def _security_headers(self, request: web.Request, handler):
+        """Defensive HTTP-Header auf allen Antworten (Clickjacking / MIME-Sniffing)."""
+        def _apply(resp):
+            resp.headers.setdefault("X-Frame-Options", "DENY")
+            resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+            resp.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+            return resp
+        try:
+            return _apply(await handler(request))
+        except web.HTTPException as exc:
+            _apply(exc)
+            raise
+
+    async def _read_json(self, request: web.Request):
+        """Liest den JSON-Body oder bricht mit HTTP 400 ab (statt 500 bei kaputtem JSON)."""
+        try:
+            return await request.json()
+        except (json.JSONDecodeError, ValueError):
+            raise web.HTTPBadRequest(
+                text=json.dumps({"error": "ungültiges JSON"}),
+                content_type="application/json",
+            )
 
     # ---------------- Browser-Endpoints ----------------
 
@@ -355,14 +407,14 @@ class AdminPanel(commands.Cog):
                     continue
             perms = await self.member_permissions(member)
             if perms:
-                token = db.create_login_token(str(user_id), str(guild.id), member.display_name)
+                token = await asyncio.to_thread(db.create_login_token, str(user_id), str(guild.id), member.display_name)
                 return web.HTTPFound(f"/?login={token}")
 
         return web.HTTPFound("/?oauth=noperm")
 
     async def http_login(self, request: web.Request):
-        data = await request.json()
-        session = db.redeem_login_token(str(data.get("token", "")))
+        data = await self._read_json(request)
+        session = await asyncio.to_thread(db.redeem_login_token, str(data.get("token", "")))
         if not session:
             return web.json_response({"error": "invalid_token"}, status=401)
         member, perms = await self.session_permissions(session)
@@ -376,11 +428,12 @@ class AdminPanel(commands.Cog):
 
     async def http_panel_state(self, request: web.Request):
         perms = request["perms"]
-        state = db.get_server_state()
+        state = await asyncio.to_thread(db.get_server_state)
+        recent_actions = await asyncio.to_thread(db.get_recent_actions)
         payload = {
             "permissions": sorted(perms),
             "name": request["session"]["display_name"],
-            "actions": db.get_recent_actions(),
+            "actions": recent_actions,
             "server": None,
             "limits": {"money": self.money_max, "item": self.item_max},
             "locked": await self.config.locked(),
@@ -411,11 +464,11 @@ class AdminPanel(commands.Cog):
                 server["resources_not_running"] = state.get("resources_not_running", [])
             payload["server"] = server
         if "view_logs" in perms:
-            payload["events"] = db.get_recent_events(60)
+            payload["events"] = await asyncio.to_thread(db.get_recent_events, 60)
         return web.json_response(payload)
 
     async def http_panel_action(self, request: web.Request):
-        data = await request.json()
+        data = await self._read_json(request)
         action_type = data.get("action_type")
         target = str(data.get("target", "")).strip()
         params = data.get("params") or {}
@@ -432,22 +485,38 @@ class AdminPanel(commands.Cog):
         if action_type != "diag" and await self.config.locked():
             return web.json_response({"error": "🔒 Panel im Lockdown – Aktionen gesperrt"}, status=423)
 
-        # Sicherheits-Limits: schützen vor kompromittierten Sessions / Vertippern
+        # Wert-Validierung + Sicherheits-Limits – analog zu den Discord-Befehlen.
+        # Schützt vor kompromittierten Sessions / manipulierten Requests / Vertippern.
         if action_type == "money":
-            amount = int(params.get("amount") or 0)
+            try:
+                amount = int(params.get("amount"))
+            except (TypeError, ValueError):
+                return web.json_response({"error": "amount muss eine Zahl sein"}, status=400)
+            if params.get("op") not in ("add", "remove"):
+                return web.json_response({"error": "op muss add oder remove sein"}, status=400)
+            if params.get("account") not in ("cash", "bank"):
+                return web.json_response({"error": "account muss cash oder bank sein"}, status=400)
+            if amount <= 0:
+                return web.json_response({"error": "amount muss größer als 0 sein"}, status=400)
             if amount > self.money_max:
                 return web.json_response(
                     {"error": f"Limit überschritten: max. {self.money_max:,} $ pro Aktion".replace(",", ".")},
                     status=400)
         if action_type in ("give_item", "remove_item"):
-            count = int(params.get("count") or 0)
+            try:
+                count = int(params.get("count"))
+            except (TypeError, ValueError):
+                return web.json_response({"error": "count muss eine Zahl sein"}, status=400)
+            if count < 1:
+                return web.json_response({"error": "count muss mindestens 1 sein"}, status=400)
             if count > self.item_max:
                 return web.json_response(
                     {"error": f"Limit überschritten: max. {self.item_max} Stück pro Aktion"},
                     status=400)
 
         member = request["member"]
-        action_id = db.add_action(
+        action_id = await asyncio.to_thread(
+            db.add_action,
             action_type, target, json.dumps(params),
             f"web:{member.display_name}",
         )
@@ -457,23 +526,24 @@ class AdminPanel(commands.Cog):
 
     async def http_bridge_sync(self, request: web.Request):
         """Ein Roundtrip: FiveM liefert Server-State + Events, bekommt offene Actions + Ban-Liste."""
-        data = await request.json()
+        data = await self._read_json(request)
         state = data.get("state")
         if isinstance(state, dict):
-            db.save_server_state(state)
+            await asyncio.to_thread(db.save_server_state, state)
         events = data.get("events")
         if isinstance(events, list) and events:
-            db.add_events(events[:100])
+            await asyncio.to_thread(db.add_events, events[:100])
             await self._dispatch_alerts(events[:100])
         # Bans an die Bridge, damit sie beim Connect enforced werden können
+        active_bans = await asyncio.to_thread(db.get_active_bans)
         bans = [
             {"license": b.get("license"), "discord": b.get("discord"),
              "citizenid": b.get("citizenid"), "reason": b.get("reason"),
              "expires_at": b.get("expires_at")}
-            for b in db.get_active_bans()
+            for b in active_bans
         ]
         # Im Lockdown werden keine offenen Aktionen ausgeliefert (Not-Aus).
-        actions = [] if await self.config.locked() else db.get_pending_actions()
+        actions = [] if await self.config.locked() else await asyncio.to_thread(db.get_pending_actions)
         return web.json_response({"actions": actions, "bans": bans})
 
     async def _dispatch_alerts(self, events: list):
@@ -506,52 +576,57 @@ class AdminPanel(commands.Cog):
         cid = (request.query.get("cid") or "").strip()
         if not cid:
             return web.json_response({"error": "cid fehlt"}, status=400)
+        actions = await asyncio.to_thread(db.get_actions_for, cid)
+        notes = await asyncio.to_thread(db.get_notes, cid)
+        ban = await asyncio.to_thread(db.get_ban, cid)
         payload = {
-            "actions": db.get_actions_for(cid),
+            "actions": actions,
             "events": [],
-            "notes": db.get_notes(cid),
+            "notes": notes,
             "can_note": "notes" in request["perms"],
             "can_ban": "ban" in request["perms"],
-            "ban": db.get_ban(cid),
+            "ban": ban,
         }
         if "view_logs" in request["perms"]:
-            payload["events"] = db.get_events_for(cid)
+            payload["events"] = await asyncio.to_thread(db.get_events_for, cid)
         return web.json_response(payload)
 
     async def http_add_note(self, request: web.Request):
         if "notes" not in request["perms"]:
             return web.json_response({"error": "keine Berechtigung"}, status=403)
-        data = await request.json()
+        data = await self._read_json(request)
         cid = str(data.get("cid", "")).strip()
         kind = data.get("kind")
         text = str(data.get("text", "")).strip()
         if not cid or kind not in ("note", "warn") or not text:
             return web.json_response({"error": "cid/kind/text fehlt"}, status=400)
-        note_id = db.add_note(cid, kind, text[:1000], f"web:{request['member'].display_name}")
+        note_id = await asyncio.to_thread(db.add_note, cid, kind, text[:1000], f"web:{request['member'].display_name}")
         return web.json_response({"ok": True, "id": note_id})
 
     async def http_delete_note(self, request: web.Request):
         if "notes" not in request["perms"]:
             return web.json_response({"error": "keine Berechtigung"}, status=403)
-        data = await request.json()
+        data = await self._read_json(request)
         note_id = data.get("id")
         if not isinstance(note_id, int):
             return web.json_response({"error": "id fehlt"}, status=400)
-        return web.json_response({"ok": db.delete_note(note_id)})
+        ok = await asyncio.to_thread(db.delete_note, note_id)
+        return web.json_response({"ok": ok})
 
     async def http_get_bans(self, request: web.Request):
         if "ban" not in request["perms"]:
             return web.json_response({"error": "keine Berechtigung"}, status=403)
-        return web.json_response({"bans": db.get_active_bans()})
+        bans = await asyncio.to_thread(db.get_active_bans)
+        return web.json_response({"bans": bans})
 
     async def http_unban(self, request: web.Request):
         if "ban" not in request["perms"]:
             return web.json_response({"error": "keine Berechtigung"}, status=403)
-        data = await request.json()
+        data = await self._read_json(request)
         cid = str(data.get("cid", "")).strip()
         if not cid:
             return web.json_response({"error": "cid fehlt"}, status=400)
-        removed = db.remove_ban(cid)
+        removed = await asyncio.to_thread(db.remove_ban, cid)
         if removed:
             await self._audit(f"🔓 **Unban** · `{cid}` · von {request['member'].display_name}")
         return web.json_response({"ok": removed})
@@ -559,9 +634,11 @@ class AdminPanel(commands.Cog):
     async def http_audit(self, request: web.Request):
         if "audit" not in request["perms"]:
             return web.json_response({"error": "keine Berechtigung"}, status=403)
+        audit_actions = await asyncio.to_thread(db.get_actions_audit)
+        bans = await asyncio.to_thread(db.get_active_bans)
         return web.json_response({
-            "actions": db.get_actions_audit(),
-            "bans": db.get_active_bans(),
+            "actions": audit_actions,
+            "bans": bans,
         })
 
     # -------- Rollen-Verwaltung (NUR Discord-Administratoren) --------
@@ -641,7 +718,7 @@ class AdminPanel(commands.Cog):
         member = request["member"]
         if not member.guild_permissions.administrator:
             return web.json_response({"error": "Nur Discord-Administratoren"}, status=403)
-        data = await request.json()
+        data = await self._read_json(request)
         user_id = str(data.get("user_id", "")).strip()
         preset = data.get("preset") or None
         if not user_id.isdigit():
@@ -671,7 +748,7 @@ class AdminPanel(commands.Cog):
         member = request["member"]
         if not member.guild_permissions.administrator:
             return web.json_response({"error": "Nur Discord-Administratoren"}, status=403)
-        data = await request.json()
+        data = await self._read_json(request)
         role_id = str(data.get("role_id", "")).strip()
         preset = data.get("preset") or None
         if preset is not None and preset not in PRESETS:
@@ -689,11 +766,11 @@ class AdminPanel(commands.Cog):
         return web.json_response({"ok": True})
 
     async def http_bridge_catalog(self, request: web.Request):
-        data = await request.json()
+        data = await self._read_json(request)
         items = data.get("items")
         garages = data.get("garages")
         if isinstance(items, list):
-            db.save_catalog({
+            await asyncio.to_thread(db.save_catalog, {
                 "items": items[:5000],
                 "garages": garages[:100] if isinstance(garages, list) else [],
             })
@@ -702,31 +779,32 @@ class AdminPanel(commands.Cog):
     async def http_panel_catalog(self, request: web.Request):
         if "items" not in request["perms"] and "view_inventory" not in request["perms"]:
             return web.json_response({"error": "keine Berechtigung"}, status=403)
-        return web.json_response(db.get_catalog() or {"items": []})
+        catalog = await asyncio.to_thread(db.get_catalog)
+        return web.json_response(catalog or {"items": []})
 
     async def http_bridge_result(self, request: web.Request):
-        data = await request.json()
+        data = await self._read_json(request)
         action_id = data.get("id")
         if not action_id:
             return web.json_response({"error": "id fehlt"}, status=400)
         status = data.get("status", "failed")
         result = data.get("result", "")
-        db.mark_action_result(action_id, status, result)
+        await asyncio.to_thread(db.mark_action_result, action_id, status, result)
 
         # Name -> CID: aufgelöstes Target übernehmen (wichtig für Akte, Audit und Bans)
         resolved = data.get("resolved_target")
         if resolved:
-            db.update_action_target(action_id, str(resolved), data.get("resolved_name"))
+            await asyncio.to_thread(db.update_action_target, action_id, str(resolved), data.get("resolved_name"))
 
-        action = db.get_action(action_id)
+        action = await asyncio.to_thread(db.get_action, action_id)
         if action:
             if action["action_type"] == "ban" and status == "done":
-                self._finalize_ban(action, result)
+                await self._finalize_ban(action, result)
             if action["action_type"] in SENSITIVE_ACTIONS:
                 await self._audit_action(action)
         return web.json_response({"ok": True})
 
-    def _finalize_ban(self, action, result):
+    async def _finalize_ban(self, action, result):
         try:
             info = json.loads(result or "{}")
         except (ValueError, TypeError):
@@ -739,7 +817,8 @@ class AdminPanel(commands.Cog):
         expires_at = None
         if hours and int(hours) > 0:
             expires_at = time.time() + int(hours) * 3600
-        db.add_ban(
+        await asyncio.to_thread(
+            db.add_ban,
             citizenid=action["target"],
             license=info.get("license"),
             discord=info.get("discord"),
@@ -812,7 +891,8 @@ class AdminPanel(commands.Cog):
         if not perms:
             return await ctx.send("❌ Du hast keine Panel-Berechtigung. "
                                   "Ein Admin kann deine Rolle mit `!ap roles set` freischalten.")
-        token = db.create_login_token(
+        token = await asyncio.to_thread(
+            db.create_login_token,
             str(ctx.author.id), str(ctx.guild.id), ctx.author.display_name
         )
         if self.public_url:
@@ -872,9 +952,9 @@ class AdminPanel(commands.Cog):
         """Teleportiert Spieler A zu Spieler B. Beispiel: !ap tp ABC123 XYZ789"""
         if not await self._require(ctx, "teleport"):
             return
-        db.add_action("teleport", spieler,
-                      json.dumps({"to_spieler": target_spieler}),
-                      f"discord:{ctx.author.display_name}")
+        await asyncio.to_thread(db.add_action, "teleport", spieler,
+                                json.dumps({"to_spieler": target_spieler}),
+                                f"discord:{ctx.author.display_name}")
         await ctx.send(f"✅ Teleport `{spieler}` → `{target_spieler}` angelegt.")
 
     @ap.command(name="heal")
@@ -882,7 +962,7 @@ class AdminPanel(commands.Cog):
         """Heilt einen Spieler vollständig."""
         if not await self._require(ctx, "heal"):
             return
-        db.add_action("heal", spieler, None, f"discord:{ctx.author.display_name}")
+        await asyncio.to_thread(db.add_action, "heal", spieler, None, f"discord:{ctx.author.display_name}")
         await ctx.send(f"✅ Heal für `{spieler}` angelegt.")
 
     @ap.command(name="revive")
@@ -890,7 +970,7 @@ class AdminPanel(commands.Cog):
         """Belebt einen Spieler wieder."""
         if not await self._require(ctx, "revive"):
             return
-        db.add_action("revive", spieler, None, f"discord:{ctx.author.display_name}")
+        await asyncio.to_thread(db.add_action, "revive", spieler, None, f"discord:{ctx.author.display_name}")
         await ctx.send(f"✅ Revive für `{spieler}` angelegt.")
 
     @ap.command(name="kick")
@@ -898,8 +978,8 @@ class AdminPanel(commands.Cog):
         """Kickt einen Spieler. Beispiel: !ap kick ABC123 Beleidigung"""
         if not await self._require(ctx, "kick"):
             return
-        db.add_action("kick", spieler, json.dumps({"reason": reason}),
-                      f"discord:{ctx.author.display_name}")
+        await asyncio.to_thread(db.add_action, "kick", spieler, json.dumps({"reason": reason}),
+                                f"discord:{ctx.author.display_name}")
         await ctx.send(f"✅ Kick für `{spieler}` angelegt. Grund: {reason}")
 
     @ap.command(name="announce")
@@ -907,8 +987,8 @@ class AdminPanel(commands.Cog):
         """Sendet eine Server-Ansage an alle Spieler."""
         if not await self._require(ctx, "announce"):
             return
-        db.add_action("announce", "*", json.dumps({"message": message}),
-                      f"discord:{ctx.author.display_name}")
+        await asyncio.to_thread(db.add_action, "announce", "*", json.dumps({"message": message}),
+                                f"discord:{ctx.author.display_name}")
         await ctx.send("✅ Ansage angelegt.")
 
     @ap.command(name="car2garage")
@@ -916,8 +996,8 @@ class AdminPanel(commands.Cog):
         """Packt ein Fahrzeug per Kennzeichen in eine Garage."""
         if not await self._require(ctx, "car_to_garage"):
             return
-        db.add_action("car_to_garage", plate, json.dumps({"garage": garage}),
-                      f"discord:{ctx.author.display_name}")
+        await asyncio.to_thread(db.add_action, "car_to_garage", plate, json.dumps({"garage": garage}),
+                                f"discord:{ctx.author.display_name}")
         await ctx.send(f"✅ `{plate}` → Garage `{garage}` angelegt.")
 
     @ap.command(name="money")
@@ -931,9 +1011,9 @@ class AdminPanel(commands.Cog):
             return await ctx.send("Nutzung: `!ap money <spieler> <add|remove> <betrag> [cash|bank]`")
         if amount > self.money_max:
             return await ctx.send(f"❌ Limit: max. {self.money_max:,} $ pro Aktion.".replace(",", "."))
-        db.add_action("money", spieler,
-                      json.dumps({"op": op, "amount": amount, "account": account}),
-                      f"discord:{ctx.author.display_name}")
+        await asyncio.to_thread(db.add_action, "money", spieler,
+                                json.dumps({"op": op, "amount": amount, "account": account}),
+                                f"discord:{ctx.author.display_name}")
         await ctx.send(f"✅ {op} {amount}$ ({account}) für `{spieler}` angelegt.")
 
     @ap.command(name="giveitem")
@@ -945,9 +1025,9 @@ class AdminPanel(commands.Cog):
             return await ctx.send("Anzahl muss mindestens 1 sein.")
         if count > self.item_max:
             return await ctx.send(f"❌ Limit: max. {self.item_max} Stück pro Aktion.")
-        db.add_action("give_item", spieler,
-                      json.dumps({"item": item, "count": count}),
-                      f"discord:{ctx.author.display_name}")
+        await asyncio.to_thread(db.add_action, "give_item", spieler,
+                                json.dumps({"item": item, "count": count}),
+                                f"discord:{ctx.author.display_name}")
         await ctx.send(f"✅ `{item}` ×{count} für `{spieler}` angelegt.")
 
     @ap.command(name="removeitem")
@@ -959,9 +1039,9 @@ class AdminPanel(commands.Cog):
             return await ctx.send("Anzahl muss mindestens 1 sein.")
         if count > self.item_max:
             return await ctx.send(f"❌ Limit: max. {self.item_max} Stück pro Aktion.")
-        db.add_action("remove_item", spieler,
-                      json.dumps({"item": item, "count": count}),
-                      f"discord:{ctx.author.display_name}")
+        await asyncio.to_thread(db.add_action, "remove_item", spieler,
+                                json.dumps({"item": item, "count": count}),
+                                f"discord:{ctx.author.display_name}")
         await ctx.send(f"✅ Entfernen von `{item}` ×{count} bei `{spieler}` angelegt.")
 
     @ap.command(name="inv")
@@ -969,14 +1049,14 @@ class AdminPanel(commands.Cog):
         """Zeigt das Inventar eines Spielers. Beispiel: !ap inv ABC123"""
         if not await self._require(ctx, "view_inventory"):
             return
-        action_id = db.add_action("get_inventory", spieler, None,
-                                  f"discord:{ctx.author.display_name}")
+        action_id = await asyncio.to_thread(db.add_action, "get_inventory", spieler, None,
+                                            f"discord:{ctx.author.display_name}")
         msg = await ctx.send(f"⏳ Frage Inventar von `{spieler}` ab…")
 
         import asyncio
         for _ in range(12):  # max. ~12 Sekunden auf die Bridge warten
             await asyncio.sleep(1)
-            action = db.get_action(action_id)
+            action = await asyncio.to_thread(db.get_action, action_id)
             if not action or action["status"] == "pending":
                 continue
             if action["status"] == "failed":
@@ -1001,9 +1081,9 @@ class AdminPanel(commands.Cog):
         """Teleportiert einen Spieler zu Koordinaten. Beispiel: !ap tpc ABC123 298.6 -584.5 43.3"""
         if not await self._require(ctx, "teleport"):
             return
-        db.add_action("teleport_coords", spieler,
-                      json.dumps({"x": x, "y": y, "z": z}),
-                      f"discord:{ctx.author.display_name}")
+        await asyncio.to_thread(db.add_action, "teleport_coords", spieler,
+                                json.dumps({"x": x, "y": y, "z": z}),
+                                f"discord:{ctx.author.display_name}")
         await ctx.send(f"✅ Teleport `{spieler}` → `{x}, {y}, {z}` angelegt.")
 
     @ap.command(name="cars")
@@ -1011,14 +1091,14 @@ class AdminPanel(commands.Cog):
         """Zeigt die Fahrzeuge eines Spielers (auch offline). Beispiel: !ap cars ABC123"""
         if not await self._require(ctx, "car_to_garage"):
             return
-        action_id = db.add_action("get_vehicles", spieler, None,
-                                  f"discord:{ctx.author.display_name}")
+        action_id = await asyncio.to_thread(db.add_action, "get_vehicles", spieler, None,
+                                            f"discord:{ctx.author.display_name}")
         msg = await ctx.send(f"⏳ Frage Fahrzeuge von `{spieler}` ab…")
 
         import asyncio
         for _ in range(12):
             await asyncio.sleep(1)
-            action = db.get_action(action_id)
+            action = await asyncio.to_thread(db.get_action, action_id)
             if not action or action["status"] == "pending":
                 continue
             if action["status"] == "failed":
@@ -1059,13 +1139,13 @@ class AdminPanel(commands.Cog):
         """Sucht Spieler in der DB (Name oder CID, auch offline). Beispiel: !ap find Kevin"""
         if not await self._require(ctx, "view_players"):
             return
-        action_id = db.add_action("search_player", query, None,
-                                  f"discord:{ctx.author.display_name}")
+        action_id = await asyncio.to_thread(db.add_action, "search_player", query, None,
+                                            f"discord:{ctx.author.display_name}")
         msg = await ctx.send(f"⏳ Suche nach `{query}`…")
         import asyncio
         for _ in range(12):
             await asyncio.sleep(1)
-            action = db.get_action(action_id)
+            action = await asyncio.to_thread(db.get_action, action_id)
             if not action or action["status"] == "pending":
                 continue
             if action["status"] == "failed":
@@ -1090,8 +1170,8 @@ class AdminPanel(commands.Cog):
         """Setzt den Job eines Online-Spielers. Beispiel: !ap setjob Kevin police 2"""
         if not await self._require(ctx, "setjob"):
             return
-        db.add_action("set_job", spieler, json.dumps({"job": job, "grade": grade}),
-                      f"discord:{ctx.author.display_name}")
+        await asyncio.to_thread(db.add_action, "set_job", spieler, json.dumps({"job": job, "grade": grade}),
+                                f"discord:{ctx.author.display_name}")
         await ctx.send(f"✅ Job `{job}` (Grade {grade}) für `{spieler}` angelegt.")
 
     @ap.command(name="setgang")
@@ -1099,8 +1179,8 @@ class AdminPanel(commands.Cog):
         """Setzt die Gang eines Online-Spielers. Beispiel: !ap setgang Kevin ballas 1"""
         if not await self._require(ctx, "setjob"):
             return
-        db.add_action("set_gang", spieler, json.dumps({"gang": gang, "grade": grade}),
-                      f"discord:{ctx.author.display_name}")
+        await asyncio.to_thread(db.add_action, "set_gang", spieler, json.dumps({"gang": gang, "grade": grade}),
+                                f"discord:{ctx.author.display_name}")
         await ctx.send(f"✅ Gang `{gang}` (Grade {grade}) für `{spieler}` angelegt.")
 
     @ap.command(name="msg")
@@ -1108,8 +1188,8 @@ class AdminPanel(commands.Cog):
         """Schickt einem Spieler eine private Support-Nachricht. Beispiel: !ap msg Kevin Bitte melde dich im Support"""
         if not await self._require(ctx, "message"):
             return
-        db.add_action("notify", spieler, json.dumps({"message": message}),
-                      f"discord:{ctx.author.display_name}")
+        await asyncio.to_thread(db.add_action, "notify", spieler, json.dumps({"message": message}),
+                                f"discord:{ctx.author.display_name}")
         await ctx.send(f"✅ Nachricht an `{spieler}` angelegt.")
 
     @ap.command(name="note")
@@ -1117,7 +1197,7 @@ class AdminPanel(commands.Cog):
         """Legt eine Team-Notiz zu einem Spieler an."""
         if not await self._require(ctx, "notes"):
             return
-        db.add_note(citizenid, "note", text[:1000], f"discord:{ctx.author.display_name}")
+        await asyncio.to_thread(db.add_note, citizenid, "note", text[:1000], f"discord:{ctx.author.display_name}")
         await ctx.send(f"📝 Notiz für `{citizenid}` gespeichert.")
 
     @ap.command(name="warn")
@@ -1125,8 +1205,9 @@ class AdminPanel(commands.Cog):
         """Spricht eine Verwarnung aus (Team-weit sichtbar in der Akte)."""
         if not await self._require(ctx, "notes"):
             return
-        db.add_note(citizenid, "warn", text[:1000], f"discord:{ctx.author.display_name}")
-        warns = len([n for n in db.get_notes(citizenid) if n["kind"] == "warn"])
+        await asyncio.to_thread(db.add_note, citizenid, "warn", text[:1000], f"discord:{ctx.author.display_name}")
+        notes = await asyncio.to_thread(db.get_notes, citizenid)
+        warns = len([n for n in notes if n["kind"] == "warn"])
         await ctx.send(f"⚠️ Verwarnung für `{citizenid}` gespeichert – das ist Verwarnung **Nr. {warns}**.")
 
     @ap.command(name="ban")
@@ -1141,8 +1222,8 @@ class AdminPanel(commands.Cog):
                 hours = int(duration)
             except ValueError:
                 return await ctx.send("Dauer muss eine Stundenzahl oder `perm` sein.")
-        db.add_action("ban", spieler, json.dumps({"hours": hours, "reason": reason}),
-                      f"discord:{ctx.author.display_name}")
+        await asyncio.to_thread(db.add_action, "ban", spieler, json.dumps({"hours": hours, "reason": reason}),
+                                f"discord:{ctx.author.display_name}")
         dur_txt = "permanent" if hours == 0 else f"{hours} Stunden"
         await ctx.send(f"🔨 Ban für `{spieler}` ({dur_txt}) angelegt – wird beim nächsten Sync ausgeführt.")
 
@@ -1151,7 +1232,7 @@ class AdminPanel(commands.Cog):
         """Hebt einen Ban auf. Beispiel: !ap unban ABC123"""
         if not await self._require(ctx, "ban"):
             return
-        if db.remove_ban(citizenid):
+        if await asyncio.to_thread(db.remove_ban, citizenid):
             await self._audit(f"🔓 **Unban** · `{citizenid}` · von {ctx.author.display_name}")
             await ctx.send(f"🔓 Ban für `{citizenid}` aufgehoben.")
         else:
@@ -1162,7 +1243,7 @@ class AdminPanel(commands.Cog):
         """Zeigt alle aktiven Bans."""
         if not await self._require(ctx, "ban"):
             return
-        bans = db.get_active_bans()
+        bans = await asyncio.to_thread(db.get_active_bans)
         if not bans:
             return await ctx.send("Keine aktiven Bans.")
         import datetime
@@ -1196,8 +1277,8 @@ class AdminPanel(commands.Cog):
         """Parkt ALLE gespawnten Spieler-Fahrzeuge in die nächste Garage ein. Besetzte Fahrzeuge bleiben stehen."""
         if not await self._require(ctx, "park_all"):
             return
-        db.add_action("park_all", "*", json.dumps({"garage": fallback_garage}),
-                      f"discord:{ctx.author.display_name}")
+        await asyncio.to_thread(db.add_action, "park_all", "*", json.dumps({"garage": fallback_garage}),
+                                f"discord:{ctx.author.display_name}")
         await ctx.send("🅿️ Massen-Einparken angelegt – Ergebnis kommt gleich ins Protokoll "
                        "(`!ap status`). Besetzte und NPC-Fahrzeuge werden übersprungen.")
 
@@ -1305,12 +1386,12 @@ class AdminPanel(commands.Cog):
         """Prüft das Setup (DB, Exports, Tabellen, Society-System)."""
         if not await self._require(ctx, "server_status"):
             return
-        action_id = db.add_action("diag", "*", None, f"discord:{ctx.author.display_name}")
+        action_id = await asyncio.to_thread(db.add_action, "diag", "*", None, f"discord:{ctx.author.display_name}")
         msg = await ctx.send("⏳ Diagnose läuft…")
         import asyncio
         for _ in range(12):
             await asyncio.sleep(1)
-            action = db.get_action(action_id)
+            action = await asyncio.to_thread(db.get_action, action_id)
             if not action or action["status"] == "pending":
                 continue
             if action["status"] == "failed":
@@ -1335,7 +1416,7 @@ class AdminPanel(commands.Cog):
     async def ap_backup(self, ctx: commands.Context):
         """Erstellt sofort ein DB-Backup (Bans, Notizen, Log)."""
         try:
-            path, count = db.backup_db()
+            path, count = await asyncio.to_thread(db.backup_db)
             await ctx.send(f"💾 Backup erstellt: `{path}`\n({count} Backups vorhanden, ältere werden automatisch gelöscht). "
                            f"Tipp: den `backups/`-Ordner ins Synology-Backup aufnehmen.")
         except Exception as e:
@@ -1366,7 +1447,7 @@ class AdminPanel(commands.Cog):
         """Zeigt die letzten 10 Aktionen."""
         if ctx.guild is None or not await self.member_permissions(ctx.author):
             return await ctx.send("❌ Keine Berechtigung.")
-        actions = db.get_recent_actions(10)
+        actions = await asyncio.to_thread(db.get_recent_actions, 10)
         if not actions:
             return await ctx.send("Keine Aktionen vorhanden.")
         embed = discord.Embed(title="Letzte Adminpanel-Aktionen")

@@ -241,6 +241,7 @@ class Sticky(commands.Cog):
                         embed=embed,
                         username=(s.get("webhook_name") or None),
                         avatar_url=(s.get("webhook_avatar") or None),
+                        allowed_mentions=discord.AllowedMentions(everyone=False, roles=False),
                         wait=True,
                     )
                     new_message_id = msg.id
@@ -254,7 +255,11 @@ class Sticky(commands.Cog):
                         pass
                     except discord.HTTPException:
                         pass
-                msg = await channel.send(content=content or None, embed=embed)
+                msg = await channel.send(
+                    content=content or None,
+                    embed=embed,
+                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False),
+                )
                 new_message_id = msg.id
                 new_webhook_id = None
         except discord.Forbidden:

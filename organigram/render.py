@@ -666,8 +666,15 @@ class _Renderer:
         for n in _iter_nodes(roots):
             col = _hex(n.color, _hex(self.chart.accent))
             if n.people:
-                for p in n.people:
+                # wie die anderen Muster auf MAX_PEOPLE begrenzen und den
+                # Rest als "+N weitere"-Karte anhängen (sonst riesige Bilder).
+                ppl = n.people[: self.MAX_PEOPLE]
+                overflow = max(0, len(n.people) - self.MAX_PEOPLE)
+                for p in ppl:
                     cards.append((p, n.label or "—", col))
+                if overflow:
+                    cards.append((RPerson(name=f"+{overflow} weitere", vacant=True),
+                                  n.label or "—", col))
             # Knoten ohne Personen erscheinen nicht als Karte (nur Positionen mit Leuten/vacant)
         if not cards:
             cards = [(RPerson(name="—", vacant=True), "Keine Einträge", _hex(self.chart.accent))]

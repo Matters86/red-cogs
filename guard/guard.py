@@ -45,6 +45,9 @@ CUSTOM_EMOJI_RE = re.compile(r"<a?:\w+:\d+>")
 
 ACTIONS = ("ban", "softban", "kick", "timeout")
 HISTORY_MAX = 50
+# Laufzeit-Einträge (pro (guild,user)) verfallen nach dieser Zeit und werden
+# im Hintergrund-Task entfernt, damit die Speicher-Dicts nicht endlos wachsen.
+RUNTIME_TTL = 3600
 
 # Eskalationsstufen nach Schwere (für den Vergleich „schon gehandelt?\").
 STAGE_RANK = {"none": 0, "warn": 1, "timeout": 2, "kick": 3, "ban": 4}
@@ -167,10 +170,24 @@ class Guard(commands.Cog):
                 continue
             if until and until > 0 and now >= until:
                 await self._end_lockdown(guild)
+        # Abgelaufene Laufzeit-Einträge aufräumen (unbegrenztes Wachstum vermeiden).
+        self._gc_runtime(now)
 
     @_lockdown_tick.before_loop
     async def _before_tick(self):
         await self.bot.wait_until_red_ready()
+
+    def _gc_runtime(self, now: float | None = None) -> None:
+        """Entfernt abgelaufene Einträge aus ``_msgtimes``/``_lastmsgs``/``_points``
+        (und dem zugehörigen ``_acted``), damit diese Dicts nicht unbegrenzt wachsen."""
+        cutoff = (now if now is not None else time.time()) - RUNTIME_TTL
+        for key in [k for k, dq in self._msgtimes.items() if not dq or dq[-1] < cutoff]:
+            self._msgtimes.pop(key, None)
+        for key in [k for k, dq in self._lastmsgs.items() if not dq or dq[-1][2] < cutoff]:
+            self._lastmsgs.pop(key, None)
+        for key in [k for k, led in self._points.items() if not led or led[-1][0] < cutoff]:
+            self._points.pop(key, None)
+            self._acted.pop(key, None)
 
     # ----------------------------------------------------------------- #
     #  Helfer
@@ -228,6 +245,21 @@ class Guard(commands.Cog):
             if channel.id in {int(c) for c in conf.get("whitelist_channels", [])}:
                 return True
         return False
+
+    @staticmethod
+    def _thresholds(conf: dict) -> tuple[int, int, int, int]:
+        """Eskalationsschwellen monoton lesen: ``warn ≤ timeout ≤ kick ≤ ban``.
+
+        Falsch sortierte Schwellen (z. B. ``ban_at`` kleiner als ``warn_at``)
+        würden sonst sofort hart bestrafen. Die vier konfigurierten Werte werden
+        aufsteigend den Stufen zugeordnet; bei korrekter Reihenfolge bleibt alles
+        unverändert.
+        """
+        vals = sorted(
+            int(conf.get(key, default))
+            for key, default in (("warn_at", 3), ("timeout_at", 6), ("kick_at", 9), ("ban_at", 12))
+        )
+        return vals[0], vals[1], vals[2], vals[3]
 
     # ---- Discord-Aktionen (alle abgesichert) ------------------------- #
     async def _do_ban(self, guild, user, reason, delete_seconds) -> bool:
@@ -320,7 +352,11 @@ class Guard(commands.Cog):
             hist.insert(0, record)
             del hist[HISTORY_MAX:]
         if kind != "lockdown_end":
-            await self.config.guild(guild).stats_total.set(int(conf.get("stats_total", 0)) + 1)
+            # Read-Modify-Write unter dem Value-Lock, frisch gelesen (kein Race
+            # zwischen gleichzeitigen Aktionen über den stale ``conf``-Snapshot).
+            stats = self.config.guild(guild).stats_total
+            async with stats.get_lock():
+                await stats.set(int(await stats()) + 1)
 
         # Log-Kanal.
         chan_id = conf.get("log_channel")
@@ -521,12 +557,14 @@ class Guard(commands.Cog):
         if conf.get("delete_violations", True):
             await self._delete_message(message)
 
-        # Eskalationsstufe bestimmen (höchste erreichte zuerst).
+        # Eskalationsstufe bestimmen (höchste erreichte zuerst). Schwellen werden
+        # monoton gelesen, damit falsch sortierte Werte nicht sofort hart bestrafen.
+        warn_at, timeout_at, kick_at, ban_at = self._thresholds(conf)
         stage = "none"
-        for threshold, name in ((conf.get("ban_at", 12), "ban"),
-                                (conf.get("kick_at", 9), "kick"),
-                                (conf.get("timeout_at", 6), "timeout"),
-                                (conf.get("warn_at", 3), "warn")):
+        for threshold, name in ((ban_at, "ban"),
+                                (kick_at, "kick"),
+                                (timeout_at, "timeout"),
+                                (warn_at, "warn")):
             if total >= threshold:
                 stage = name
                 break

@@ -82,6 +82,23 @@ class Changelog(commands.Cog):
         if webcore is not None:
             webcore.unregister_owner(self)
 
+    async def red_delete_data_for_user(self, *, requester, user_id: int):
+        """Anonymisiert die vom Nutzer geposteten Changelog-Einträge (alle Server).
+
+        Der Inhalt der Changelogs bleibt erhalten (Server-Historie), nur die
+        personenbezogenen Autor-Felder werden entfernt.
+        """
+        all_guilds = await self.config.all_guilds()
+        for guild_id, gdata in all_guilds.items():
+            entries = (gdata or {}).get("entries") or {}
+            if not any(r.get("author_id") == user_id for r in entries.values()):
+                continue
+            async with self.config.guild_from_id(guild_id).entries() as stored:
+                for rec in stored.values():
+                    if rec.get("author_id") == user_id:
+                        rec["author_id"] = 0
+                        rec["author_name"] = "—"
+
     @commands.Cog.listener()
     async def on_webcore_ready(self, webcore):
         self._register_dashboard(webcore)
@@ -283,8 +300,12 @@ class Changelog(commands.Cog):
             await interaction.followup.send(t(lang, "err_cant_send"), ephemeral=True)
             return
 
-        cid = int(conf.get("counter", 0)) + 1
-        await self.config.guild(guild).counter.set(cid)
+        # Zähler unter dem Value-Lock frisch lesen und erhöhen, damit gleichzeitige
+        # Changelogs keine kollidierenden Eintrags-IDs erzeugen (kein Überschreiben).
+        counter = self.config.guild(guild).counter
+        async with counter.get_lock():
+            cid = int(await counter()) + 1
+            await counter.set(cid)
         record = {
             "id": f"cl{cid}",
             "title": title.strip()[:230],

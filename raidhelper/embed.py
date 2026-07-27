@@ -68,10 +68,22 @@ def _member_line(order_no: int, game_id: str, entry: dict, emojis: dict | None =
 def _field_value(lines: list[str], lang: str) -> str:
     if not lines:
         return "—"
-    if len(lines) > MAX_LINES_PER_FIELD:
-        extra = len(lines) - MAX_LINES_PER_FIELD
-        lines = lines[:MAX_LINES_PER_FIELD] + [t(lang, "roster_more", n=extra)]
-    return "\n".join(lines)
+    # Zeichenbasiert füllen: das harte Discord-Feldlimit sind 1024 Zeichen; die
+    # Zeilenzahl allein schützt nicht davor (Spec-Icons + lange Nicks). Reserve
+    # unter 1024 lassen, damit die "… +N weitere"-Zeile noch hineinpasst.
+    max_chars = 1000
+    kept: list[str] = []
+    used = 0
+    for line in lines[:MAX_LINES_PER_FIELD]:
+        addition = len(line) + (1 if kept else 0)  # +1 für den Zeilenumbruch
+        if used + addition > max_chars:
+            break
+        kept.append(line)
+        used += addition
+    if len(kept) < len(lines):
+        extra = len(lines) - len(kept)
+        kept.append(t(lang, "roster_more", n=extra))
+    return "\n".join(kept)[:1024]
 
 
 def signup_counts(event: dict) -> tuple[int, int]:

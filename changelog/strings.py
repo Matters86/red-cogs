@@ -48,6 +48,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "err_channel_gone": "Der konfigurierte Ziel-Kanal existiert nicht mehr.",
         "err_cant_send": "Ich darf im Ziel-Kanal nicht schreiben (fehlende Rechte).",
         "err_guild_only": "Dieser Befehl funktioniert nur auf einem Server.",
+        "err_generic": "⚠️ Beim Verarbeiten ist ein Fehler aufgetreten. Bitte versuche es später erneut.",
         # ---- Autocomplete ----
         "cat_none": "Standard 🆕",
     },
@@ -77,6 +78,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "err_channel_gone": "The configured target channel no longer exists.",
         "err_cant_send": "I am not allowed to post in the target channel (missing permissions).",
         "err_guild_only": "This command only works on a server.",
+        "err_generic": "⚠️ Something went wrong while processing. Please try again later.",
         # ---- Autocomplete ----
         "cat_none": "Default 🆕",
     },

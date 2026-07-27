@@ -144,6 +144,11 @@ class OnlyImageVideo(commands.Cog):
     async def _check(self, message: discord.Message):
         if message.guild is None:
             return
+        if await self.bot.cog_disabled_in_guild(self, message.guild):
+            return
+        # Owner/Admins/Mods gemäß Reds [p]autoimmune-Liste nie löschen.
+        if await self.bot.is_automod_immune(message):
+            return
         if message.author.id == self.bot.user.id:
             return
         if message.type not in _CHECKED_TYPES:
@@ -185,7 +190,7 @@ class OnlyImageVideo(commands.Cog):
             overrides = conf.get("messages") or {}
             text = overrides.get("notice") or t(lang, "notice", user=message.author.mention)
             if "{user}" in text:
-                text = text.format(user=message.author.mention)
+                text = text.replace("{user}", message.author.mention)
             delay = int(conf.get("notify_delete_after", 6))
             try:
                 await message.channel.send(

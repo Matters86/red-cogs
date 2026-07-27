@@ -265,9 +265,18 @@ def _group_header(cog_name: str, count: int, hidden_cog: bool, csrf: str, colspa
     )
 
 
-def _guild_options(bot, selected) -> str:
+async def _visible_guilds(cog, request):
+    webcore = request.app.get("webcore")
+    if webcore is not None:
+        guilds = await webcore.visible_guilds(request)
+    else:  # Fallback (sollte im Normalbetrieb nicht eintreten)
+        guilds = list(cog.bot.guilds)
+    return sorted(guilds, key=lambda g: g.name.lower())
+
+
+def _guild_options(guilds, selected) -> str:
     opts = ["<option value=''>Server w&#228;hlen &hellip;</option>"]
-    for guild in sorted(bot.guilds, key=lambda g: g.name.lower()):
+    for guild in guilds:
         sel = " selected" if str(guild.id) == str(selected) else ""
         opts.append(f"<option value='{guild.id}'{sel}>{_esc(guild.name)}</option>")
     return "".join(opts)
@@ -339,18 +348,27 @@ async def render(cog, request):
     bot = cog.bot
     csrf = request.get("webcore_csrf", "")
 
+    # Die globale Sichtbarkeits-Config (hidden_cogs/hidden_commands) ist in Discord
+    # owner-only. Nur "volle Sicht" (Owner/Allowlist) darf sie hier ändern bzw.
+    # ausgeblendete Einträge sehen.
+    webcore = request.app.get("webcore")
+    user = await webcore._get_user(request) if webcore else None
+    full = await webcore._has_full_scope(user) if webcore else True
+
     # --- POST: Sichtbarkeit umschalten (CSRF ist bereits zentral geprüft) ---
     if request.method == "POST":
+        if not full:
+            return {"redirect": "/cogs/commands?err=" + quote("Nur der Bot-Owner darf die Sichtbarkeit ändern.")}
         form = await request.post()
         action = form.get("action")
         kind = form.get("kind")
-        value = (form.get("value") or "").strip()
+        value = (form.get("value") or "").strip()[:100]
         if action in ("hide", "show") and kind in ("cog", "command") and value:
             await cog.set_visibility(kind, value, hide=(action == "hide"))
         return {"redirect": "/cogs/commands?ok=1"}
 
     query = request.query
-    show_hidden = query.get("hidden") == "1"
+    show_hidden = query.get("hidden") == "1" and full
     gid = query.get("guild") or ""
     member_query = (query.get("member") or "").strip()
 
@@ -364,11 +382,15 @@ async def render(cog, request):
     visible = [i for i in infos if show_hidden or not i.is_hidden_cfg]
 
     # --- optionale Mitglieds-Prüfung ---
+    guilds = await _visible_guilds(cog, request)
     guild = None
     member = None
     member_error = ""
     if gid.isdigit():
-        guild = bot.get_guild(int(gid))
+        for g in guilds:
+            if g.id == int(gid):
+                guild = g
+                break
     if guild is not None and member_query:
         member = _resolve_member(guild, member_query)
         if member is None:
@@ -415,6 +437,8 @@ async def render(cog, request):
 
     if query.get("ok") == "1":
         parts.append("<div class='cx-flash'>Gespeichert.</div>")
+    if query.get("err"):
+        parts.append(f"<div class='cx-err'>{_esc(query.get('err'))}</div>")
     if member_error:
         parts.append(f"<div class='cx-err'>{_esc(member_error)}</div>")
 
@@ -441,7 +465,7 @@ async def render(cog, request):
     parts.append(
         "<form method='get' action='/cogs/commands' class='cx-check'>"
         "<div class='grp'><label>Server</label>"
-        f"<select name='guild'>{_guild_options(bot, gid)}</select></div>"
+        f"<select name='guild'>{_guild_options(guilds, gid)}</select></div>"
         "<div class='grp'><label>Mitglied (ID oder Name)</label>"
         f"<input type='text' name='member' value='{_esc(member_query)}' placeholder='z. B. 123456789012345678'></div>"
         f"{hidden_field}"

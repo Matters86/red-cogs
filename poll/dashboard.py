@@ -18,6 +18,7 @@ import html
 from datetime import datetime, timezone
 from urllib.parse import quote
 
+import discord
 from aiohttp import web
 
 from .embed import vote_counts
@@ -95,13 +96,22 @@ async def dashboard_handler(cog, request):
     return await _render(cog, request)
 
 
-def _selected_guild(cog, request):
+async def _visible_guilds(cog, request):
+    """Nur die für den eingeloggten User sichtbaren Server (WebCore-Rechtemodell)."""
+    webcore = request.app.get("webcore")
+    if webcore is not None:
+        guilds = await webcore.visible_guilds(request)
+    else:  # Fallback (sollte im Normalbetrieb nicht eintreten)
+        guilds = list(cog.bot.guilds)
+    return sorted(guilds, key=lambda g: g.name.lower())
+
+
+def _selected_guild(guilds, request):
     gid = request.query.get("guild")
     if gid and gid.isdigit():
-        g = cog.bot.get_guild(int(gid))
-        if g is not None:
-            return g
-    guilds = sorted(cog.bot.guilds, key=lambda g: g.name.lower())
+        for g in guilds:
+            if g.id == int(gid):
+                return g
     return guilds[0] if guilds else None
 
 
@@ -109,7 +119,8 @@ def _selected_guild(cog, request):
 #  Rendern (GET)
 # --------------------------------------------------------------------------- #
 async def _render(cog, request):
-    guild = _selected_guild(cog, request)
+    guilds = await _visible_guilds(cog, request)
+    guild = _selected_guild(guilds, request)
     if guild is None:
         return {"title": "Umfragen", "content": "<div class='card-x'>Der Bot ist auf keinem Server.</div>"}
 
@@ -121,7 +132,7 @@ async def _render(cog, request):
     if request.query.get("ok"):
         flash = f"<div class='pl-flash'>{_esc(request.query.get('ok'))}</div>"
 
-    guild_opts = _options([(g.id, g.name) for g in sorted(cog.bot.guilds, key=lambda g: g.name.lower())], [guild.id])
+    guild_opts = _options([(g.id, g.name) for g in guilds], [guild.id])
     bar = (
         "<div class='pl-bar'>"
         "<form method='get' action='/cogs/poll' class='pl-form' style='margin:0'>"
@@ -326,7 +337,13 @@ async def _handle_post(cog, request):
     data = await request.post()
     form = data.get("form")
     gid = data.get("guild")
-    guild = cog.bot.get_guild(int(gid)) if gid and gid.isdigit() else None
+    guilds = await _visible_guilds(cog, request)
+    guild = None
+    if gid and gid.isdigit():
+        for g in guilds:
+            if g.id == int(gid):
+                guild = g
+                break
     if guild is None:
         raise web.HTTPFound("/cogs/poll?ok=Server+nicht+gefunden")
 
@@ -346,7 +363,8 @@ async def _handle_post(cog, request):
             pass
         roles = []
         for rid in data.getall("manager_roles", []):
-            if str(rid).isdigit():
+            # Nur real existierende Rollen speichern (verhindert tote/gefälschte IDs).
+            if str(rid).isdigit() and guild.get_role(int(rid)) is not None:
                 roles.append(int(rid))
         await gconf.manager_roles.set(roles)
         await gconf.default_multiple.set("default_multiple" in data)
@@ -370,8 +388,9 @@ async def _handle_post(cog, request):
         if len(options) > max_opts:
             raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&ok=" + quote(f"Zu viele Optionen (max. {max_opts})"))
         channel = guild.get_channel(_one_id(data.get("channel")) or 0)
-        if channel is None:
-            raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&ok=" + quote("Bitte einen Kanal wählen"))
+        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+            # Nur Text-/Thread-Kanäle: sonst entstünde eine Umfrage ohne Nachricht (Leiche).
+            raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&ok=" + quote("Bitte einen Textkanal wählen"))
         end_ts = None
         dur = (data.get("duration") or "").strip()
         if dur:

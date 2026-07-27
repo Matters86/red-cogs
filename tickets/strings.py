@@ -59,6 +59,7 @@ STRINGS: dict[str, dict[str, str]] = {
         # Fehler / Hinweise
         "not_a_ticket": "Dieser Kanal ist kein Ticket.",
         "no_permission": "Dazu hast du keine Berechtigung.",
+        "claim_own_denied": "Du kannst dein eigenes Ticket nicht übernehmen.",
         "already_claimed": "Dieses Ticket wurde bereits von {user} übernommen.",
         "transcript_saved": "Transcript gespeichert.",
         # Log-Channel
@@ -100,6 +101,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "cancelled": "Cancelled.",
         "not_a_ticket": "This channel is not a ticket.",
         "no_permission": "You don't have permission to do that.",
+        "claim_own_denied": "You can't claim your own ticket.",
         "already_claimed": "This ticket was already claimed by {user}.",
         "transcript_saved": "Transcript saved.",
         "log_opened": "Ticket #{num} opened by {user} ({reason}).",

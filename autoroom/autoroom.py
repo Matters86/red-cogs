@@ -194,12 +194,16 @@ class AutoRoom(commands.Cog):
         if member.bot or member.guild is None:
             return
         if before.channel and before.channel != after.channel:
+            await self._sync_text_access(member, before.channel, joined=False)
             await self._maybe_cleanup_room(before.channel)
         if after.channel and after.channel != before.channel:
             sources = await self.config.guild(member.guild).sources()
             cfg = sources.get(str(after.channel.id))
             if cfg is not None:
                 await self._create_room_for(member, after.channel, cfg)
+            else:
+                # Beitritt zu einem bestehenden AutoRoom -> Zugriff auf dessen Textkanal
+                await self._sync_text_access(member, after.channel, joined=True)
 
     async def _create_room_for(self, member, source, cfg):
         guild = member.guild
@@ -253,11 +257,26 @@ class AutoRoom(commands.Cog):
                 try:
                     t_over = {
                         guild.default_role: discord.PermissionOverwrite(view_channel=False),
-                        member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+                        member: discord.PermissionOverwrite(
+                            view_channel=True, send_messages=True, read_message_history=True
+                        ),
                         me: discord.PermissionOverwrite(
                             view_channel=True, send_messages=True, manage_channels=True
                         ),
                     }
+                    # Staff-Rollen (wie beim Voice-Raum) dürfen den Textkanal immer sehen.
+                    data = await self.config.guild(guild).all()
+                    staff_ids: set[int] = set()
+                    if data.get("admin_access", True):
+                        staff_ids |= await self._staff_role_ids(guild, mod=False)
+                    if data.get("mod_access", False):
+                        staff_ids |= await self._staff_role_ids(guild, mod=True)
+                    for rid in staff_ids:
+                        role = guild.get_role(rid)
+                        if role is not None and role != guild.default_role:
+                            t_over[role] = discord.PermissionOverwrite(
+                                view_channel=True, send_messages=True, read_message_history=True
+                            )
                     tch = await guild.create_text_channel(
                         name, category=category, overwrites=t_over, reason="AutoRoom-Textkanal"
                     )
@@ -273,6 +292,40 @@ class AutoRoom(commands.Cog):
                 "created_at": time.time(),
             }
             await self.config.guild(guild).active_rooms.set(rooms)
+
+    async def _sync_text_access(self, member, channel, *, joined: bool):
+        """Gibt/entzieht dem Mitglied Zugriff auf den Textkanal seines AutoRooms.
+
+        Wer dem Voice-Raum beitritt, kann den zugehörigen Textkanal nutzen;
+        beim Verlassen wird der Zugriff wieder entfernt. Der Besitzer behält
+        seinen Zugriff (er kommt evtl. gleich zurück; leert sich der Raum,
+        wird er ohnehin gelöscht).
+        """
+        if not isinstance(channel, discord.VoiceChannel):
+            return
+        guild = channel.guild
+        rooms = await self.config.guild(guild).active_rooms()
+        rec = rooms.get(str(channel.id))
+        if not rec or not rec.get("text_id"):
+            return
+        tch = guild.get_channel(int(rec["text_id"]))
+        if not isinstance(tch, discord.TextChannel):
+            return
+        try:
+            if joined:
+                await tch.set_permissions(
+                    member,
+                    overwrite=discord.PermissionOverwrite(
+                        view_channel=True, send_messages=True, read_message_history=True
+                    ),
+                    reason="AutoRoom: Voice beigetreten",
+                )
+            elif member.id != rec.get("owner_id"):
+                await tch.set_permissions(
+                    member, overwrite=None, reason="AutoRoom: Voice verlassen"
+                )
+        except discord.HTTPException:
+            pass
 
     async def _maybe_cleanup_room(self, channel):
         if not isinstance(channel, discord.VoiceChannel):
@@ -491,18 +544,21 @@ class AutoRoom(commands.Cog):
         if vc is None:
             await ctx.send("Du bist in keinem Voicechannel.")
             return
-        rooms = await self.config.guild(ctx.guild).active_rooms()
-        rec = rooms.get(str(vc.id))
-        if rec is None:
-            await ctx.send("Dein aktueller Channel ist kein AutoRoom.")
-            return
-        owner = ctx.guild.get_member(rec.get("owner_id"))
-        if owner is not None and owner in vc.members:
-            await ctx.send("Der Besitzer ist noch im Raum – Übernahme nicht möglich.")
-            return
-        rec["owner_id"] = ctx.author.id
-        rooms[str(vc.id)] = rec
-        await self.config.guild(ctx.guild).active_rooms.set(rooms)
+        # Unter dem Guild-Lock frisch lesen und nur den betroffenen Key ändern,
+        # damit es keinen Race mit dem Cleanup gibt (verlorene Updates).
+        async with self._lock(ctx.guild.id):
+            rooms = await self.config.guild(ctx.guild).active_rooms()
+            rec = rooms.get(str(vc.id))
+            if rec is None:
+                await ctx.send("Dein aktueller Channel ist kein AutoRoom.")
+                return
+            owner = ctx.guild.get_member(rec.get("owner_id"))
+            if owner is not None and owner in vc.members:
+                await ctx.send("Der Besitzer ist noch im Raum – Übernahme nicht möglich.")
+                return
+            rec["owner_id"] = ctx.author.id
+            rooms[str(vc.id)] = rec
+            await self.config.guild(ctx.guild).active_rooms.set(rooms)
         try:
             await vc.set_permissions(
                 ctx.author, overwrite=discord.PermissionOverwrite(view_channel=True, connect=True, speak=True)
@@ -517,14 +573,21 @@ class AutoRoom(commands.Cog):
         owned = await self._require_owned(ctx)
         if not owned:
             return
-        vc, rec = owned
+        vc, _rec = owned
         if member not in vc.members:
             await ctx.send("Diese Person ist nicht in deinem Raum.")
             return
-        rec["owner_id"] = member.id
-        rooms = await self.config.guild(ctx.guild).active_rooms()
-        rooms[str(vc.id)] = rec
-        await self.config.guild(ctx.guild).active_rooms.set(rooms)
+        # Unter dem Guild-Lock frisch lesen (Existenz erneut prüfen) und nur den
+        # betroffenen Key ändern – kein Race mit dem Cleanup.
+        async with self._lock(ctx.guild.id):
+            rooms = await self.config.guild(ctx.guild).active_rooms()
+            rec = rooms.get(str(vc.id))
+            if rec is None:
+                await ctx.send("Dein aktueller Channel ist kein AutoRoom.")
+                return
+            rec["owner_id"] = member.id
+            rooms[str(vc.id)] = rec
+            await self.config.guild(ctx.guild).active_rooms.set(rooms)
         try:
             await vc.set_permissions(
                 member, overwrite=discord.PermissionOverwrite(view_channel=True, connect=True, speak=True)
@@ -701,10 +764,18 @@ class AutoRoom(commands.Cog):
             opts.append(f"<option value='{key}'{sel}>{VIS_LABELS[key]}</option>")
         return f"<select name='{field}' class='form-select form-select-sm'>{''.join(opts)}</select>"
 
+    async def _visible_guilds(self, request):
+        webcore = request.app.get("webcore")
+        if webcore is not None:
+            guilds = await webcore.visible_guilds(request)
+        else:  # Fallback (sollte im Normalbetrieb nicht eintreten)
+            guilds = list(self.bot.guilds)
+        return sorted(guilds, key=lambda g: g.name.lower())
+
     async def _render_dashboard(self, request) -> dict:
         csrf = request.get("webcore_csrf", "")
 
-        guilds = sorted(self.bot.guilds, key=lambda g: g.name.lower())
+        guilds = await self._visible_guilds(request)
         if not guilds:
             return {"title": "Autovoiceroom", "content": "<div class='card-x'>Der Bot ist auf keinem Server.</div>"}
 
@@ -856,11 +927,12 @@ class AutoRoom(commands.Cog):
     async def _handle_dashboard_post(self, request) -> dict:
         form = await request.post()
         action = form.get("action")
+        guilds = await self._visible_guilds(request)
         try:
             guild = self.bot.get_guild(int(form.get("guild_id")))
         except (TypeError, ValueError):
             guild = None
-        if guild is None:
+        if guild is None or guild not in guilds:
             return {"redirect": "/cogs/autoroom?err=1"}
 
         if action == "access":

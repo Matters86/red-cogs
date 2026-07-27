@@ -200,6 +200,27 @@ class Tickets(commands.Cog):
         except discord.HTTPException:
             pass
 
+    async def update_panel_message(self, guild, panel) -> int | None:
+        """Aktualisiert eine bereits gepostete Panel-Nachricht (Embed + Buttons).
+
+        Existiert die Nachricht noch, wird sie an Ort und Stelle bearbeitet;
+        andernfalls (oder bei fehlender ``message_id``) wird neu gepostet.
+        """
+        channel = guild.get_channel(panel.get("channel_id")) if panel.get("channel_id") else None
+        if isinstance(channel, discord.TextChannel) and panel.get("message_id"):
+            lang = panel.get("lang") or await self._lang(guild)
+            title = panel.get("title") or t(lang, "panel_default_title")
+            desc = panel.get("description") or t(lang, "panel_default_description")
+            embed = discord.Embed(title=title, description=desc, color=EMBED_COLOR)
+            try:
+                msg = await channel.fetch_message(panel["message_id"])
+                await msg.edit(embed=embed, view=build_panel_view(panel))
+                return msg.id
+            except discord.HTTPException:
+                pass
+        # Nachricht weg oder Kanal gewechselt -> neu posten
+        return await self.post_panel(guild, panel)
+
     # ----------------------------------------------------------------- #
     #  Interaktionen (persistente Buttons / Dropdowns)
     # ----------------------------------------------------------------- #
@@ -449,6 +470,9 @@ class Tickets(commands.Cog):
         if not self._is_staff(member, conf):
             await interaction.response.send_message(t(lang, "no_permission"), ephemeral=True)
             return
+        if claim and record.get("owner_id") == member.id:
+            await interaction.response.send_message(t(lang, "claim_own_denied"), ephemeral=True)
+            return
 
         await interaction.response.defer()
         if claim:
@@ -684,6 +708,8 @@ class Tickets(commands.Cog):
             return await ctx.send(t(lang, "not_a_ticket"))
         if not self._is_staff(ctx.author, conf):
             return await ctx.send(t(lang, "no_permission"))
+        if record.get("owner_id") == ctx.author.id:
+            return await ctx.send(t(lang, "claim_own_denied"))
         async with self.config.guild(ctx.guild).tickets() as tickets:
             rec = tickets.get(str(ctx.channel.id))
             if rec:
