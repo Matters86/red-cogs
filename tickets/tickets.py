@@ -28,6 +28,10 @@ log = logging.getLogger("red.red-cogs.tickets")
 
 EMBED_COLOR = 0x3DDC97
 
+# Rollen-Pings müssen explizit erlaubt werden – Reds Standard blockt roles=False,
+# sonst würden die Ping-Rollen beim Öffnen eines Tickets nicht benachrichtigt.
+PING_ALLOWED = discord.AllowedMentions(everyone=False, roles=True, users=True)
+
 
 class Tickets(commands.Cog):
     """Mehrsprachiges Ticketsystem mit Panels, Transcripts und Dashboard-Verwaltung."""
@@ -126,7 +130,11 @@ class Tickets(commands.Cog):
                 out.append(role)
         return out
 
-    def _overwrites(self, guild, member, conf):
+    def _overwrites(self, guild, member, conf, support_ids=None):
+        # support_ids: die für dieses Ticket zuständigen Support-Rollen (typ-abhängig).
+        # None -> globale Support-Rollen. Admin-Rollen haben immer Zugriff.
+        if support_ids is None:
+            support_ids = conf.get("support_roles")
         ow = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
             guild.me: discord.PermissionOverwrite(
@@ -138,20 +146,22 @@ class Tickets(commands.Cog):
                 attach_files=True, embed_links=True,
             ),
         }
-        for role in self._resolve_roles(guild, conf.get("support_roles")) + self._resolve_roles(guild, conf.get("admin_roles")):
+        for role in self._resolve_roles(guild, support_ids) + self._resolve_roles(guild, conf.get("admin_roles")):
             ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
         for role in self._resolve_roles(guild, conf.get("view_roles")):
             ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
         return ow
 
-    def _closed_overwrites(self, guild, conf):
+    def _closed_overwrites(self, guild, conf, support_ids=None):
+        if support_ids is None:
+            support_ids = conf.get("support_roles")
         ow = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
             guild.me: discord.PermissionOverwrite(
                 view_channel=True, send_messages=True, read_message_history=True, manage_channels=True
             ),
         }
-        for role in self._resolve_roles(guild, conf.get("support_roles")) + self._resolve_roles(guild, conf.get("admin_roles")):
+        for role in self._resolve_roles(guild, support_ids) + self._resolve_roles(guild, conf.get("admin_roles")):
             ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
         for role in self._resolve_roles(guild, conf.get("view_roles")):
             ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
@@ -171,6 +181,33 @@ class Tickets(commands.Cog):
             if r.get("id") == reason_id:
                 return r
         return None
+
+    # --- Typ-abhängige Zuständigkeit (Team/Ping/Kategorie/Name) --------- #
+    @staticmethod
+    def _effective_support_ids(conf, reason):
+        """Support-Rollen für dieses Ticket: die des Grundes, sonst die globalen."""
+        if reason and reason.get("support_roles"):
+            return list(reason["support_roles"])
+        return conf.get("support_roles")
+
+    @staticmethod
+    def _effective_ping_ids(conf, reason):
+        if reason and reason.get("ping_roles"):
+            return list(reason["ping_roles"])
+        return conf.get("ping_roles")
+
+    @staticmethod
+    def _effective_category_id(conf, reason):
+        if reason and reason.get("category_id"):
+            return reason["category_id"]
+        return conf.get("category_open")
+
+    def _ticket_base_name(self, conf, reason, num, member):
+        """Kanalname: automatisch nach Typ (<grund>-<num>), sonst globale Vorlage."""
+        label = (reason or {}).get("label") if reason else None
+        if label:
+            return f"{label}-{num}"
+        return conf["name_template"].format(num=num, user=member.name)
 
     # ----------------------------------------------------------------- #
     #  Panels posten / entfernen (vom Dashboard aufgerufen)
@@ -321,8 +358,14 @@ class Tickets(commands.Cog):
         for q, a in (answers or {}).items():
             embed.add_field(name=q[:256], value=(a or "—")[:1024], inline=False)
 
-        ping_roles = self._resolve_roles(guild, conf.get("ping_roles"))
-        support_roles = self._resolve_roles(guild, conf.get("support_roles"))
+        # Typ-abh\u00e4ngige Zust\u00e4ndigkeit: eigenes Team/Ping/Kategorie des Grundes,
+        # sonst die globalen Einstellungen.
+        eff_support = self._effective_support_ids(conf, reason)
+        eff_ping = self._effective_ping_ids(conf, reason)
+        eff_category = self._effective_category_id(conf, reason)
+        ping_roles = self._resolve_roles(guild, eff_ping)
+        support_roles = self._resolve_roles(guild, eff_support)
+        base_name = self._ticket_base_name(conf, reason, num, member)
         controls = build_controls_view(lang)
 
         ttype = conf.get("ticket_type", "category")
@@ -337,10 +380,11 @@ class Tickets(commands.Cog):
                     return None
                 mentions = " ".join(r.mention for r in (ping_roles + support_roles)) or None
                 created = await forum.create_thread(
-                    name=(self._channel_name(conf["name_template"].format(num=num, user=member.name)).replace("-", " "))[:100] or f"ticket {num}",
+                    name=(self._channel_name(base_name).replace("-", " "))[:100] or f"ticket {num}",
                     content=mentions or "\u200b",
                     embed=embed,
                     view=controls,
+                    allowed_mentions=PING_ALLOWED,
                 )
                 target = created.thread
                 opening_msg = created.message
@@ -354,7 +398,7 @@ class Tickets(commands.Cog):
                 if not isinstance(base, discord.TextChannel):
                     return None
                 target = await base.create_thread(
-                    name=(conf["name_template"].format(num=num, user=member.name))[:100] or f"ticket-{num}",
+                    name=base_name[:100] or f"ticket-{num}",
                     type=discord.ChannelType.private_thread,
                     invitable=False,
                     reason=f"Ticket #{num} ({member})",
@@ -364,18 +408,22 @@ class Tickets(commands.Cog):
                 except discord.HTTPException:
                     pass
                 mentions = " ".join(r.mention for r in (ping_roles + support_roles)) or None
-                opening_msg = await target.send(content=mentions, embed=embed, view=controls)
+                opening_msg = await target.send(
+                    content=mentions, embed=embed, view=controls, allowed_mentions=PING_ALLOWED
+                )
 
             else:  # category
-                name = self._channel_name(conf["name_template"].format(num=num, user=member.name))
-                category = guild.get_channel(conf.get("category_open")) if conf.get("category_open") else None
+                name = self._channel_name(base_name)
+                category = guild.get_channel(eff_category) if eff_category else None
                 target = await guild.create_text_channel(
                     name,
                     category=category if isinstance(category, discord.CategoryChannel) else None,
-                    overwrites=self._overwrites(guild, member, conf),
+                    overwrites=self._overwrites(guild, member, conf, support_ids=eff_support),
                     reason=f"Ticket #{num} ({member})",
                 )
-                opening_msg = await target.send(content=ping_content, embed=embed, view=controls)
+                opening_msg = await target.send(
+                    content=ping_content, embed=embed, view=controls, allowed_mentions=PING_ALLOWED
+                )
         except discord.Forbidden:
             log.warning("Fehlende Rechte beim Erstellen eines Tickets (Guild %s)", guild.id)
             return None
@@ -397,6 +445,8 @@ class Tickets(commands.Cog):
             "panel_id": panel.get("id"),
             "reason_id": (reason or {}).get("id"),
             "reason_label": reason_label,
+            "support_roles": eff_support,      # zuständiges Team (für Schließen/Wiederöffnen)
+            "category_id": eff_category,       # Kategorie dieses Typs (offen)
             "status": "open",
             "claimed_by": None,
             "locked": False,
@@ -613,7 +663,7 @@ class Tickets(commands.Cog):
                 closed_cat = guild.get_channel(conf.get("category_close")) if conf.get("category_close") else None
                 await channel.edit(
                     category=closed_cat if isinstance(closed_cat, discord.CategoryChannel) else channel.category,
-                    overwrites=self._closed_overwrites(guild, conf),
+                    overwrites=self._closed_overwrites(guild, conf, support_ids=record.get("support_roles")),
                     reason=f"Ticket #{record['num']} geschlossen",
                 )
         except discord.HTTPException:
@@ -631,10 +681,11 @@ class Tickets(commands.Cog):
             if isinstance(channel, discord.Thread):
                 await channel.edit(archived=False, locked=False)
             else:
-                open_cat = guild.get_channel(conf.get("category_open")) if conf.get("category_open") else None
+                cat_id = record.get("category_id") or conf.get("category_open")
+                open_cat = guild.get_channel(cat_id) if cat_id else None
                 await channel.edit(
                     category=open_cat if isinstance(open_cat, discord.CategoryChannel) else channel.category,
-                    overwrites=self._overwrites(guild, owner or guild.me, conf),
+                    overwrites=self._overwrites(guild, owner or guild.me, conf, support_ids=record.get("support_roles")),
                 )
         except discord.HTTPException:
             pass

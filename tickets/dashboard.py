@@ -119,7 +119,9 @@ async def _render(cog, request):
         if panel is not None:
             return {
                 "title": "Tickets · Panel bearbeiten",
-                "content": _FORM_STYLE + _render_panel_editor(guild, panel, text_items, csrf),
+                "content": _FORM_STYLE + _render_panel_editor(
+                    guild, panel, text_items, role_items, cat_items, csrf
+                ),
             }
 
     flash = ""
@@ -350,7 +352,7 @@ def _questions_to_text(questions) -> str:
     return "\n".join(lines)
 
 
-def _render_panel_editor(guild, panel, text_items, csrf) -> str:
+def _render_panel_editor(guild, panel, text_items, role_items, cat_items, csrf) -> str:
     """Editor für ein bestehendes Panel (Titel, Text, Modus, Kanal, Gründe, Fragen)."""
     pid = panel.get("id")
     mode = panel.get("mode", "button")
@@ -361,7 +363,7 @@ def _render_panel_editor(guild, panel, text_items, csrf) -> str:
     def msel(value):
         return " selected" if mode == value else ""
 
-    return f"""
+    editor = f"""
     <div class='card-x'>
       <div class='tk-section-title'>Panel bearbeiten</div>
       <form class='tk-form' method='post' action='/cogs/tickets'>
@@ -382,7 +384,7 @@ def _render_panel_editor(guild, panel, text_items, csrf) -> str:
         <label>Beschreibung</label><textarea name='description'>{_esc(panel.get('description') or '')}</textarea>
         <label>Gründe (eine Zeile je Grund)</label>
         <textarea name='reasons'>{_esc(reasons_text)}</textarea>
-        <div class='hint'>Format: <code>Label | Emoji | Beschreibung</code> (Emoji/Beschreibung optional). Leer = ein einzelner „Ticket öffnen“-Button.</div>
+        <div class='hint'>Format: <code>Label | Emoji | Beschreibung</code> (Emoji/Beschreibung optional). Leer = ein einzelner „Ticket öffnen“-Button. Der Grund wird auch zum Kanalnamen (z. B. <code>bewerbung-12</code>).</div>
         <label>Modal-Fragen (max. 5, eine je Zeile)</label>
         <textarea name='questions'>{_esc(questions_text)}</textarea>
         <div class='hint'>Format: <code>Label | Platzhalter | pflicht(ja/nein) | lang(ja/nein)</code>.</div>
@@ -392,6 +394,51 @@ def _render_panel_editor(guild, panel, text_items, csrf) -> str:
       </form>
     </div>
     """
+    return editor + _render_reason_routing(guild, panel, role_items, cat_items, csrf)
+
+
+def _render_reason_routing(guild, panel, role_items, cat_items, csrf) -> str:
+    """Team-Zuordnung je Grund: eigene Team-Rollen, Ping-Rollen und Kategorie."""
+    reasons = panel.get("reasons") or []
+    if not reasons:
+        return (
+            "<div class='tk-spacer'></div><div class='card-x'>"
+            "<div class='tk-section-title'>Team-Zuordnung je Grund</div>"
+            "<div class='hint'>Lege zuerst oben Gründe an (und speichere), dann kannst du "
+            "hier jedem Grund ein eigenes Team, eine Ping-Rolle und eine Kategorie geben.</div></div>"
+        )
+    blocks = []
+    for r in reasons:
+        rid = r.get("id")
+        head = f"{_esc(r.get('emoji') or '')} {_esc(r.get('label') or '—')}".strip()
+        blocks.append(
+            f"<div style='border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:12px'>"
+            f"<div class='tk-section-title' style='font-size:1rem;margin-bottom:8px'>{head}</div>"
+            "<div class='row2'>"
+            f"<div><label>Team-Rollen (nur diese + Admins sehen den Typ)</label>"
+            f"<select name='r_{_esc(rid)}_support' multiple>{_options(role_items, r.get('support_roles') or [])}</select></div>"
+            f"<div><label>Ping-Rollen (Benachrichtigung beim Öffnen)</label>"
+            f"<select name='r_{_esc(rid)}_ping' multiple>{_options(role_items, r.get('ping_roles') or [])}</select></div>"
+            "</div>"
+            f"<label>Kategorie (optional, sonst die globale)</label>"
+            f"<select name='r_{_esc(rid)}_cat'>{_options(cat_items, [r.get('category_id')] if r.get('category_id') else [], none_label='— globale Kategorie —')}</select>"
+            "</div>"
+        )
+    return (
+        "<div class='tk-spacer'></div>"
+        "<div class='card-x'><div class='tk-section-title'>Team-Zuordnung je Grund</div>"
+        "<div class='hint'>Leerlassen = globale Support-/Ping-Rollen. Mit Team-Rollen sehen nur "
+        "diese Rollen (plus deine Admin-Rollen) Tickets dieses Typs.</div>"
+        "<div class='tk-spacer'></div>"
+        f"<form class='tk-form' method='post' action='/cogs/tickets'>"
+        f"<input type='hidden' name='csrf_token' value='{csrf}'>"
+        f"<input type='hidden' name='form' value='panel_routing'>"
+        f"<input type='hidden' name='guild' value='{guild.id}'>"
+        f"<input type='hidden' name='panel_id' value='{_esc(panel.get('id'))}'>"
+        + "".join(blocks)
+        + "<button class='btn-accent' type='submit'>Team-Zuordnung speichern</button>"
+        "</form></div>"
+    )
 
 
 def _render_transcripts(guild, conf) -> str:
@@ -558,7 +605,9 @@ async def _handle_post(cog, request):
                     p["description"] = (data.get("description") or "").strip()
                     p["mode"] = "dropdown" if data.get("mode") == "dropdown" else "button"
                     p["channel_id"] = new_channel_id
-                    p["reasons"] = _parse_reasons(data.get("reasons", ""))
+                    # Gründe neu parsen, aber IDs + Team-Zuordnung anhand des Labels erhalten,
+                    # damit die Zuordnung beim Bearbeiten des Grund-Textes nicht verloren geht.
+                    p["reasons"] = _merge_reason_routing(p.get("reasons"), _parse_reasons(data.get("reasons", "")))
                     p["modal_questions"] = _parse_questions(data.get("questions", ""))
                     panel_copy = dict(p)
                     break
@@ -579,6 +628,22 @@ async def _handle_post(cog, request):
                     break
         ok = "Panel+aktualisiert" if new_msg_id else "Panel+gespeichert+(Nachricht+nicht+aktualisiert)"
         raise web.HTTPFound(f"/cogs/tickets?guild={guild.id}&ok={ok}")
+
+    if form == "panel_routing":
+        pid = data.get("panel_id")
+        async with gconf.panels() as panels:
+            for p in panels:
+                if p.get("id") != pid:
+                    continue
+                for r in (p.get("reasons") or []):
+                    rid = r.get("id")
+                    r["support_roles"] = _ids(data.getall(f"r_{rid}_support", []))
+                    r["ping_roles"] = _ids(data.getall(f"r_{rid}_ping", []))
+                    r["category_id"] = _one_id(data.get(f"r_{rid}_cat"))
+                break
+        raise web.HTTPFound(
+            f"/cogs/tickets?guild={guild.id}&panel={pid}&ok=Team-Zuordnung+gespeichert"
+        )
 
     if form == "panel_delete":
         pid = data.get("panel_id")
@@ -614,6 +679,26 @@ def _parse_reasons(raw: str) -> list[dict]:
             }
         )
     return reasons[:25]
+
+
+def _merge_reason_routing(old_reasons, new_reasons):
+    """Übernimmt ID und Team-Zuordnung (support/ping/category) eines Grundes anhand
+    des Labels, damit die Zuordnung beim Bearbeiten des Grund-Textes erhalten bleibt.
+    """
+    by_label = {}
+    for r in old_reasons or []:
+        if r.get("label"):
+            by_label[r["label"]] = r
+    for r in new_reasons:
+        old = by_label.get(r.get("label"))
+        if not old:
+            continue
+        if old.get("id"):
+            r["id"] = old["id"]
+        for key in ("support_roles", "ping_roles", "category_id"):
+            if old.get(key):
+                r[key] = old[key]
+    return new_reasons
 
 
 def _parse_questions(raw: str) -> list[dict]:
