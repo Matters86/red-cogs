@@ -208,9 +208,14 @@ def _render_lockdown(guild, conf, csrf) -> str:
     active = bool(conf.get("lockdown_until"))
     if active:
         until = conf.get("lockdown_until")
-        when = f"endet automatisch <t:{int(until)}:R>" if until and until > 0 else "bis zur manuellen Aufhebung"
+        # (Früher stand hier Discord-Markdown "<t:…:R>" – im Browser ein unsichtbares Tag.)
+        if until and until > 0:
+            mins = max(0, int((until - time.time()) // 60))
+            when = f"endet automatisch in ca. {mins} Min."
+        else:
+            when = "bis zur manuellen Aufhebung"
         btn = "<button class='btn-accent' name='state' value='off'>Notmodus beenden</button>"
-        note = f"<div class='gd-hint'>Aktiv – {when}.</div>"
+        note = f"<div class='gd-hint'>Aktiv – {_esc(when)}</div>"
     else:
         btn = "<button class='btn-accent' name='state' value='on'>Notmodus jetzt aktivieren</button>"
         note = "<div class='gd-hint'>Setzt Slowmode, pausiert (falls möglich) Einladungen und behandelt neue Beitritte gemäß Einstellung.</div>"

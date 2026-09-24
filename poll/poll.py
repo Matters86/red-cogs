@@ -14,7 +14,7 @@ from redbot.core.bot import Red
 from redbot.core.utils.chat_formatting import pagify
 
 from .dashboard import dashboard_handler
-from .embed import build_poll_embed, is_ended_or_closed, result_text, vote_counts
+from .embed import build_poll_embed, result_text, vote_counts
 from .strings import DEFAULT_LANGUAGE, LANGUAGES, t
 from .views import CID_VOTE, MAX_OPTION_BUTTONS, build_poll_view
 
@@ -303,11 +303,12 @@ class Poll(commands.Cog):
             polls[poll_id] = poll
             snapshot = dict(poll)
 
-        await self.refresh_poll_message(guild, snapshot)
+        # Erst antworten (3-s-Fenster), dann die Umfrage-Nachricht aktualisieren.
         key = {"added": "vote_added", "removed": "vote_removed", "changed": "vote_changed"}[action]
         await interaction.response.send_message(
             t(lang, key, option=options[idx]), ephemeral=True
         )
+        await self.refresh_poll_message(guild, snapshot)
 
     # ----------------------------------------------------------------- #
     #  Hintergrund: Auto-Ende + Ergebnis-Ansage
@@ -325,28 +326,38 @@ class Poll(commands.Cog):
                 continue
             lang = conf.get("language", DEFAULT_LANGUAGE)
             for pid, poll in list(polls.items()):
+                if not isinstance(poll, dict):
+                    continue
                 end_ts = poll.get("end_ts")
                 if poll.get("closed") or poll.get("ended") or not end_ts:
                     continue
                 if now < end_ts:
                     continue
-                # Nur die Statusflags am FRISCHEN Datensatz setzen und NICHT den
-                # Snapshot zurückschreiben – sonst gehen parallel (während der
-                # awaits) abgegebene Stimmen verloren (Lost Update).
-                async with self.config.guild(guild).polls() as stored:
-                    fresh = stored.get(pid)
-                    if fresh is None:
-                        continue
-                    fresh["ended"] = True
-                    fresh["closed"] = True
-                    announce = not fresh.get("announced")
-                    if announce:
-                        fresh["announced"] = True
-                    stored[pid] = fresh
-                    fresh_poll = dict(fresh)
-                await self.refresh_poll_message(guild, fresh_poll)
-                if announce:
-                    await self._announce_result(guild, fresh_poll, lang)
+                # Eine unbehandelte Exception würde tasks.loop dauerhaft stoppen
+                # (kein Auto-Ende mehr auf allen Servern) -> pro Umfrage abfangen.
+                try:
+                    await self._end_poll(guild, pid, lang)
+                except Exception:  # noqa: BLE001
+                    log.exception("Auto-Ende von Umfrage %s (Guild %s) fehlgeschlagen", pid, guild.id)
+
+    async def _end_poll(self, guild, pid, lang):
+        # Nur die Statusflags am FRISCHEN Datensatz setzen und NICHT den
+        # Snapshot zurückschreiben – sonst gehen parallel (während der
+        # awaits) abgegebene Stimmen verloren (Lost Update).
+        async with self.config.guild(guild).polls() as stored:
+            fresh = stored.get(pid)
+            if fresh is None:
+                return
+            fresh["ended"] = True
+            fresh["closed"] = True
+            announce = not fresh.get("announced")
+            if announce:
+                fresh["announced"] = True
+            stored[pid] = fresh
+            fresh_poll = dict(fresh)
+        await self.refresh_poll_message(guild, fresh_poll)
+        if announce:
+            await self._announce_result(guild, fresh_poll, lang)
 
     @_poll_tick.before_loop
     async def _before_tick(self):

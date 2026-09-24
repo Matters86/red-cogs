@@ -38,6 +38,7 @@ import aiohttp
 import discord
 from aiohttp import web
 from redbot.core import commands, Config
+from redbot.core.data_manager import cog_data_path
 
 from . import db
 
@@ -47,6 +48,9 @@ log = logging.getLogger("red.adminpanel")
 # Discord-Befehl gesetzten Config-Werte diese (self.api_key usw.).
 DEFAULT_API_KEY = os.environ.get("ADMINPANEL_API_KEY", "CHANGE_ME")
 DEFAULT_WEB_PORT = int(os.environ.get("ADMINPANEL_WEB_PORT", "8099"))
+# Bind-Adresse: Standard bleibt 0.0.0.0 (alle Schnittstellen). Läuft das Panel nur
+# hinter einem Reverse-Proxy auf demselben Host, ist 127.0.0.1 sicherer.
+DEFAULT_WEB_HOST = os.environ.get("ADMINPANEL_WEB_HOST", "0.0.0.0")
 DEFAULT_PUBLIC_URL = os.environ.get("ADMINPANEL_PUBLIC_URL", "").rstrip("/")
 DEFAULT_MONEY_MAX = int(os.environ.get("ADMINPANEL_MONEY_MAX", "50000"))
 DEFAULT_ITEM_MAX = int(os.environ.get("ADMINPANEL_ITEM_MAX", "100"))
@@ -114,6 +118,7 @@ class AdminPanel(commands.Cog):
             locked=False,
             api_key=None,      # None => ENV/Default
             web_port=None,
+            web_host=None,     # None => ENV/Default (0.0.0.0)
             public_url=None,
             money_max=None,
             item_max=None,
@@ -125,9 +130,15 @@ class AdminPanel(commands.Cog):
         # Laufzeit-Settings (werden in _start_webserver aus Config+ENV aufgelöst)
         self.api_key = DEFAULT_API_KEY
         self.web_port = DEFAULT_WEB_PORT
+        self.web_host = DEFAULT_WEB_HOST
         self.public_url = DEFAULT_PUBLIC_URL
         self.money_max = DEFAULT_MONEY_MAX
         self.item_max = DEFAULT_ITEM_MAX
+        try:
+            path = db.set_data_dir(cog_data_path(self))
+            log.info("AdminPanel-DB: %s", path)
+        except Exception:  # noqa: BLE001 – lieber alter Ort als gar nicht laden
+            log.exception("AdminPanel: DB-Umzug in den Datenordner fehlgeschlagen – nutze alten Speicherort")
         db.init_db()
         self.runner: web.AppRunner | None = None
         self._web_task = self.bot.loop.create_task(self._start_webserver())
@@ -137,6 +148,7 @@ class AdminPanel(commands.Cog):
         """Effektive Settings = Config-Wert, sonst ENV/Default."""
         self.api_key = await self.config.api_key() or DEFAULT_API_KEY
         self.web_port = await self.config.web_port() or DEFAULT_WEB_PORT
+        self.web_host = await self.config.web_host() or DEFAULT_WEB_HOST
         self.public_url = (await self.config.public_url() or DEFAULT_PUBLIC_URL).rstrip("/")
         self.money_max = await self.config.money_max() or DEFAULT_MONEY_MAX
         self.item_max = await self.config.item_max() or DEFAULT_ITEM_MAX
@@ -165,17 +177,21 @@ class AdminPanel(commands.Cog):
 
     async def _backup_loop(self):
         """Sichert die DB alle 24h automatisch."""
-        import asyncio
+        # Stündlich prüfen, ob das jüngste Backup älter als 24 h ist. Vorher wurde
+        # erst 24 h NACH jedem Laden gesichert – bei häufigem [p]reload also nie.
         await self.bot.wait_until_ready()
         while True:
             try:
-                await asyncio.sleep(24 * 3600)
-                path, count = await asyncio.to_thread(db.backup_db)
-                log.info(f"AdminPanel DB-Backup erstellt: {path} ({count} Backups vorhanden)")
+                age = await asyncio.to_thread(db.newest_backup_age)
+                if age is None or age >= 24 * 3600:
+                    path, count = await asyncio.to_thread(db.backup_db)
+                    log.info(f"AdminPanel DB-Backup erstellt: {path} ({count} Backups vorhanden)")
+                await asyncio.sleep(3600)
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 log.warning(f"DB-Backup fehlgeschlagen: {e}")
+                await asyncio.sleep(3600)
 
     # --------------------------------------------------------------
     # Berechtigungs-Auflösung (live aus Discord-Rollen)
@@ -250,7 +266,7 @@ class AdminPanel(commands.Cog):
 
         self.runner = web.AppRunner(app)
         await self.runner.setup()
-        site = web.TCPSite(self.runner, "0.0.0.0", self.web_port)
+        site = web.TCPSite(self.runner, self.web_host, self.web_port)
         # Bei [p]reload kann der Port kurz noch vom alten Prozess belegt sein –
         # ein paar Versuche mit kurzem Warten, statt sofort aufzugeben.
         for attempt in range(3):
@@ -265,7 +281,7 @@ class AdminPanel(commands.Cog):
                     return
                 log.warning(f"Port {self.web_port} noch belegt ({e}) – neuer Versuch in 2s…")
                 await asyncio.sleep(2)
-        log.info(f"AdminPanel Webserver läuft auf Port {self.web_port}")
+        log.info(f"AdminPanel Webserver läuft auf {self.web_host}:{self.web_port}")
         if self.api_key == "CHANGE_ME":
             log.warning(
                 "⚠️ Kein API-Key gesetzt (Default 'CHANGE_ME')! Der Kanal zur FiveM-Bridge ist ungeschützt. "
@@ -472,6 +488,8 @@ class AdminPanel(commands.Cog):
         action_type = data.get("action_type")
         target = str(data.get("target", "")).strip()
         params = data.get("params") or {}
+        if not isinstance(params, dict):
+            return web.json_response({"error": "params muss ein Objekt sein"}, status=400)
 
         needed = ACTION_PERMISSION.get(action_type)
         if not needed:
@@ -502,6 +520,20 @@ class AdminPanel(commands.Cog):
                 return web.json_response(
                     {"error": f"Limit überschritten: max. {self.money_max:,} $ pro Aktion".replace(",", ".")},
                     status=400)
+        if action_type == "ban":
+            try:
+                hours = int(params.get("hours", 0))
+            except (TypeError, ValueError):
+                return web.json_response({"error": "hours muss eine Zahl sein"}, status=400)
+            if hours < 0:
+                return web.json_response({"error": "hours darf nicht negativ sein (0 = permanent)"}, status=400)
+            params["hours"] = hours
+            params["reason"] = str(params.get("reason") or "").strip()[:500]
+        if action_type in ("set_job", "set_gang"):
+            try:
+                params["grade"] = int(params.get("grade", 0))
+            except (TypeError, ValueError):
+                return web.json_response({"error": "grade muss eine Zahl sein"}, status=400)
         if action_type in ("give_item", "remove_item"):
             try:
                 count = int(params.get("count"))
@@ -555,24 +587,33 @@ class AdminPanel(commands.Cog):
         if not channel:
             return
         colors = {"alert": discord.Color.red(), "warn": discord.Color.orange()}
+        embeds = []
         for e in events:
+            if not isinstance(e, dict):
+                continue
             sev = e.get("severity")
             if sev not in colors:
                 continue
-            who = e.get("name") or "?"
+            who = str(e.get("name") or "?")[:100]
             if e.get("citizenid"):
-                who += f" (`{e['citizenid']}`)"
-            embed = discord.Embed(
-                title=("🚨 " if sev == "alert" else "⚠️ ") + str(e.get("type", "event")),
-                description=f"**{who}**\n{e.get('message', '')}",
+                who += f" (`{str(e['citizenid'])[:50]}`)"
+            embeds.append(discord.Embed(
+                title=(("🚨 " if sev == "alert" else "⚠️ ") + str(e.get("type", "event")))[:256],
+                description=f"**{who}**\n{str(e.get('message', ''))[:1500]}",
                 color=colors[sev],
-            )
+            ))
+        # Bis zu 10 Embeds pro Nachricht statt einer Nachricht je Event (Rate-Limits).
+        for i in range(0, len(embeds), 10):
             try:
-                await channel.send(embed=embed)
+                await channel.send(embeds=embeds[i:i + 10])
             except discord.HTTPException:
                 log.warning("Alert konnte nicht in den Channel gesendet werden.")
 
     async def http_player_history(self, request: web.Request):
+        # Akte (Aktionen, Notizen, Verwarnungen, Ban) nur für Rollen mit Spieler-/Moderationsbezug –
+        # vorher reichte JEDE Session (z. B. reines "editor"-Preset für den Server-Status).
+        if not ({"view_players", "notes", "ban"} & request["perms"]):
+            return web.json_response({"error": "keine Berechtigung"}, status=403)
         cid = (request.query.get("cid") or "").strip()
         if not cid:
             return web.json_response({"error": "cid fehlt"}, status=400)
@@ -813,10 +854,11 @@ class AdminPanel(commands.Cog):
             params = json.loads(action.get("params") or "{}")
         except (ValueError, TypeError):
             params = {}
-        hours = params.get("hours")
-        expires_at = None
-        if hours and int(hours) > 0:
-            expires_at = time.time() + int(hours) * 3600
+        try:
+            hours = int(params.get("hours") or 0)
+        except (TypeError, ValueError):
+            hours = 0
+        expires_at = time.time() + hours * 3600 if hours > 0 else None
         await asyncio.to_thread(
             db.add_ban,
             citizenid=action["target"],
@@ -855,8 +897,11 @@ class AdminPanel(commands.Cog):
         elif action["action_type"] in ("set_job", "set_gang"):
             detail = f"{params.get('job') or params.get('gang', '?')} (Grade {params.get('grade', 0)})"
         elif action["action_type"] == "ban":
-            hrs = params.get("hours")
-            detail = ("permanent" if not hrs or int(hrs) == 0 else f"{hrs}h") + f" · {params.get('reason', '')}"
+            try:
+                hrs = int(params.get("hours") or 0)
+            except (TypeError, ValueError):
+                hrs = 0
+            detail = ("permanent" if hrs <= 0 else f"{hrs}h") + f" · {params.get('reason', '')}"
         status_icon = "✅" if action["status"] == "done" else "❌"
         await self._audit(
             f"{icons.get(action['action_type'], '•')} **{action['action_type']}** {status_icon}\n"
@@ -867,13 +912,18 @@ class AdminPanel(commands.Cog):
     # Discord-Commands
     # --------------------------------------------------------------
 
-    async def _require(self, ctx: commands.Context, permission: str) -> bool:
+    async def _require(self, ctx: commands.Context, permission: str, *, acting: bool = True) -> bool:
+        """Rechte-Check für Discord-Befehle. ``acting=True``: Befehl legt eine Aktion
+        im Spiel an und ist im Lockdown gesperrt (wie im Webpanel)."""
         if ctx.guild is None:
             await ctx.send("Bitte auf dem Server nutzen, nicht per DM.")
             return False
         perms = await self.member_permissions(ctx.author)
         if permission not in perms:
             await ctx.send("❌ Dafür fehlt dir die Berechtigung.")
+            return False
+        if acting and await self.config.locked():
+            await ctx.send("🔒 Panel im Lockdown – Aktionen sind gesperrt.")
             return False
         return True
 
@@ -1047,13 +1097,12 @@ class AdminPanel(commands.Cog):
     @ap.command(name="inv")
     async def ap_inv(self, ctx: commands.Context, spieler: str):
         """Zeigt das Inventar eines Spielers. Beispiel: !ap inv ABC123"""
-        if not await self._require(ctx, "view_inventory"):
+        if not await self._require(ctx, "view_inventory", acting=False):
             return
         action_id = await asyncio.to_thread(db.add_action, "get_inventory", spieler, None,
                                             f"discord:{ctx.author.display_name}")
         msg = await ctx.send(f"⏳ Frage Inventar von `{spieler}` ab…")
 
-        import asyncio
         for _ in range(12):  # max. ~12 Sekunden auf die Bridge warten
             await asyncio.sleep(1)
             action = await asyncio.to_thread(db.get_action, action_id)
@@ -1089,13 +1138,12 @@ class AdminPanel(commands.Cog):
     @ap.command(name="cars")
     async def ap_cars(self, ctx: commands.Context, spieler: str):
         """Zeigt die Fahrzeuge eines Spielers (auch offline). Beispiel: !ap cars ABC123"""
-        if not await self._require(ctx, "car_to_garage"):
+        if not await self._require(ctx, "car_to_garage", acting=False):
             return
         action_id = await asyncio.to_thread(db.add_action, "get_vehicles", spieler, None,
                                             f"discord:{ctx.author.display_name}")
         msg = await ctx.send(f"⏳ Frage Fahrzeuge von `{spieler}` ab…")
 
-        import asyncio
         for _ in range(12):
             await asyncio.sleep(1)
             action = await asyncio.to_thread(db.get_action, action_id)
@@ -1137,12 +1185,11 @@ class AdminPanel(commands.Cog):
     @ap.command(name="find")
     async def ap_find(self, ctx: commands.Context, *, query: str):
         """Sucht Spieler in der DB (Name oder CID, auch offline). Beispiel: !ap find Kevin"""
-        if not await self._require(ctx, "view_players"):
+        if not await self._require(ctx, "view_players", acting=False):
             return
         action_id = await asyncio.to_thread(db.add_action, "search_player", query, None,
                                             f"discord:{ctx.author.display_name}")
         msg = await ctx.send(f"⏳ Suche nach `{query}`…")
-        import asyncio
         for _ in range(12):
             await asyncio.sleep(1)
             action = await asyncio.to_thread(db.get_action, action_id)
@@ -1159,8 +1206,12 @@ class AdminPanel(commands.Cog):
             embed = discord.Embed(title=f"Suche: {query}")
             lines = []
             for r in results[:15]:
+                try:
+                    bank = f"{int(r.get('bank') or 0):,}".replace(",", ".")
+                except (TypeError, ValueError):
+                    bank = str(r.get("bank"))
                 lines.append(f"**{r.get('charname', '?')}** · `{r.get('citizenid')}` · "
-                             f"{r.get('job') or 'kein Job'} · Bank: {r.get('bank', 0):,}$".replace(",", "."))
+                             f"{r.get('job') or 'kein Job'} · Bank: {bank}$")
             embed.description = "\n".join(lines)
             return await msg.edit(content=None, embed=embed)
         await msg.edit(content="❌ Keine Antwort von der FiveM-Bridge – läuft der Server?")
@@ -1195,7 +1246,7 @@ class AdminPanel(commands.Cog):
     @ap.command(name="note")
     async def ap_note(self, ctx: commands.Context, citizenid: str, *, text: str):
         """Legt eine Team-Notiz zu einem Spieler an."""
-        if not await self._require(ctx, "notes"):
+        if not await self._require(ctx, "notes", acting=False):
             return
         await asyncio.to_thread(db.add_note, citizenid, "note", text[:1000], f"discord:{ctx.author.display_name}")
         await ctx.send(f"📝 Notiz für `{citizenid}` gespeichert.")
@@ -1203,7 +1254,7 @@ class AdminPanel(commands.Cog):
     @ap.command(name="warn")
     async def ap_warn(self, ctx: commands.Context, citizenid: str, *, text: str):
         """Spricht eine Verwarnung aus (Team-weit sichtbar in der Akte)."""
-        if not await self._require(ctx, "notes"):
+        if not await self._require(ctx, "notes", acting=False):
             return
         await asyncio.to_thread(db.add_note, citizenid, "warn", text[:1000], f"discord:{ctx.author.display_name}")
         notes = await asyncio.to_thread(db.get_notes, citizenid)
@@ -1221,7 +1272,9 @@ class AdminPanel(commands.Cog):
             try:
                 hours = int(duration)
             except ValueError:
-                return await ctx.send("Dauer muss eine Stundenzahl oder `perm` sein.")
+                hours = -1
+            if hours < 0:  # vorher wurde "-5" stillschweigend zu einem PERMANENTEN Ban
+                return await ctx.send("Dauer muss eine positive Stundenzahl oder `perm` sein.")
         await asyncio.to_thread(db.add_action, "ban", spieler, json.dumps({"hours": hours, "reason": reason}),
                                 f"discord:{ctx.author.display_name}")
         dur_txt = "permanent" if hours == 0 else f"{hours} Stunden"
@@ -1230,7 +1283,7 @@ class AdminPanel(commands.Cog):
     @ap.command(name="unban")
     async def ap_unban(self, ctx: commands.Context, citizenid: str):
         """Hebt einen Ban auf. Beispiel: !ap unban ABC123"""
-        if not await self._require(ctx, "ban"):
+        if not await self._require(ctx, "ban", acting=False):
             return
         if await asyncio.to_thread(db.remove_ban, citizenid):
             await self._audit(f"🔓 **Unban** · `{citizenid}` · von {ctx.author.display_name}")
@@ -1241,7 +1294,7 @@ class AdminPanel(commands.Cog):
     @ap.command(name="bans")
     async def ap_bans(self, ctx: commands.Context):
         """Zeigt alle aktiven Bans."""
-        if not await self._require(ctx, "ban"):
+        if not await self._require(ctx, "ban", acting=False):
             return
         bans = await asyncio.to_thread(db.get_active_bans)
         if not bans:
@@ -1254,10 +1307,12 @@ class AdminPanel(commands.Cog):
             else:
                 exp = "permanent"
             embed.add_field(
-                name=f"{b.get('name') or '?'} · {b['citizenid']}",
-                value=f"{b['reason']}\nBis: {exp} · von {b['banned_by']}",
+                name=f"{b.get('name') or '?'} · {b['citizenid']}"[:256],
+                value=f"{str(b['reason'])[:200]}\nBis: {exp} · von {b['banned_by']}"[:1024],
                 inline=False,
             )
+        if len(bans) > 20:
+            embed.set_footer(text=f"… und {len(bans) - 20} weitere (vollständig im Webpanel)")
         await ctx.send(embed=embed)
 
     @ap.command(name="auditchannel")
@@ -1297,16 +1352,22 @@ class AdminPanel(commands.Cog):
         embed = discord.Embed(title="AdminPanel – Einstellungen")
         embed.add_field(name="API-Key (Bridge)", value=key_disp, inline=False)
         embed.add_field(name="Web-Port", value=str(self.web_port), inline=True)
+        embed.add_field(name="Bind-Adresse", value=f"`{self.web_host}`", inline=True)
         embed.add_field(name="Public-URL", value=url, inline=False)
         embed.add_field(name="Geld-Limit / Aktion", value=f"{self.money_max:,} $".replace(",", "."), inline=True)
         embed.add_field(name="Item-Limit / Aktion", value=str(self.item_max), inline=True)
-        embed.set_footer(text="Ändern: !ap config key | url | port | moneymax | itemmax")
+        embed.set_footer(text="Ändern: !ap config key | url | port | bind | moneymax | itemmax")
         await ctx.send(embed=embed)
 
     @ap_config.command(name="key")
     async def ap_config_key(self, ctx: commands.Context, custom_key: str = None):
         """Generiert einen neuen API-Key (oder setzt einen eigenen) und schickt ihn per DM."""
-        import secrets
+        if custom_key:
+            # Eigener Key stand im Befehl -> Nachricht sofort löschen (Secret nicht im Chat lassen)
+            try:
+                await ctx.message.delete()
+            except discord.HTTPException:
+                pass
         key = custom_key or secrets.token_hex(32)
         await self.config.api_key.set(key)
         self.api_key = key
@@ -1336,12 +1397,27 @@ class AdminPanel(commands.Cog):
 
     @ap_config.command(name="port")
     async def ap_config_port(self, ctx: commands.Context, port: int):
-        """Setzt den Web-Port (wird nach `[p]reload adminpanel` aktiv)."""
+        """Setzt den Web-Port (wird nach `[p]reload fivemadmin` aktiv)."""
         if not (1 <= port <= 65535):
             return await ctx.send("Ungültiger Port.")
         await self.config.web_port.set(port)
-        await ctx.send(f"✅ Web-Port auf {port} gesetzt. Wird nach `[p]reload adminpanel` aktiv "
+        await ctx.send(f"✅ Web-Port auf {port} gesetzt. Wird nach `[p]reload fivemadmin` aktiv "
                        f"(der Server bindet den Port beim Start). Reverse-Proxy ggf. anpassen.")
+
+    @ap_config.command(name="bind")
+    async def ap_config_bind(self, ctx: commands.Context, host: str):
+        """Bind-Adresse des Webservers: `127.0.0.1` (nur lokal/Reverse-Proxy) oder `0.0.0.0` (alle)."""
+        import ipaddress
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            return await ctx.send("Bitte eine IP-Adresse angeben, z. B. `127.0.0.1` oder `0.0.0.0`.")
+        await self.config.web_host.set(host)
+        await ctx.send(
+            f"✅ Bind-Adresse `{host}` gespeichert. Wird nach `[p]reload fivemadmin` aktiv.\n"
+            "⚠️ Mit `127.0.0.1` ist das Panel nur noch über einen Reverse-Proxy auf demselben Rechner "
+            "erreichbar (bei Docker: nur, wenn der Proxy im selben Container/Host-Netz läuft)."
+        )
 
     @ap_config.command(name="moneymax")
     async def ap_config_moneymax(self, ctx: commands.Context, amount: int):
@@ -1384,11 +1460,10 @@ class AdminPanel(commands.Cog):
     @ap.command(name="diag")
     async def ap_diag(self, ctx: commands.Context):
         """Prüft das Setup (DB, Exports, Tabellen, Society-System)."""
-        if not await self._require(ctx, "server_status"):
+        if not await self._require(ctx, "server_status", acting=False):
             return
         action_id = await asyncio.to_thread(db.add_action, "diag", "*", None, f"discord:{ctx.author.display_name}")
         msg = await ctx.send("⏳ Diagnose läuft…")
-        import asyncio
         for _ in range(12):
             await asyncio.sleep(1)
             action = await asyncio.to_thread(db.get_action, action_id)
@@ -1432,8 +1507,13 @@ class AdminPanel(commands.Cog):
                                   f"Umschalten mit `!ap lockdown on` / `off`.")
         if state.lower() in ("on", "an", "1", "true"):
             await self.config.locked.set(True)
-            await self._audit(f"🔒 **LOCKDOWN AKTIVIERT** von {ctx.author.display_name}")
-            await ctx.send("🔒 **Lockdown aktiv.** Alle Panel-Aktionen sind gesperrt, offene Aufträge werden nicht mehr ausgeführt. "
+            # Offene Aufträge verwerfen – sonst würden sie nach "lockdown off" doch noch
+            # ausgeführt (genau die Aufträge, wegen derer man evtl. den Not-Aus zieht).
+            dropped = await asyncio.to_thread(
+                db.cancel_pending_actions, f"Verworfen durch Lockdown ({ctx.author.display_name})"
+            )
+            await self._audit(f"🔒 **LOCKDOWN AKTIVIERT** von {ctx.author.display_name} · {dropped} offene Aufträge verworfen")
+            await ctx.send(f"🔒 **Lockdown aktiv.** Alle Panel-Aktionen sind gesperrt, **{dropped}** offene Aufträge wurden verworfen. "
                            "Nur Diagnose läuft noch. Aufheben mit `!ap lockdown off`.")
         elif state.lower() in ("off", "aus", "0", "false"):
             await self.config.locked.set(False)

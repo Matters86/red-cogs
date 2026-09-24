@@ -33,6 +33,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "webhook_off": "Bot",
         # Setzen / Entfernen
         "no_text": "Bitte gib einen Text für die Sticky an.",
+        "too_long": "Zu lang: maximal {max} Zeichen ({mode}).",
+        "post_failed": "Gespeichert, aber das Posten in {channel} ist fehlgeschlagen (Rechte? Bild-URL?).",
         "set_ok": "📌 Sticky in {channel} gesetzt ({mode}).",
         "removed": "🗑️ Sticky in {channel} entfernt.",
         "not_set": "In {channel} ist keine Sticky eingerichtet.",
@@ -74,6 +76,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "webhook_on": "Webhook",
         "webhook_off": "Bot",
         "no_text": "Please provide a text for the sticky.",
+        "too_long": "Too long: at most {max} characters ({mode}).",
+        "post_failed": "Saved, but posting in {channel} failed (permissions? image URL?).",
         "set_ok": "📌 Sticky set in {channel} ({mode}).",
         "removed": "🗑️ Sticky removed in {channel}.",
         "not_set": "There is no sticky configured in {channel}.",

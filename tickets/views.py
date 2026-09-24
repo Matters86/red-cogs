@@ -27,8 +27,13 @@ CID_LOCK = "tickets:lock"
 CID_UNLOCK = "tickets:unlock"
 
 
-def build_panel_view(panel: dict) -> discord.ui.View:
-    """Baut die View eines Panels (Buttons ODER Dropdown) anhand der Config."""
+def build_panel_view(panel: dict, *, open_label: str | None = None, emojis: bool = True) -> discord.ui.View:
+    """Baut die View eines Panels (Buttons ODER Dropdown) anhand der Config.
+
+    ``open_label``: Beschriftung des Einzel-Buttons (Override ``btn_open``), falls das
+    Panel keine eigene hat. ``emojis=False`` lässt alle Emojis weg (Fallback, wenn
+    Discord ein ungültiges Emoji ablehnt).
+    """
     view = discord.ui.View(timeout=None)
     panel_id = panel["id"]
     reasons = panel.get("reasons") or []
@@ -41,14 +46,14 @@ def build_panel_view(panel: dict) -> discord.ui.View:
                 discord.SelectOption(
                     label=(r.get("label") or "Ticket")[:100],
                     value=r["id"],
-                    description=(r.get("description") or None),
-                    emoji=(r.get("emoji") or None),
+                    description=((r.get("description") or "")[:100] or None),  # Discord-Limit 100
+                    emoji=((r.get("emoji") or None) if emojis else None),
                 )
             )
         view.add_item(
             discord.ui.Select(
                 custom_id=f"{CID_SELECT}:{panel_id}",
-                placeholder=panel.get("placeholder") or "Auswahl …",
+                placeholder=(panel.get("placeholder") or "Auswahl …")[:150],
                 options=options[:25],
                 min_values=1,
                 max_values=1,
@@ -63,7 +68,7 @@ def build_panel_view(panel: dict) -> discord.ui.View:
                 discord.ui.Button(
                     style=discord.ButtonStyle.secondary,
                     label=(r.get("label") or "Ticket")[:80],
-                    emoji=(r.get("emoji") or None),
+                    emoji=((r.get("emoji") or None) if emojis else None),
                     custom_id=f"{CID_OPEN}:{panel_id}:{r['id']}",
                 )
             )
@@ -71,7 +76,7 @@ def build_panel_view(panel: dict) -> discord.ui.View:
         view.add_item(
             discord.ui.Button(
                 style=discord.ButtonStyle.success,
-                label=(panel.get("button_label") or "🎟️ Ticket")[:80],
+                label=(open_label or panel.get("button_label") or "🎟️ Ticket")[:80],
                 custom_id=f"{CID_OPEN}:{panel_id}:_",
             )
         )

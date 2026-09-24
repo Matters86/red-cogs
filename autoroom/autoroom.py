@@ -181,7 +181,7 @@ class AutoRoom(commands.Cog):
         if rec.get("owner_id") != ctx.author.id:
             await ctx.send(
                 "Das ist nicht dein AutoRoom. Falls der Besitzer weg ist, "
-                "kannst du ihn mit `[p]autoroom claim` übernehmen."
+                f"kannst du ihn mit `{ctx.clean_prefix}autoroom claim` übernehmen."
             )
             return None
         return vc, rec
@@ -199,6 +199,8 @@ class AutoRoom(commands.Cog):
         if after.channel and after.channel != before.channel:
             sources = await self.config.guild(member.guild).sources()
             cfg = sources.get(str(after.channel.id))
+            if cfg is not None and await self.bot.cog_disabled_in_guild(self, member.guild):
+                cfg = None  # Cog im Server deaktiviert: keine neuen Räume (Aufräumen läuft weiter)
             if cfg is not None:
                 await self._create_room_for(member, after.channel, cfg)
             else:
@@ -342,6 +344,23 @@ class AutoRoom(commands.Cog):
             rooms.pop(str(channel.id), None)
             await self.config.guild(guild).active_rooms.set(rooms)
 
+    @commands.Cog.listener()
+    async def on_guild_channel_delete(self, channel):
+        """Raum von Hand gelöscht -> Datensatz + zugehörigen Textkanal sofort aufräumen.
+
+        Vorher blieb der Textkanal eines manuell gelöschten Raums für immer liegen.
+        """
+        if not isinstance(channel, discord.VoiceChannel):
+            return
+        guild = channel.guild
+        async with self._lock(guild.id):
+            rooms = await self.config.guild(guild).active_rooms()
+            rec = rooms.pop(str(channel.id), None)
+            if rec is None:
+                return
+            await self._delete_room(guild, None, rec, "AutoRoom gelöscht")
+            await self.config.guild(guild).active_rooms.set(rooms)
+
     async def _delete_room(self, guild, channel, rec, reason):
         text_id = rec.get("text_id")
         if text_id:
@@ -376,6 +395,8 @@ class AutoRoom(commands.Cog):
             for cid, rec in list(rooms.items()):
                 ch = guild.get_channel(int(cid))
                 if ch is None:
+                    # Voice-Raum weg -> auch den evtl. verwaisten Textkanal entfernen.
+                    await self._delete_room(guild, None, rec, "AutoRoom-Cleanup")
                     rooms.pop(cid, None)
                     changed = True
                     continue
@@ -883,7 +904,7 @@ class AutoRoom(commands.Cog):
             f"<input type='hidden' name='csrf_token' value='{csrf}'>"
             "<input type='hidden' name='action' value='add'>"
             f"<input type='hidden' name='guild_id' value='{guild.id}'>"
-            f"<label class='stat-label'>Quell-Channel</label>{self._voice_select(guild, 'channel_id', exclude=source_ids)}"
+            f"<label class='stat-label'>Quell-Channel</label>{self._voice_select(guild, 'channel_id', exclude=source_ids | set(data.get('active_rooms', {}).keys()))}"
             f"<label class='stat-label'>Ziel-Kategorie</label>{self._category_select(guild, 'category_id')}"
             "<label class='stat-label'>Namensvorlage</label>"
             f"<input name='template' class='form-control form-control-sm' value='{html.escape(DEFAULT_TEMPLATE)}' placeholder='{{user}}'>"
@@ -949,6 +970,9 @@ class AutoRoom(commands.Cog):
         if action in ("add", "edit"):
             channel = guild.get_channel(int(form.get("channel_id"))) if str(form.get("channel_id") or "").isdigit() else None
             if not isinstance(channel, discord.VoiceChannel):
+                return {"redirect": f"/cogs/autoroom?guild={guild.id}&err=1"}
+            if str(channel.id) in (await self.config.guild(guild).active_rooms()):
+                # Ein temporärer AutoRoom darf keine Quelle werden (würde sich endlos vermehren).
                 return {"redirect": f"/cogs/autoroom?guild={guild.id}&err=1"}
 
             cat_id = form.get("category_id") or ""

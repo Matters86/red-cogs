@@ -150,7 +150,7 @@ async def _render(cog, request):
         + _render_warnings(cog, guild, conf)
         + _render_settings(cog, guild, conf, csrf)
         + "<div class='ar-spacer'></div>"
-        + _render_apply(guild, conf, csrf)
+        + _render_apply(guild, conf, csrf, cog.apply_status.get(guild.id), cog.apply_running(guild.id))
         + "<div class='ar-spacer'></div>"
         + _render_panels(cog, guild, conf, csrf)
     )
@@ -281,12 +281,16 @@ def _render_settings(cog, guild, conf, csrf) -> str:
     """
 
 
-def _render_apply(guild, conf, csrf) -> str:
-    ready = bool(conf["enabled"] and conf["join_roles"])
+def _render_apply(guild, conf, csrf, status=None, running=False) -> str:
+    configured = bool(conf["enabled"] and conf["join_roles"])
+    ready = configured and not running
     disabled = "" if ready else "disabled"
+    status_html = (
+        f"<div class='hint' style='margin-top:8px'>Letzter Lauf: {_esc(status)}</div>" if status else ""
+    )
     note = (
         ""
-        if ready
+        if configured
         else "<div class='hint'>Aktiviere das System und trage Mitglieder-Rollen ein, um diese Aktion zu nutzen.</div>"
     )
     return f"""
@@ -299,6 +303,7 @@ def _render_apply(guild, conf, csrf) -> str:
         <input type='hidden' name='guild' value='{guild.id}'>
         <button class='btn-accent' type='submit' {disabled}>Jetzt anwenden</button>
         {note}
+        {status_html}
       </form>
     </div>
     """
@@ -627,14 +632,13 @@ async def _handle_post(cog, request):
         raise web.HTTPFound(f"/cogs/autorole?guild={guild.id}&ok=Einstellungen+gespeichert")
 
     if form == "applyall":
-        result = await cog.apply_to_existing(guild)
-        if result is None:
-            raise web.HTTPFound(
-                f"/cogs/autorole?guild={guild.id}&ok=Nichts+anzuwenden+%28System+aus%2C+keine+Rollen+oder+keine+Rechte%29"
-            )
-        added, members = result
+        # Im Hintergrund: auf großen Servern dauert das Minuten (Rate-Limits) – der
+        # Request würde sonst hängen/timeouten und ein zweiter Klick liefe parallel.
+        if cog.start_apply_job(guild) is None:
+            raise web.HTTPFound(f"/cogs/autorole?guild={guild.id}&ok=" + quote_plus("Läuft bereits – bitte warten"))
         raise web.HTTPFound(
-            f"/cogs/autorole?guild={guild.id}&ok={added}+Rollen-Vergaben+an+{members}+Mitglieder"
+            f"/cogs/autorole?guild={guild.id}&ok="
+            + quote_plus("Anwendung gestartet – Ergebnis erscheint unten, Seite ggf. neu laden")
         )
 
     # ---- Rollen-Panels ----

@@ -60,6 +60,10 @@ class Autorole(commands.Cog):
 
         # Laufzeit-Status (nicht persistent): geplante Vergaben pro (guild_id, member_id).
         self._pending: dict[tuple[int, int], asyncio.Task] = {}
+        # "Auf bestehende Mitglieder anwenden": höchstens ein Lauf pro Server, im
+        # Hintergrund (Dashboard-Request kehrt sofort zurück) + letzter Status für die Anzeige.
+        self._apply_jobs: dict[int, asyncio.Task] = {}
+        self.apply_status: dict[int, str] = {}
 
     # ----------------------------------------------------------------- #
     #  Dashboard-Anbindung (1:1-Muster aus example/sticky)
@@ -73,6 +77,9 @@ class Autorole(commands.Cog):
         for task in list(self._pending.values()):
             task.cancel()
         self._pending.clear()
+        for task in list(self._apply_jobs.values()):
+            task.cancel()
+        self._apply_jobs.clear()
         webcore = self.bot.get_cog("WebCore")
         if webcore is not None:
             webcore.unregister_owner(self)
@@ -289,6 +296,39 @@ class Autorole(commands.Cog):
             return 0
         await self.config.member(member).sticky.clear()  # sticky-Speicher konsumiert
         return len(to_add)
+
+    def apply_running(self, guild_id: int) -> bool:
+        task = self._apply_jobs.get(guild_id)
+        return task is not None and not task.done()
+
+    def start_apply_job(self, guild: discord.Guild) -> asyncio.Task | None:
+        """Startet ``apply_to_existing`` als Hintergrund-Task. ``None`` = läuft bereits."""
+        if self.apply_running(guild.id):
+            return None
+        task = asyncio.create_task(self._apply_job(guild))
+        self._apply_jobs[guild.id] = task
+        return task
+
+    async def _apply_job(self, guild: discord.Guild):
+        stamp = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+        self.apply_status[guild.id] = f"läuft seit {stamp} …"
+        try:
+            result = await self.apply_to_existing(guild)
+        except asyncio.CancelledError:
+            self.apply_status[guild.id] = f"{stamp}: abgebrochen"
+            raise
+        except Exception:  # noqa: BLE001 – Hintergrund-Task darf nicht still sterben
+            log.exception("applyall fehlgeschlagen (Guild %s)", guild.id)
+            self.apply_status[guild.id] = f"{stamp}: Fehler – siehe Bot-Log"
+            return None
+        finally:
+            self._apply_jobs.pop(guild.id, None)
+        if result is None:
+            self.apply_status[guild.id] = f"{stamp}: nichts anzuwenden (System aus, keine Rollen oder keine Rechte)"
+        else:
+            added, members = result
+            self.apply_status[guild.id] = f"{stamp}: {added} Rollen-Vergaben an {members} Mitglieder"
+        return result
 
     async def apply_to_existing(self, guild: discord.Guild):
         """Vergibt die Mitglieder-Rollen an alle bestehenden Menschen.
@@ -629,8 +669,11 @@ class Autorole(commands.Cog):
         me = ctx.guild.me
         if me is None or not me.guild_permissions.manage_roles:
             return await self._say(ctx, "no_manage_roles")
+        task = self.start_apply_job(ctx.guild)
+        if task is None:
+            return await self._say(ctx, "apply_busy")
         await self._say(ctx, "apply_running")
-        result = await self.apply_to_existing(ctx.guild)
+        result = await task
         if result is None:
             return await self._say(ctx, "apply_none")
         added, members = result

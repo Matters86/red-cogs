@@ -5,6 +5,7 @@ Action-Queue + Login-Tokens + Sessions + Server-State.
 
 import json
 import secrets
+import shutil
 import sqlite3
 import time
 import uuid
@@ -12,10 +13,37 @@ from contextlib import closing
 from pathlib import Path
 from typing import Optional
 
-DB_PATH = Path(__file__).parent / "adminpanel.sqlite3"
+# Früherer Speicherort: direkt im Code-Ordner des Cogs. Dort geht die DB bei
+# `[p]cog uninstall`/Neuinstallation verloren und landet beim Entwickeln im Repo-Ordner.
+# set_data_dir() verlegt sie beim Laden in Reds Datenordner (cog_data_path).
+_LEGACY_DIR = Path(__file__).parent
+DB_PATH = _LEGACY_DIR / "adminpanel.sqlite3"
 
 LOGIN_TOKEN_TTL = 300        # 5 Minuten gültig
 SESSION_TTL = 12 * 3600      # 12 Stunden
+
+
+def set_data_dir(data_dir) -> Path:
+    """Setzt den DB-Speicherort auf ``data_dir`` (Reds Datenordner des Cogs).
+
+    Einmalige Migration: existiert dort noch keine DB, aber am alten Ort, wird sie
+    per SQLite-Backup-API konsistent kopiert (inkl. WAL-Inhalt); ``backups/`` wird
+    mitkopiert. Die alte Datei bleibt als zusätzliche Sicherung unangetastet liegen.
+    """
+    global DB_PATH
+    data_dir = Path(data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    new_path = data_dir / "adminpanel.sqlite3"
+    legacy = _LEGACY_DIR / "adminpanel.sqlite3"
+    if not new_path.exists() and legacy.exists() and legacy.resolve() != new_path.resolve():
+        with closing(sqlite3.connect(legacy)) as src, closing(sqlite3.connect(new_path)) as dst:
+            with dst:
+                src.backup(dst)
+        legacy_backups = _LEGACY_DIR / "backups"
+        if legacy_backups.is_dir():
+            shutil.copytree(legacy_backups, data_dir / "backups", dirs_exist_ok=True)
+    DB_PATH = new_path
+    return new_path
 
 
 def get_conn():
@@ -140,6 +168,26 @@ def mark_action_result(action_id: str, status: str, result: str):
             (status, result, time.time(), action_id),
         )
         conn.commit()
+
+
+def cancel_pending_actions(reason: str) -> int:
+    """Verwirft alle noch offenen Aufträge (Not-Aus). Rückgabe: Anzahl."""
+    with closing(get_conn()) as conn:
+        cur = conn.execute(
+            "UPDATE actions SET status = 'failed', result = ?, completed_at = ? WHERE status = 'pending'",
+            (reason, time.time()),
+        )
+        conn.commit()
+        return cur.rowcount
+
+
+def newest_backup_age() -> Optional[float]:
+    """Alter des jüngsten Backups in Sekunden (None = noch keins)."""
+    backup_dir = DB_PATH.parent / "backups"
+    files = sorted(backup_dir.glob("adminpanel_*.sqlite3")) if backup_dir.is_dir() else []
+    if not files:
+        return None
+    return max(0.0, time.time() - files[-1].stat().st_mtime)
 
 
 def get_action(action_id: str):
@@ -281,7 +329,6 @@ def get_actions_audit(limit: int = 200):
 
 def backup_db(keep: int = 14):
     """Kopiert die DB konsistent in einen backups/-Ordner, behält die letzten `keep`."""
-    import shutil
     from datetime import datetime
 
     backup_dir = DB_PATH.parent / "backups"

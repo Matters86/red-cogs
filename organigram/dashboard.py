@@ -19,6 +19,7 @@ import re
 import secrets
 import time
 from collections import defaultdict
+from urllib.parse import quote_plus
 
 import discord
 from aiohttp import web
@@ -627,6 +628,9 @@ async def _handle_post(cog, request):
             chart["show_avatars"] = "show_avatars" in data
             chart["show_vacant"] = "show_vacant" in data
             chart["auto_update"] = "auto_update" in data
+            refresh = bool(chart.get("posts")) and chart["auto_update"]
+        if refresh:  # gepostete Beiträge direkt nachziehen (vorher erst bei Rollen-Änderungen)
+            cog._schedule(guild.id, cid)
         raise web.HTTPFound(f"{base}&chart={cid}&ok=Einstellungen+gespeichert")
 
     # ---- Organigramm löschen -------------------------------------------- #
@@ -680,12 +684,16 @@ async def _handle_post(cog, request):
                 "color": color,
                 "order": order,
             }
+            refresh = bool(chart.get("posts")) and chart.get("auto_update", True)
+        if refresh:
+            cog._schedule(guild.id, cid)
         raise web.HTTPFound(f"{base}&chart={cid}&ok=Position+gespeichert")
 
     # ---- Position löschen (Kinder hochziehen) --------------------------- #
     if form == "node_delete":
         cid = data.get("chart")
         nid = data.get("node")
+        refresh = False
         async with gconf.charts() as charts:
             chart = charts.get(cid)
             if chart:
@@ -696,6 +704,9 @@ async def _handle_post(cog, request):
                     for nd in nodes.values():
                         if nd.get("parent") == nid:
                             nd["parent"] = new_parent
+                refresh = bool(chart.get("posts")) and chart.get("auto_update", True)
+        if refresh:
+            cog._schedule(guild.id, cid)
         raise web.HTTPFound(f"{base}&chart={cid}&ok=Position+gel%C3%B6scht")
 
     # ---- Posten --------------------------------------------------------- #
@@ -710,7 +721,7 @@ async def _handle_post(cog, request):
             raise web.HTTPFound(f"{base}&ok=Organigramm+nicht+gefunden")
         mode = MODE_MAP.get(data.get("mode"), charts[cid].get("mode", "image"))
         ok, err = await cog._post_and_save(guild, cid, channel, mode)
-        msg = "Gepostet" if ok else f"Fehler:+{(err or '').replace(' ', '+')}"
+        msg = "Gepostet" if ok else quote_plus(f"Fehler: {err or ''}")
         raise web.HTTPFound(f"{base}&chart={cid}&ok={msg}")
 
     raise web.HTTPFound(base)

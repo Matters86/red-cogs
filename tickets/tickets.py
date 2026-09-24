@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from datetime import datetime, timezone
@@ -8,7 +9,7 @@ from redbot.core.bot import Red
 from redbot.core.data_manager import cog_data_path
 
 from .dashboard import dashboard_handler
-from .strings import LANGUAGES, t
+from .strings import LANGUAGES, OVERRIDABLE_KEYS, t
 from .transcript import build_transcript
 from .views import (
     CID_CLAIM,
@@ -31,6 +32,22 @@ EMBED_COLOR = 0x3DDC97
 # Rollen-Pings müssen explizit erlaubt werden – Reds Standard blockt roles=False,
 # sonst würden die Ping-Rollen beim Öffnen eines Tickets nicht benachrichtigt.
 PING_ALLOWED = discord.AllowedMentions(everyone=False, roles=True, users=True)
+
+# Kanalnamen: Umlaute lesbar umschreiben statt sie zu "-" zu machen (Störung -> stoerung).
+_TRANSLIT = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"})
+_PLACEHOLDER = re.compile(r"\{(\w+)\}")
+
+
+def _fill(template, **values) -> str:
+    """Ersetzt nur bekannte ``{platzhalter}`` – bewusst kein ``str.format``.
+
+    Frei eingegebene Vorlagen (Dashboard) mit unbekannten oder kaputten Klammern
+    dürfen die Ticket-Erstellung nie abstürzen lassen; Unbekanntes bleibt stehen.
+    """
+    return _PLACEHOLDER.sub(
+        lambda m: str(values[m.group(1)]) if m.group(1) in values else m.group(0),
+        template or "",
+    )
 
 
 class Tickets(commands.Cog):
@@ -66,6 +83,8 @@ class Tickets(commands.Cog):
         )
         self.transcripts_dir = cog_data_path(self) / "transcripts"
         self.transcripts_dir.mkdir(parents=True, exist_ok=True)
+        # Serialisiert Öffnen (pro Nutzer) und Schließen (pro Kanal) gegen Doppelklicks.
+        self._locks: dict[tuple, asyncio.Lock] = {}
 
     # ----------------------------------------------------------------- #
     #  Dashboard-Anbindung (1:1-Muster aus example)
@@ -102,9 +121,31 @@ class Tickets(commands.Cog):
     async def _lang(self, guild) -> str:
         return await self.config.guild(guild).language()
 
+    def _lock(self, *key) -> asyncio.Lock:
+        lock = self._locks.get(key)
+        if lock is None:
+            lock = self._locks[key] = asyncio.Lock()
+        return lock
+
+    @staticmethod
+    def _text(conf, lang, key, **values) -> str:
+        """Wie ``t()``, berücksichtigt aber die pro-Server-Overrides aus dem Dashboard."""
+        if key in OVERRIDABLE_KEYS:
+            override = (conf.get("messages") or {}).get(key)
+            if override:
+                return _fill(override, **values)
+        return t(lang, key, **values)
+
+    @staticmethod
+    def _open_count(conf, member_id) -> int:
+        return sum(
+            1 for r in (conf.get("tickets") or {}).values()
+            if r.get("owner_id") == member_id and r.get("status") == "open"
+        )
+
     @staticmethod
     def _channel_name(raw: str) -> str:
-        s = (raw or "").lower().strip()
+        s = (raw or "").lower().translate(_TRANSLIT).strip()
         s = re.sub(r"[^a-z0-9\-_]+", "-", s)
         s = re.sub(r"-{2,}", "-", s).strip("-")
         return s[:90] or "ticket"
@@ -119,8 +160,12 @@ class Tickets(commands.Cog):
             return True
         return self._has_any_role(member, conf.get("admin_roles"))
 
-    def _is_staff(self, member: discord.Member, conf: dict) -> bool:
-        return self._is_admin(member, conf) or self._has_any_role(member, conf.get("support_roles"))
+    def _is_staff(self, member: discord.Member, conf: dict, record: dict | None = None) -> bool:
+        """Admin, globale Support-Rolle – oder das für DIESES Ticket zuständige Team
+        (Team-Zuordnung je Grund). Ohne ``record`` zählen nur die globalen Rollen."""
+        if self._is_admin(member, conf) or self._has_any_role(member, conf.get("support_roles")):
+            return True
+        return bool(record) and self._has_any_role(member, record.get("support_roles"))
 
     def _resolve_roles(self, guild, ids):
         out = []
@@ -207,21 +252,45 @@ class Tickets(commands.Cog):
         label = (reason or {}).get("label") if reason else None
         if label:
             return f"{label}-{num}"
-        return conf["name_template"].format(num=num, user=member.name)
+        return _fill(conf.get("name_template") or "ticket-{num}", num=num, user=member.name)
 
     # ----------------------------------------------------------------- #
     #  Panels posten / entfernen (vom Dashboard aufgerufen)
     # ----------------------------------------------------------------- #
+    async def _panel_payload(self, guild, panel, *, emojis: bool = True):
+        """Embed + View eines Panels (Overrides aus dem Dashboard berücksichtigt)."""
+        conf = await self.config.guild(guild).all()
+        lang = panel.get("lang") or conf["language"]
+        title = panel.get("title") or self._text(conf, lang, "panel_default_title")
+        desc = panel.get("description") or self._text(conf, lang, "panel_default_description")
+        embed = discord.Embed(title=title[:256], description=desc[:4096], color=EMBED_COLOR)
+        # Override "btn_open" gewinnt; sonst bleibt die bisherige Panel-Beschriftung.
+        open_label = (conf.get("messages") or {}).get("btn_open")
+        view = build_panel_view(panel, open_label=open_label, emojis=emojis)
+        return embed, view
+
+    async def _send_or_edit_panel(self, guild, panel, send):
+        """Führt ``send(embed, view)`` aus. Lehnt Discord ein ungültiges Emoji ab
+        (400), wird einmal ohne Emojis erneut versucht, statt das Panel zu verlieren."""
+        embed, view = await self._panel_payload(guild, panel)
+        try:
+            return await send(embed, view)
+        except discord.HTTPException as e:
+            if e.status != 400:
+                raise
+            log.warning("Panel %s: Discord lehnt die Komponenten ab (%s) – ohne Emojis erneut.",
+                        panel.get("id"), e.text)
+        embed, view = await self._panel_payload(guild, panel, emojis=False)
+        return await send(embed, view)
+
     async def post_panel(self, guild, panel) -> int | None:
         channel = guild.get_channel(panel.get("channel_id")) if panel.get("channel_id") else None
         if not isinstance(channel, discord.TextChannel):
             return None
-        lang = panel.get("lang") or await self._lang(guild)
-        title = panel.get("title") or t(lang, "panel_default_title")
-        desc = panel.get("description") or t(lang, "panel_default_description")
-        embed = discord.Embed(title=title, description=desc, color=EMBED_COLOR)
         try:
-            msg = await channel.send(embed=embed, view=build_panel_view(panel))
+            msg = await self._send_or_edit_panel(
+                guild, panel, lambda e, v: channel.send(embed=e, view=v)
+            )
             return msg.id
         except discord.HTTPException:
             log.exception("Panel konnte nicht gepostet werden (Guild %s)", guild.id)
@@ -245,16 +314,19 @@ class Tickets(commands.Cog):
         """
         channel = guild.get_channel(panel.get("channel_id")) if panel.get("channel_id") else None
         if isinstance(channel, discord.TextChannel) and panel.get("message_id"):
-            lang = panel.get("lang") or await self._lang(guild)
-            title = panel.get("title") or t(lang, "panel_default_title")
-            desc = panel.get("description") or t(lang, "panel_default_description")
-            embed = discord.Embed(title=title, description=desc, color=EMBED_COLOR)
             try:
                 msg = await channel.fetch_message(panel["message_id"])
-                await msg.edit(embed=embed, view=build_panel_view(panel))
-                return msg.id
             except discord.HTTPException:
-                pass
+                msg = None
+            if msg is not None:
+                try:
+                    await self._send_or_edit_panel(
+                        guild, panel, lambda e, v: msg.edit(embed=e, view=v)
+                    )
+                    return msg.id
+                except discord.HTTPException:
+                    log.exception("Panel konnte nicht aktualisiert werden (Guild %s)", guild.id)
+                    return msg.id  # alte Nachricht bleibt bestehen – nicht doppelt posten
         # Nachricht weg oder Kanal gewechselt -> neu posten
         return await self.post_panel(guild, panel)
 
@@ -301,11 +373,7 @@ class Tickets(commands.Cog):
             await interaction.response.send_message(t(lang, "not_a_ticket"), ephemeral=True)
             return
 
-        open_count = sum(
-            1 for r in conf["tickets"].values()
-            if r.get("owner_id") == member.id and r.get("status") == "open"
-        )
-        if open_count >= int(conf["max_open"]):
+        if self._open_count(conf, member.id) >= int(conf["max_open"]):
             await interaction.response.send_message(
                 t(lang, "max_open_reached", max=conf["max_open"]), ephemeral=True
             )
@@ -329,12 +397,22 @@ class Tickets(commands.Cog):
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True, thinking=True)
 
-        target = await self._create_ticket(guild, member, conf, panel, reason, answers)
+        # Pro Nutzer serialisiert + Limit frisch geprüft: ein Doppelklick (oder zwei
+        # offene Modals) erzeugt sonst zwei Tickets trotz "max. 1 offen".
+        async with self._lock("open", guild.id, member.id):
+            conf = await self.config.guild(guild).all()
+            if self._open_count(conf, member.id) >= int(conf["max_open"]):
+                await interaction.followup.send(
+                    t(lang, "max_open_reached", max=conf["max_open"]), ephemeral=True
+                )
+                return
+            try:
+                target = await self._create_ticket(guild, member, conf, panel, reason, answers)
+            except Exception:  # noqa: BLE001 – Nutzer darf nie im "denkt nach…" hängen bleiben
+                log.exception("Unerwarteter Fehler bei der Ticket-Erstellung (Guild %s)", guild.id)
+                target = None
         if target is None:
-            await interaction.followup.send(
-                "Ticket konnte nicht erstellt werden – Konfiguration prüfen (Kategorie/Forum/Basis-Kanal).",
-                ephemeral=True,
-            )
+            await interaction.followup.send(t(lang, "create_failed"), ephemeral=True)
             return
         await interaction.followup.send(
             t(lang, "created_ephemeral", channel=target.mention), ephemeral=True
@@ -348,11 +426,11 @@ class Tickets(commands.Cog):
             num = await self.config.guild(guild).counter() + 1
             await self.config.guild(guild).counter.set(num)
 
-        overrides = conf.get("messages") or {}
-        title = overrides.get("opened_title") or t(lang, "opened_title", num=num)
-        body = overrides.get("opened_body")
-        body = body.format(user=member.mention) if body else t(lang, "opened_body", user=member.mention)
-        embed = discord.Embed(title=title, description=body, color=EMBED_COLOR)
+        # Overrides unterstützen jetzt {num}/{user} in Titel UND Text (vorher blieb
+        # "{num}" im eigenen Titel wörtlich stehen, kaputte Klammern im Text crashten).
+        title = self._text(conf, lang, "opened_title", num=num, user=member.display_name)
+        body = self._text(conf, lang, "opened_body", num=num, user=member.mention)
+        embed = discord.Embed(title=title[:256], description=body[:4096], color=EMBED_COLOR)
         if reason_label:
             embed.add_field(name="​", value=t(lang, "opened_reason", reason=reason_label), inline=False)
         for q, a in (answers or {}).items():
@@ -492,8 +570,11 @@ class Tickets(commands.Cog):
             return
         member = interaction.user
         is_owner = record.get("owner_id") == member.id
-        if not (self._is_staff(member, conf) or (is_owner and conf["user_can_close"])):
+        if not (self._is_staff(member, conf, record) or (is_owner and conf["user_can_close"])):
             await interaction.response.send_message(t(lang, "no_permission"), ephemeral=True)
+            return
+        if record.get("status") == "closed":
+            await interaction.response.send_message(t(lang, "already_closed"), ephemeral=True)
             return
 
         if conf["close_confirmation"]:
@@ -517,7 +598,7 @@ class Tickets(commands.Cog):
             await interaction.response.send_message(t(lang, "not_a_ticket"), ephemeral=True)
             return
         member = interaction.user
-        if not self._is_staff(member, conf):
+        if not self._is_staff(member, conf, record):
             await interaction.response.send_message(t(lang, "no_permission"), ephemeral=True)
             return
         if claim and record.get("owner_id") == member.id:
@@ -555,7 +636,7 @@ class Tickets(commands.Cog):
             await interaction.response.send_message(t(lang, "not_a_ticket"), ephemeral=True)
             return
         member = interaction.user
-        if not self._is_staff(member, conf):
+        if not self._is_staff(member, conf, record):
             await interaction.response.send_message(t(lang, "no_permission"), ephemeral=True)
             return
         await interaction.response.defer()
@@ -580,7 +661,26 @@ class Tickets(commands.Cog):
         except discord.HTTPException:
             pass
 
-    async def _close_ticket(self, guild, channel, record, closer, conf):
+    async def _close_ticket(self, guild, channel, record, closer, conf) -> bool:
+        """Schließt (bzw. löscht) ein Ticket. Pro Kanal serialisiert; ein bereits
+        geschlossenes Ticket wird nicht erneut gezählt/transkribiert."""
+        async with self._lock("close", channel.id):
+            current = await self._get_record(guild, channel.id)
+            if current is None:
+                return False
+            if current.get("status") == "closed":
+                if conf["delete_on_close"]:  # z. B. [p]ticket delete auf archiviertem Ticket
+                    async with self.config.guild(guild).tickets() as tickets:
+                        tickets.pop(str(channel.id), None)
+                    try:
+                        await channel.delete(reason=f"Ticket #{record['num']} gelöscht")
+                    except discord.HTTPException:
+                        pass
+                return False
+            await self._close_ticket_locked(guild, channel, record, closer, conf)
+            return True
+
+    async def _close_ticket_locked(self, guild, channel, record, closer, conf):
         lang = conf["language"]
         record["status"] = "closed"
         record["closed_at"] = datetime.now(timezone.utc).isoformat()
@@ -675,8 +775,13 @@ class Tickets(commands.Cog):
                 tickets[str(channel.id)]["closed_at"] = record["closed_at"]
 
     async def _reopen_ticket(self, guild, channel, record, conf):
-        lang = conf["language"]
         owner = guild.get_member(record["owner_id"])
+        owner_role = guild.get_role(conf["owner_role"]) if conf.get("owner_role") else None
+        if owner_role is not None and owner is not None:
+            try:
+                await owner.add_roles(owner_role, reason=f"Ticket #{record['num']} wieder geöffnet")
+            except discord.HTTPException:
+                pass
         try:
             if isinstance(channel, discord.Thread):
                 await channel.edit(archived=False, locked=False)
@@ -733,8 +838,10 @@ class Tickets(commands.Cog):
         if not record:
             return await ctx.send(t(lang, "not_a_ticket"))
         is_owner = record.get("owner_id") == ctx.author.id
-        if not (self._is_staff(ctx.author, conf) or (is_owner and conf["user_can_close"])):
+        if not (self._is_staff(ctx.author, conf, record) or (is_owner and conf["user_can_close"])):
             return await ctx.send(t(lang, "no_permission"))
+        if record.get("status") == "closed":
+            return await ctx.send(t(lang, "already_closed"))
         await ctx.send("🔒")
         await self._close_ticket(ctx.guild, ctx.channel, record, ctx.author, conf)
 
@@ -745,8 +852,10 @@ class Tickets(commands.Cog):
         lang = conf["language"]
         if not record:
             return await ctx.send(t(lang, "not_a_ticket"))
-        if not self._is_staff(ctx.author, conf):
+        if not self._is_staff(ctx.author, conf, record):
             return await ctx.send(t(lang, "no_permission"))
+        if record.get("status") != "closed":
+            return await ctx.send(t(lang, "not_closed"))
         await self._reopen_ticket(ctx.guild, ctx.channel, record, conf)
         await ctx.send(t(lang, "reopened_by", user=ctx.author.mention))
 
@@ -757,10 +866,13 @@ class Tickets(commands.Cog):
         lang = conf["language"]
         if not record:
             return await ctx.send(t(lang, "not_a_ticket"))
-        if not self._is_staff(ctx.author, conf):
+        if not self._is_staff(ctx.author, conf, record):
             return await ctx.send(t(lang, "no_permission"))
         if record.get("owner_id") == ctx.author.id:
             return await ctx.send(t(lang, "claim_own_denied"))
+        if record.get("claimed_by") and record["claimed_by"] != ctx.author.id:
+            other = ctx.guild.get_member(record["claimed_by"])
+            return await ctx.send(t(lang, "already_claimed", user=other.mention if other else "?"))
         async with self.config.guild(ctx.guild).tickets() as tickets:
             rec = tickets.get(str(ctx.channel.id))
             if rec:
@@ -779,7 +891,7 @@ class Tickets(commands.Cog):
         lang = conf["language"]
         if not record:
             return await ctx.send(t(lang, "not_a_ticket"))
-        if not self._is_staff(ctx.author, conf):
+        if not self._is_staff(ctx.author, conf, record):
             return await ctx.send(t(lang, "no_permission"))
         async with self.config.guild(ctx.guild).tickets() as tickets:
             rec = tickets.get(str(ctx.channel.id))
@@ -796,7 +908,7 @@ class Tickets(commands.Cog):
         lang = conf["language"]
         if not record:
             return await ctx.send(t(lang, "not_a_ticket"))
-        if not self._is_staff(ctx.author, conf):
+        if not self._is_staff(ctx.author, conf, record):
             return await ctx.send(t(lang, "no_permission"))
         try:
             if isinstance(ctx.channel, discord.Thread):
@@ -818,7 +930,7 @@ class Tickets(commands.Cog):
         lang = conf["language"]
         if not record:
             return await ctx.send(t(lang, "not_a_ticket"))
-        if not self._is_staff(ctx.author, conf):
+        if not self._is_staff(ctx.author, conf, record):
             return await ctx.send(t(lang, "no_permission"))
         try:
             if isinstance(ctx.channel, discord.Thread):
@@ -836,7 +948,7 @@ class Tickets(commands.Cog):
         lang = conf["language"]
         if not record:
             return await ctx.send(t(lang, "not_a_ticket"))
-        if not self._is_staff(ctx.author, conf):
+        if not self._is_staff(ctx.author, conf, record):
             return await ctx.send(t(lang, "no_permission"))
         new_name = name[:100] if isinstance(ctx.channel, discord.Thread) else self._channel_name(name)
         try:
@@ -852,13 +964,18 @@ class Tickets(commands.Cog):
         lang = conf["language"]
         if not record:
             return await ctx.send(t(lang, "not_a_ticket"))
-        if not self._is_staff(ctx.author, conf):
+        if not self._is_staff(ctx.author, conf, record):
             return await ctx.send(t(lang, "no_permission"))
         async with self.config.guild(ctx.guild).tickets() as tickets:
             rec = tickets.get(str(ctx.channel.id))
             if rec:
                 rec["owner_id"] = member.id
-        if not isinstance(ctx.channel, discord.Thread):
+        if isinstance(ctx.channel, discord.Thread):
+            try:
+                await ctx.channel.add_user(member)
+            except discord.HTTPException:
+                pass
+        else:
             try:
                 await ctx.channel.set_permissions(
                     member, overwrite=discord.PermissionOverwrite(
@@ -887,17 +1004,34 @@ class Tickets(commands.Cog):
     async def ticket_list(self, ctx, status: str = "open"):
         """Listet Tickets (open/closed/all)."""
         conf, _ = await self._ctx_record(ctx)
-        if not self._is_staff(ctx.author, conf):
+        # Globales Team/Admins sehen alles; ein Team eines Grundes nur "seine" Tickets.
+        full = self._is_staff(ctx.author, conf)
+        visible = {
+            cid: rec for cid, rec in conf["tickets"].items()
+            if full or self._is_staff(ctx.author, conf, rec)
+        }
+        if not full and not visible:
             return await ctx.send(t(conf["language"], "no_permission"))
         status = status.lower()
         lines = []
-        for cid, rec in conf["tickets"].items():
+        for cid, rec in visible.items():
             if status in ("open", "closed") and rec.get("status") != status:
                 continue
             owner = ctx.guild.get_member(rec.get("owner_id"))
             lines.append(f"#{rec.get('num')} · <#{cid}> · {owner.mention if owner else rec.get('owner_id')} · {rec.get('status')}")
-        text = "\n".join(lines) or "—"
-        await ctx.send(embed=discord.Embed(title="Tickets", description=text[:4000], color=EMBED_COLOR))
+        if not lines:
+            return await ctx.send(embed=discord.Embed(title="Tickets", description="—", color=EMBED_COLOR))
+        # Zeilenweise auf mehrere Embeds verteilen statt mitten in einer Zeile abzuschneiden.
+        pages, cur = [], ""
+        for line in lines:
+            if len(cur) + len(line) + 1 > 4000:
+                pages.append(cur)
+                cur = ""
+            cur += line + "\n"
+        pages.append(cur)
+        for i, page in enumerate(pages[:5], 1):
+            title = "Tickets" if len(pages) == 1 else f"Tickets ({i}/{len(pages)})"
+            await ctx.send(embed=discord.Embed(title=title, description=page, color=EMBED_COLOR))
 
     # ----------------------------------------------------------------- #
     #  Befehle – Konfiguration (das Meiste läuft übers Dashboard)

@@ -15,6 +15,7 @@ umschaltbar und alle Texte sind überschreibbar.
 **Funktionen**
 - Panels mit Buttons oder Dropdown, Modal mit bis zu 5 Fragen
 - Rollen: Support, Admin, View (nur lesen), Ping, Inhaber-Rolle
+- Team-Zuordnung je Grund: eigenes Team, eigene Ping-Rollen, eigene Kategorie pro Ticket-Typ
 - Übernehmen, Sperren, Schließen, Wiederöffnen, Löschen, Umbenennen, Mitglieder verwalten
 - Limit für offene Tickets pro Nutzer, Schließen-Bestätigung
 - HTML-Transcripts + Statistik im Dashboard
@@ -50,4 +51,4 @@ umschaltbar und alle Texte sind überschreibbar.
 | `[p]ticketset settings` | Aktuelle Einstellungen anzeigen. | Admin / Manage Server |
 | `[p]ticketset dashboard` | Hinweis auf das Dashboard. | Admin / Manage Server |
 
-**Dashboard:** Tab **Tickets** → Einstellungen, Panels, Transcripts und Statistik pro Server.
+**Dashboard:** Tab **Tickets** → Einstellungen, Panels (inkl. Editor und Team-Zuordnung je Grund), Transcripts und Statistik pro Server.

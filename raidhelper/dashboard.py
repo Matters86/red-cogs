@@ -224,7 +224,16 @@ async def _render(cog, request):
     spec_emojis = await cog._spec_emojis()
     supported = cog._supports_app_emojis()
     structure = cog._known_spec_structure()
-    icons_card = _render_icons(csrf, guild.id, spec_emojis, supported, structure)
+    # Spec-Icons sind Application Emojis und gelten botweit -> nur Owner/Allowlist.
+    webcore = request.app.get("webcore")
+    full = await webcore.has_full_scope(request) if webcore is not None else True
+    if full:
+        icons_card = _render_icons(csrf, guild.id, spec_emojis, supported, structure)
+    else:
+        icons_card = (
+            "<div class='card-x'><div style='color:var(--muted)'>Spec-Icons gelten botweit und können nur "
+            "vom Bot-Owner verwaltet werden.</div></div>"
+        )
 
     return {"title": "Raidplaner",
             "content": _FORM_STYLE + bar + flash + stats + settings + table + "<div class='rh-spacer'></div>" + icons_card}
@@ -457,6 +466,11 @@ async def _handle_post(cog, request):
             raise web.HTTPFound(f"/cogs/raidhelper?guild={guild.id}&ok=Gel%C3%B6scht")
 
     if form == "icons":
+        webcore = request.app.get("webcore")
+        if webcore is not None and not await webcore.has_full_scope(request):
+            raise web.HTTPFound(
+                f"/cogs/raidhelper?guild={guild.id}&ok=" + quote("Spec-Icons darf nur der Bot-Owner ändern")
+            )
         pairs = cog._known_pair_set()  # {(class_id, spec_id), …}
         removed = 0
         for cid, sid in list(pairs):

@@ -147,7 +147,6 @@ async def _render(cog, request):
     if sel and sel in polls:
         return {"title": "Umfragen", "content": _FORM_STYLE + bar + _render_results(guild, polls[sel])}
 
-    now = int(datetime.now(tz=timezone.utc).timestamp())
     active = sum(1 for p in polls.values() if not (p.get("closed") or p.get("ended")))
     total_votes = sum(vote_counts(p)[1] for p in polls.values())
     anon_default = "anonym" if conf.get("default_anonymous") else "öffentlich"
@@ -398,11 +397,14 @@ async def _handle_post(cog, request):
             if secs is None:
                 raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&ok=" + quote("Dauer nicht erkannt (z. B. 2h, 30m, 1d)"))
             end_ts = int(datetime.now(tz=timezone.utc).timestamp()) + secs
-        await cog.create_poll(
+        poll = await cog.create_poll(
             guild, question=question, options=options, channel_id=channel.id,
             author_id=cog.bot.user.id, end_ts=end_ts,
             multiple="multiple" in data, anonymous="anonymous" in data,
         )
+        if not poll.get("message_id"):
+            raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&ok=" + quote(
+                "Umfrage gespeichert, aber das Posten ist fehlgeschlagen (Rechte im Kanal prüfen)"))
         raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&ok=" + quote("Umfrage erstellt"))
 
     if form == "action":

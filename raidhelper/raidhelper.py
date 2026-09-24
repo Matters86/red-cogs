@@ -140,9 +140,12 @@ class RaidHelper(commands.Cog):
         return self._has_any_role(member, roles)
 
     async def _next_id(self, guild) -> str:
-        n = await self.config.guild(guild).counter()
-        n += 1
-        await self.config.guild(guild).counter.set(n)
+        # Unter dem Value-Lock: gleichzeitiges Anlegen (Befehl + Dashboard oder zwei
+        # Wiederholungen) bekam sonst dieselbe ID und überschrieb ein Event.
+        counter = self.config.guild(guild).counter
+        async with counter.get_lock():
+            n = int(await counter()) + 1
+            await counter.set(n)
         return f"rh-{n:04d}"
 
     def _parse_dt(self, date_s: str, time_s: str, tz_name: str) -> int | None:
@@ -419,14 +422,15 @@ class RaidHelper(commands.Cog):
             events[event_id] = event
             snapshot = dict(event)
 
-        await self._remember_spec(member.id, game_id, class_id, spec_id)
-        await self.refresh_event_message(guild, snapshot)
-
+        # Erst antworten, dann die Event-Nachricht aktualisieren: Discord verlangt eine
+        # Antwort binnen 3 s – fetch+edit davor ließ die Interaktion unter Last scheitern.
         cls_l = games.class_label(game_id, class_id)
         spec_l = games.spec_label(game_id, class_id, spec_id)
         role_l = games.role_meta(game_id, role).get("label", role)
         key = "spec_changed" if was_in_roster else "signed"
         await self._respond(interaction, t(lang, key, spec=spec_l, cls=cls_l, role=role_l), ephemeral_edit)
+        await self._remember_spec(member.id, game_id, class_id, spec_id)
+        await self.refresh_event_message(guild, snapshot)
 
     async def _apply_status(self, interaction, event_id, status):
         guild = interaction.guild
@@ -455,10 +459,10 @@ class RaidHelper(commands.Cog):
             events[event_id] = event
             snapshot = dict(event)
 
-        await self.refresh_event_message(guild, snapshot)
         await interaction.response.send_message(
             t(lang, "moved_status", status=t(lang, f"status_{status}")), ephemeral=True
         )
+        await self.refresh_event_message(guild, snapshot)
 
     async def _leave(self, interaction, event_id):
         guild = interaction.guild
@@ -473,8 +477,8 @@ class RaidHelper(commands.Cog):
             del event["signups"][uid]
             events[event_id] = event
             snapshot = dict(event)
-        await self.refresh_event_message(guild, snapshot)
         await interaction.response.send_message(t(lang, "left"), ephemeral=True)
+        await self.refresh_event_message(guild, snapshot)
 
     async def _respond(self, interaction, text, ephemeral_edit):
         """Antwortet ephemer – bei Spec-Auswahl wird die Auswahl-Nachricht ersetzt."""
@@ -500,44 +504,57 @@ class RaidHelper(commands.Cog):
             if not events:
                 continue
             for eid, event in list(events.items()):
-                start = event.get("start_ts") or 0
-                # Erinnerungen
-                sent_now: list[int] = []
-                if conf.get("reminders") and not event.get("completed"):
-                    for off in REMINDER_OFFSETS:
-                        due = start - off * 60
-                        if due <= now < start and off not in event.get("reminders_sent", []):
-                            await self._send_reminder(guild, event, off, conf)
-                            sent_now.append(off)
-                # Nur das Flag der tatsächlich gesendeten Erinnerungen auf dem
-                # FRISCH gelesenen Eintrag setzen – niemals den veralteten
-                # Snapshot komplett zurückschreiben (sonst gehen parallele
-                # Anmeldungen verloren). Reminder bleiben so genau einmalig.
-                if sent_now:
-                    async with self.config.guild(guild).events() as stored:
-                        cur = stored.get(eid)
-                        if isinstance(cur, dict):
-                            rs = cur.setdefault("reminders_sent", [])
-                            for off in sent_now:
-                                if off not in rs:
-                                    rs.append(off)
-                # Abschluss + Statistik + Wiederholung
-                if not event.get("completed") and start and now >= start:
-                    # Abschluss atomar auf dem frischen Eintrag beanspruchen,
-                    # damit genau einmal abgeschlossen/gezählt wird und die
-                    # aktuellen Anmeldungen erhalten bleiben.
-                    snapshot = None
-                    async with self.config.guild(guild).events() as stored:
-                        cur = stored.get(eid)
-                        if isinstance(cur, dict) and not cur.get("completed"):
-                            cur["completed"] = True
-                            cur["closed"] = True
-                            snapshot = dict(cur)
-                    if snapshot is not None:
-                        await self._count_attendance(guild, snapshot)
-                        await self.refresh_event_message(guild, snapshot)
-                        if snapshot.get("recurrence") in RECURRENCE_DELTA:
-                            await self._spawn_next(guild, snapshot)
+                # Ein fehlerhaftes Event darf die Schleife nicht beenden – eine
+                # unbehandelte Exception stoppt tasks.loop dauerhaft (keine
+                # Erinnerungen/Abschlüsse mehr auf ALLEN Servern bis zum Reload).
+                try:
+                    await self._tick_event(guild, conf, eid, event, now)
+                except Exception:  # noqa: BLE001
+                    log.exception("Raid-Tick für Event %s (Guild %s) fehlgeschlagen", eid, guild.id)
+
+    async def _tick_event(self, guild, conf, eid, event, now):
+        if not isinstance(event, dict):
+            return
+        start = event.get("start_ts") or 0
+        # Erinnerungen: sind mehrere gleichzeitig fällig (Bot war offline),
+        # nur die nächstliegende senden und alle fälligen als erledigt markieren.
+        sent_now: list[int] = []
+        if conf.get("reminders") and not event.get("completed"):
+            already = event.get("reminders_sent", [])
+            due_offs = [off for off in REMINDER_OFFSETS
+                        if start - off * 60 <= now < start and off not in already]
+            if due_offs:
+                await self._send_reminder(guild, event, min(due_offs), conf)
+                sent_now.extend(due_offs)
+        # Nur das Flag der tatsächlich gesendeten Erinnerungen auf dem
+        # FRISCH gelesenen Eintrag setzen – niemals den veralteten
+        # Snapshot komplett zurückschreiben (sonst gehen parallele
+        # Anmeldungen verloren). Reminder bleiben so genau einmalig.
+        if sent_now:
+            async with self.config.guild(guild).events() as stored:
+                cur = stored.get(eid)
+                if isinstance(cur, dict):
+                    rs = cur.setdefault("reminders_sent", [])
+                    for off in sent_now:
+                        if off not in rs:
+                            rs.append(off)
+        # Abschluss + Statistik + Wiederholung
+        if not event.get("completed") and start and now >= start:
+            # Abschluss atomar auf dem frischen Eintrag beanspruchen,
+            # damit genau einmal abgeschlossen/gezählt wird und die
+            # aktuellen Anmeldungen erhalten bleiben.
+            snapshot = None
+            async with self.config.guild(guild).events() as stored:
+                cur = stored.get(eid)
+                if isinstance(cur, dict) and not cur.get("completed"):
+                    cur["completed"] = True
+                    cur["closed"] = True
+                    snapshot = dict(cur)
+            if snapshot is not None:
+                await self._count_attendance(guild, snapshot)
+                await self.refresh_event_message(guild, snapshot)
+                if snapshot.get("recurrence") in RECURRENCE_DELTA:
+                    await self._spawn_next(guild, snapshot)
 
     @_reminder_tick.before_loop
     async def _before_reminder(self):
@@ -589,7 +606,13 @@ class RaidHelper(commands.Cog):
         except (ZoneInfoNotFoundError, ValueError):
             tz = timezone.utc
         local_start = datetime.fromtimestamp(event["start_ts"], tz=tz)
-        new_start = int((local_start + delta).timestamp())
+        # War der Bot länger offline, bis zum nächsten Termin in der Zukunft
+        # weiterspringen – sonst entstünde eine Kette sofort abgelaufener Events.
+        now = datetime.now(tz=tz)
+        nxt = local_start + delta
+        while nxt <= now:
+            nxt += delta
+        new_start = int(nxt.timestamp())
         shift = new_start - event["start_ts"]
         await self.create_event(
             guild,
@@ -666,7 +689,7 @@ class RaidHelper(commands.Cog):
             status = t(lang, "status_closed" if e.get("closed") else "status_open")
             rows.append(t(lang, "list_row", id=e["id"], game=games.game_label(e["game"]),
                           time=f"<t:{e.get('start_ts',0)}:f>", signups=total, status=status))
-        for page in pagify("\n".join(rows), delimiters=["\n"], page_length=1900):
+        for page in pagify("\n".join(rows), delims=["\n"], page_length=1900):
             await ctx.send(page)
 
     @raid.command(name="close")
@@ -1028,6 +1051,7 @@ class RaidHelper(commands.Cog):
         await ctx.send(text[:1990])
 
     @raidset.command(name="specicon")
+    @commands.is_owner()  # Application Emojis gelten botweit – nicht von Server-Admins änderbar
     async def raidset_specicon(self, ctx, class_id: str, spec_id: str, emoji: str):
         """Setzt das Icon einer Spezialisierung manuell auf ein vorhandenes Emoji."""
         lang = await self._lang(ctx.guild)
@@ -1040,6 +1064,7 @@ class RaidHelper(commands.Cog):
                          spec=spec_id, emoji=emoji.strip()))
 
     @raidset.command(name="clearspecicon")
+    @commands.is_owner()
     async def raidset_clearspecicon(self, ctx, class_id: str, spec_id: str):
         """Entfernt das Icon einer Spezialisierung."""
         lang = await self._lang(ctx.guild)
@@ -1049,6 +1074,7 @@ class RaidHelper(commands.Cog):
                          cls=games.class_label("wow_retail", class_id), spec=spec_id))
 
     @raidset.command(name="uploadicons")
+    @commands.is_owner()
     async def raidset_uploadicons(self, ctx):
         """Lädt angehängte Bilddateien als Spec-Icons hoch (Dateiname = klasse_spec, z. B. krieger_furor.png)."""
         lang = await self._lang(ctx.guild)

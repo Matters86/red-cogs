@@ -1,5 +1,5 @@
-import asyncio
 import hashlib
+import inspect
 import logging
 import secrets
 import socket
@@ -34,6 +34,9 @@ log = logging.getLogger("red.red-cogs.webcore")
 DISCORD_API = "https://discord.com/api/v10"
 DISCORD_AUTHORIZE = "https://discord.com/oauth2/authorize"
 DISCORD_TOKEN = f"{DISCORD_API}/oauth2/token"
+# Login-Sitzung läuft nach 7 Tagen ab (serverseitig geprüft, Fernet-TTL). Vorher galt
+# das verschlüsselte Cookie unbegrenzt – ein einmal abgegriffenes Cookie für immer.
+SESSION_MAX_AGE = 7 * 86400
 
 try:
     import redbot
@@ -158,7 +161,11 @@ class WebCore(commands.Cog):
         fernet_key = hashlib.sha256(secret_key.encode()).digest()  # 32 Bytes
 
         app = web.Application()
-        session_setup(app, EncryptedCookieStorage(fernet_key, cookie_name="WEBCORE_SESSION"))
+        storage_kwargs = {"cookie_name": "WEBCORE_SESSION", "max_age": SESSION_MAX_AGE, "httponly": True}
+        # samesite erst ab neueren aiohttp_session-Versionen – nur setzen, wenn unterstützt.
+        if "samesite" in inspect.signature(EncryptedCookieStorage.__init__).parameters:
+            storage_kwargs["samesite"] = "Lax"
+        session_setup(app, EncryptedCookieStorage(fernet_key, **storage_kwargs))
         aiohttp_jinja2.setup(
             app,
             loader=jinja2.FileSystemLoader(str(Path(__file__).parent / "templates")),
@@ -285,6 +292,14 @@ class WebCore(commands.Cog):
         if await self._has_full_scope(user):
             return list(self.bot.guilds)
         return await self._admin_guilds(user)
+
+    async def has_full_scope(self, request) -> bool:
+        """Öffentlich für Cogs: ist der eingeloggte User Owner/Allowlist (volle Sicht)?
+
+        Für botweite Einstellungen (z. B. Application Emojis), die ein Admin eines
+        einzelnen Servers im Modus "admin" nicht ändern darf.
+        """
+        return await self._has_full_scope(await self._get_user(request))
 
     def _login_response(self, request):
         return aiohttp_jinja2.render_template(
@@ -476,21 +491,25 @@ class WebCore(commands.Cog):
         }
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
         timeout = aiohttp.ClientTimeout(total=15)
-        async with aiohttp.ClientSession(timeout=timeout) as cs:
-            async with cs.post(DISCORD_TOKEN, data=token_payload, headers=headers) as resp:
-                if resp.status != 200:
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as cs:
+                async with cs.post(DISCORD_TOKEN, data=token_payload, headers=headers) as resp:
+                    if resp.status != 200:
+                        return web.Response(text="Token-Austausch fehlgeschlagen.", status=400)
+                    token = await resp.json()
+                access_token = token.get("access_token")
+                if not access_token:
                     return web.Response(text="Token-Austausch fehlgeschlagen.", status=400)
-                token = await resp.json()
-            access_token = token.get("access_token")
-            if not access_token:
-                return web.Response(text="Token-Austausch fehlgeschlagen.", status=400)
-            async with cs.get(
-                f"{DISCORD_API}/users/@me",
-                headers={"Authorization": f"Bearer {access_token}"},
-            ) as resp:
-                if resp.status != 200:
-                    return web.Response(text="Konnte Discord-Profil nicht laden.", status=400)
-                me = await resp.json()
+                async with cs.get(
+                    f"{DISCORD_API}/users/@me",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                ) as resp:
+                    if resp.status != 200:
+                        return web.Response(text="Konnte Discord-Profil nicht laden.", status=400)
+                    me = await resp.json()
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            # Discord nicht erreichbar / keine JSON-Antwort -> saubere Meldung statt HTTP 500.
+            return web.Response(text="Discord ist gerade nicht erreichbar – bitte erneut anmelden.", status=502)
 
         if not me.get("id"):
             return web.Response(text="Konnte Discord-Profil nicht laden.", status=400)
@@ -601,6 +620,9 @@ class WebCore(commands.Cog):
     @webcore.command(name="port")
     async def webcore_port(self, ctx: commands.Context, port: int):
         """Webserver-Port setzen (Standard 42100)."""
+        if not 1 <= port <= 65535:
+            await ctx.send("Ungültiger Port (1–65535).")
+            return
         await self.config.port.set(port)
         await ctx.send(f"Port auf {port} gesetzt. Übernehmen mit `[p]reload webcore`.")
 

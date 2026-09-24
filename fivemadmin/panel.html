@@ -2294,7 +2294,7 @@
     try { p = a.params ? JSON.parse(a.params) : {}; } catch (e) {}
     var t = dispTarget(a.target, a.target_name);
     if (a.action_type === "teleport")
-      return t + ' <span class="arrow">→</span> ' + dispTarget(p.to_citizenid);
+      return t + ' <span class="arrow">→</span> ' + dispTarget(p.to_citizenid || p.to_spieler);  // Discord-Befehl nutzt to_spieler
     if (a.action_type === "teleport_coords")
       return t + ' <span class="arrow">→</span> ' + esc(p.x) + ", " + esc(p.y) + ", " + esc(p.z);
     if (a.action_type === "car_to_garage")

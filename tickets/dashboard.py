@@ -16,7 +16,7 @@ import uuid
 
 from aiohttp import web
 
-from .strings import LANGUAGES, OVERRIDABLE_KEYS, STRINGS, t
+from .strings import LANGUAGES, OVERRIDABLE_KEYS, STRINGS
 
 # Kleiner, auf die Theme-Variablen abgestimmter Style nur für Formularfelder.
 _FORM_STYLE = """
@@ -51,7 +51,6 @@ def _options(items, selected_ids, *, none_label: str | None = None) -> str:
     sel = {str(s) for s in (selected_ids or [])}
     out = []
     if none_label is not None:
-        chosen = "" if not sel else None
         is_sel = " selected" if not sel else ""
         out.append(f"<option value=''{is_sel}>{_esc(none_label)}</option>")
     for ident, label in items:
@@ -112,6 +111,10 @@ async def _render(cog, request):
     cat_items = [(c.id, c.name) for c in guild.categories]
     forum_items = [(c.id, f"#{c.name}") for c in getattr(guild, "forums", [])]
 
+    flash = ""
+    if request.query.get("ok"):
+        flash = f"<div class='tk-flash'>{_esc(request.query.get('ok'))}</div>"
+
     # Einzelnes Panel bearbeiten? (eigene, fokussierte Ansicht)
     pid = request.query.get("panel")
     if pid:
@@ -119,14 +122,10 @@ async def _render(cog, request):
         if panel is not None:
             return {
                 "title": "Tickets · Panel bearbeiten",
-                "content": _FORM_STYLE + _render_panel_editor(
+                "content": _FORM_STYLE + flash + _render_panel_editor(
                     guild, panel, text_items, role_items, cat_items, csrf
                 ),
             }
-
-    flash = ""
-    if request.query.get("ok"):
-        flash = f"<div class='tk-flash'>{_esc(request.query.get('ok'))}</div>"
 
     lang_opts = "".join(
         f"<option value='{code}'{' selected' if conf['language'] == code else ''}>{_esc(name)}</option>"
@@ -224,7 +223,7 @@ async def _render(cog, request):
 
         <label>Kanalname-Vorlage</label>
         <input name='name_template' value='{_esc(conf['name_template'])}'>
-        <div class='hint'>Platzhalter: <code>{{num}}</code> (Ticketnummer), <code>{{user}}</code> (Name).</div>
+        <div class='hint'>Platzhalter: <code>{{num}}</code> (Ticketnummer), <code>{{user}}</code> (Name). Gilt nur für Tickets ohne Grund – mit Grund heißt der Kanal automatisch <code>&lt;grund&gt;-&lt;num&gt;</code>.</div>
 
         <div class='tk-check'><input type='checkbox' name='close_confirmation' {'checked' if conf['close_confirmation'] else ''}><span>Vor dem Schließen bestätigen</span></div>
         <div class='tk-check'><input type='checkbox' name='user_can_close' {'checked' if conf['user_can_close'] else ''}><span>Ersteller darf eigenes Ticket schließen</span></div>
@@ -233,7 +232,7 @@ async def _render(cog, request):
         <div class='tk-spacer'></div>
         <div class='tk-section-title'>Eigene Texte (überschreiben die Sprachpakete)</div>
         {override_fields}
-        <div class='hint'>Leer = Standardtext der gewählten Sprache (im Feld als Platzhalter sichtbar).</div>
+        <div class='hint'>Leer = Standardtext der gewählten Sprache (im Feld als Platzhalter sichtbar). Platzhalter: <code>{{num}}</code> und <code>{{user}}</code> in <code>opened_title</code>/<code>opened_body</code>.</div>
 
         <div class='tk-spacer'></div>
         <button class='btn-accent' type='submit'>Speichern</button>
@@ -541,8 +540,10 @@ async def _handle_post(cog, request):
     gconf = cog.config.guild(guild)
 
     if form == "settings":
-        await gconf.language.set(data.get("language") or "de")
-        await gconf.ticket_type.set(data.get("ticket_type") or "category")
+        lang = data.get("language") or "de"
+        await gconf.language.set(lang if lang in LANGUAGES else "de")
+        ttype = data.get("ticket_type") or "category"
+        await gconf.ticket_type.set(ttype if ttype in ("category", "thread", "forum") else "category")
         await gconf.support_roles.set(_ids(data.getall("support_roles", [])))
         await gconf.admin_roles.set(_ids(data.getall("admin_roles", [])))
         await gconf.view_roles.set(_ids(data.getall("view_roles", [])))
@@ -557,7 +558,7 @@ async def _handle_post(cog, request):
             await gconf.max_open.set(max(1, int(data.get("max_open", 1))))
         except (TypeError, ValueError):
             await gconf.max_open.set(1)
-        await gconf.name_template.set((data.get("name_template") or "ticket-{num}").strip())
+        await gconf.name_template.set((data.get("name_template") or "ticket-{num}").strip()[:90])
         await gconf.close_confirmation.set("close_confirmation" in data)
         await gconf.user_can_close.set("user_can_close" in data)
         await gconf.delete_on_close.set("delete_on_close" in data)
@@ -662,20 +663,24 @@ async def _handle_post(cog, request):
 
 def _parse_reasons(raw: str) -> list[dict]:
     reasons = []
+    seen = set()
     for line in (raw or "").splitlines():
         line = line.strip()
         if not line:
             continue
         parts = [p.strip() for p in line.split("|")]
         label = parts[0]
-        if not label:
+        # Doppelte Labels überspringen: sie bekämen beim Bearbeiten dieselbe ID
+        # (_merge_reason_routing) -> doppelte custom_ids -> Discord lehnt das Panel ab.
+        if not label or label.casefold() in seen:
             continue
+        seen.add(label.casefold())
         reasons.append(
             {
                 "id": uuid.uuid4().hex[:6],
                 "label": label[:80],
                 "emoji": (parts[1] if len(parts) > 1 and parts[1] else None),
-                "description": (parts[2] if len(parts) > 2 and parts[2] else None),
+                "description": (parts[2][:100] if len(parts) > 2 and parts[2] else None),
             }
         )
     return reasons[:25]

@@ -11,11 +11,13 @@ ohnehin geladenen Bootstrap-Formularklassen genutzt – kein eigenes Design.
 from __future__ import annotations
 
 import html
+from urllib.parse import quote_plus
 
 import discord
 from aiohttp import web
 
 from .strings import LANGUAGES
+from .validate import validate_sticky
 
 # Kleiner, auf die Theme-Variablen abgestimmter Style nur für Formularfelder.
 _FORM_STYLE = """
@@ -363,6 +365,19 @@ async def _handle_post(cog, request):
             raise web.HTTPFound(
                 f"/cogs/sticky?guild={guild.id}&channel={cid}&ok=Embed+braucht+Text%2C+Titel+oder+Bild"
             )
+
+        candidate = {
+            "mode": mode, "text": text, "embed_title": embed_title, "embed_image": embed_image,
+            "embed_footer": (data.get("embed_footer") or "").strip(),
+            "webhook": "webhook" in data,
+            "webhook_name": (data.get("webhook_name") or "").strip(),
+            "webhook_avatar": (data.get("webhook_avatar") or "").strip(),
+        }
+        err = validate_sticky(candidate)
+        if err:
+            # Vorher wurde gespeichert, das Posten scheiterte an Discord-Limits – und die
+            # alte Sticky war dann schon gelöscht. Jetzt: gar nicht erst speichern.
+            raise web.HTTPFound(f"/cogs/sticky?guild={guild.id}&channel={cid}&ok=" + quote_plus(err))
 
         async with gconf.stickies() as stickies:
             entry = {

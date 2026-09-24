@@ -9,6 +9,7 @@ from redbot.core import Config, commands
 from redbot.core.bot import Red
 
 from .dashboard import dashboard_handler
+from .validate import EMBED_TEXT_MAX, TEXT_MAX
 from .strings import DEFAULT_LANGUAGE, LANGUAGES, t
 
 log = logging.getLogger("red.red-cogs.sticky")
@@ -20,6 +21,10 @@ DEFAULT_COLOR = 0x3DDC97
 # Grenzen für den Cooldown (Sekunden).
 COOLDOWN_MIN = 0
 COOLDOWN_MAX = 3600
+# Stickies werden bei jeder Nachricht neu gepostet – niemanden (auch keine Nutzer)
+# bei jedem Repost erneut anpingen.
+NO_PINGS = discord.AllowedMentions.none()
+
 
 # Vorlage eines Sticky-Datensatzes (pro Kanal in Config gespeichert).
 STICKY_DEFAULT = {
@@ -241,7 +246,7 @@ class Sticky(commands.Cog):
                         embed=embed,
                         username=(s.get("webhook_name") or None),
                         avatar_url=(s.get("webhook_avatar") or None),
-                        allowed_mentions=discord.AllowedMentions(everyone=False, roles=False),
+                        allowed_mentions=NO_PINGS,
                         wait=True,
                     )
                     new_message_id = msg.id
@@ -258,7 +263,7 @@ class Sticky(commands.Cog):
                 msg = await channel.send(
                     content=content or None,
                     embed=embed,
-                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False),
+                    allowed_mentions=NO_PINGS,
                 )
                 new_message_id = msg.id
                 new_webhook_id = None
@@ -344,6 +349,10 @@ class Sticky(commands.Cog):
 
         guild_conf = await self.config.guild(message.guild).all()
         stickies = guild_conf.get("stickies", {})
+        if str(message.channel.id) not in stickies:
+            return
+        if await self.bot.cog_disabled_in_guild(self, message.guild):
+            return
         s = stickies.get(str(message.channel.id))
         if not s or not s.get("enabled"):
             return
@@ -375,13 +384,18 @@ class Sticky(commands.Cog):
         text = text.strip()
         if not text:
             return await self._say(ctx, "no_text")
+        if len(text) > TEXT_MAX:
+            lang = await self._lang(ctx.guild)
+            return await ctx.send(t(lang, "too_long", max=TEXT_MAX, mode=t(lang, "mode_text")))
         async with self.config.guild(ctx.guild).stickies() as stickies:
             entry = dict(STICKY_DEFAULT)
             entry.update(stickies.get(str(channel.id), {}))
             entry.update({"enabled": True, "mode": "text", "text": text})
             stickies[str(channel.id)] = entry
-        await self.post_now(channel)
+        ok = await self.post_now(channel)
         lang = await self._lang(ctx.guild)
+        if not ok:
+            return await ctx.send(t(lang, "post_failed", channel=channel.mention))
         await ctx.send(t(lang, "set_ok", channel=channel.mention, mode=t(lang, "mode_text")))
 
     @sticky.command(name="embed")
@@ -391,13 +405,18 @@ class Sticky(commands.Cog):
         text = text.strip()
         if not text:
             return await self._say(ctx, "no_text")
+        if len(text) > EMBED_TEXT_MAX:
+            lang = await self._lang(ctx.guild)
+            return await ctx.send(t(lang, "too_long", max=EMBED_TEXT_MAX, mode=t(lang, "mode_embed")))
         async with self.config.guild(ctx.guild).stickies() as stickies:
             entry = dict(STICKY_DEFAULT)
             entry.update(stickies.get(str(channel.id), {}))
             entry.update({"enabled": True, "mode": "embed", "text": text})
             stickies[str(channel.id)] = entry
-        await self.post_now(channel)
+        ok = await self.post_now(channel)
         lang = await self._lang(ctx.guild)
+        if not ok:
+            return await ctx.send(t(lang, "post_failed", channel=channel.mention))
         await ctx.send(t(lang, "set_ok", channel=channel.mention, mode=t(lang, "mode_embed")))
 
     @sticky.command(name="remove")
@@ -461,9 +480,9 @@ class Sticky(commands.Cog):
             t(lang, "show_mode", mode=mode),
             t(lang, "show_state", state=state),
             t(lang, "show_webhook", via=via),
-            t(lang, "show_text", text=(s.get("text") or "—")),
+            t(lang, "show_text", text=(s.get("text") or "—")[:1500]),
         ]
-        await ctx.send("\n".join(lines))
+        await ctx.send("\n".join(lines)[:2000], allowed_mentions=NO_PINGS)
 
     @sticky.command(name="list")
     @commands.mod_or_permissions(manage_messages=True)
@@ -481,7 +500,15 @@ class Sticky(commands.Cog):
             state = t(lang, "state_on" if s.get("enabled") else "state_off")
             via = t(lang, "webhook_on" if s.get("webhook") else "webhook_off")
             rows.append(t(lang, "list_row", channel=ch_name, mode=mode, state=state, via=via))
-        await ctx.send("\n".join(rows))
+        # In Blöcke < 2000 Zeichen aufteilen (viele Stickies sprengten sonst das Limit).
+        chunk = ""
+        for row in rows:
+            if len(chunk) + len(row) + 1 > 1900:
+                await ctx.send(chunk)
+                chunk = ""
+            chunk += row + "\n"
+        if chunk:
+            await ctx.send(chunk)
 
     # ---- Einstellungen (Admin) ---- #
     @sticky.command(name="cooldown")

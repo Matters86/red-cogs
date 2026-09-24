@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from typing import Literal, Optional
 
 import discord
@@ -39,6 +39,9 @@ MODE_LABEL = {"image": "Bild", "embed": "Embed", "text": "Text"}
 
 # Verzögerung fürs Zusammenfassen vieler Änderungs-Events (Sekunden).
 REFRESH_DELAY = 4.0
+# Avatar-Cache (Schlüssel = Avatar-Hash): Jede Rollen-/Namensänderung löst ein
+# Neu-Rendern aus – ohne Cache wurden dabei jedes Mal ALLE Avatare neu geladen.
+AVATAR_CACHE_MAX = 1000
 
 
 def _color_int(hexstr: str | None) -> int:
@@ -58,6 +61,7 @@ class Organigram(commands.Cog):
         # Auto-Update-Infrastruktur
         self._locks: dict[tuple[int, str], asyncio.Lock] = {}
         self._pending: dict[tuple[int, str], asyncio.Task] = {}
+        self._avatar_cache: OrderedDict[str, bytes] = OrderedDict()
 
     # ------------------------------------------------------------------ #
     #  Lebenszyklus / Dashboard
@@ -129,6 +133,8 @@ class Organigram(commands.Cog):
     async def _schedule_affected(self, guild: discord.Guild, role_ids: set[int]):
         if not role_ids:
             return
+        if await self.bot.cog_disabled_in_guild(self, guild):
+            return
         charts = await self.config.guild(guild).charts()
         for cid, chart in charts.items():
             if not chart.get("posts") or not chart.get("auto_update", True):
@@ -169,11 +175,24 @@ class Organigram(commands.Cog):
                     if m is not None:
                         needed[m.id] = m
 
+            sem = asyncio.Semaphore(8)  # CDN nicht mit hunderten Parallel-Requests fluten
+
             async def _fetch(member: discord.Member):
+                asset = member.display_avatar
+                key = f"{asset.key}:{member.id}"
+                cached = self._avatar_cache.get(key)
+                if cached is not None:
+                    self._avatar_cache.move_to_end(key)
+                    return member.id, cached
                 try:
-                    return member.id, await member.display_avatar.read()
+                    async with sem:
+                        data = await asset.read()
                 except Exception:
                     return member.id, None
+                self._avatar_cache[key] = data
+                while len(self._avatar_cache) > AVATAR_CACHE_MAX:
+                    self._avatar_cache.popitem(last=False)
+                return member.id, data
 
             if needed:
                 for mid, data in await asyncio.gather(*(_fetch(m) for m in needed.values())):

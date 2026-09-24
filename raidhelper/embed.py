@@ -99,9 +99,15 @@ def build_event_embed(event: dict, lang: str, *, overrides: dict | None = None,
     """Erzeugt das vollständige Event-Embed."""
     game_id = event.get("game") or games.DEFAULT_GAME
     color = event.get("color") or DEFAULT_COLOR
+    # Discord-Limits: Titel 256, gesamtes Embed 6000 Zeichen. Die Roster-Felder
+    # belegen bis zu ~4000 -> Beschreibung auf 1400 kappen, sonst scheitert das
+    # Aktualisieren der Event-Nachricht (still) bei langen Texten + vollem Roster.
+    desc = event.get("description") or None
+    if desc and len(desc) > 1400:
+        desc = desc[:1399] + "…"
     embed = discord.Embed(
-        title=event.get("title") or "Event",
-        description=event.get("description") or None,
+        title=(event.get("title") or "Event")[:256],
+        description=desc,
         color=color,
     )
 
