@@ -90,8 +90,11 @@ async def dashboard_page(self, request):
     return {"title": "<Anzeigename>", "content": "<html>"}
 ```
 - `handler` gibt **immer** `{"title": str, "content": <HTML-String>}` zurück.
-- Nutzbare CSS-Klassen aus dem Standard-Theme: `card-x`, `table`, `stat`, `stat-label`,
-  `mono`, `btn-accent`. Icons: Bootstrap-Icons (`bi-...`).
+- Markup mit dem **UI-Kit** bauen: `ui = request.app["webcore"].ui` → `ui.hero`, `ui.stats`, `ui.tab`,
+  `ui.card`, `ui.form(..., savebar=True)`, `ui.field`, `ui.switch`, `ui.select`, `ui.table` …
+  (Übersicht: `webcore/README.md` → „UI-Kit“; Vorbild: `example/example.py`, `tickets/dashboard.py`).
+  Kein eigenes `<style>`, keine eigenen Erfolgsbalken (Meldungen per `?ok=`/`?err=` als Toast),
+  Löschen immer mit `confirm=`. Icons: Bootstrap-Icons (`bi-...`).
 - Nutzereingaben in HTML immer mit `html.escape(...)` absichern.
 
 ### Einstellungen schreiben (Formulare, POST + CSRF) — optional

@@ -14,7 +14,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <link href="/static/webcore.css?v={{ asset_version }}" rel="stylesheet">
 </head>
-<body class="{% if readonly %}wc-readonly{% endif %}">
+<body class="{% if readonly %}wc-readonly{% endif %}" data-readonly="{{ '1' if readonly else '0' }}">
   <aside class="sidebar" id="sidebar" aria-label="Navigation">
     <div class="sb-head">
       {% if bot_avatar %}<img src="{{ bot_avatar }}" alt="">{% else %}<span class="sb-logo"><i class="bi bi-robot"></i></span>{% endif %}
@@ -95,44 +95,6 @@
   </div>
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
-  <script>
-  (function(){
-    // Nutzer-Menü schließen, wenn außerhalb geklickt wird
-    document.addEventListener('click', function(e){
-      document.querySelectorAll('details.um[open]').forEach(function(d){ if(!d.contains(e.target)) d.removeAttribute('open'); });
-    });
-    // Toasts: ?ok=… / ?err=… der Cog-Seiten (PRG) als Meldung anzeigen
-    function toast(text, err){
-      var box=document.getElementById('toasts'); if(!box||!text) return;
-      var t=document.createElement('div'); t.className='toast-x'+(err?' err':'');
-      var i=document.createElement('i'); i.className='bi '+(err?'bi-exclamation-octagon':'bi-check2-circle');
-      var s=document.createElement('span'); s.textContent=text;
-      var b=document.createElement('button'); b.type='button'; b.setAttribute('aria-label','Schließen'); b.innerHTML='&times;';
-      b.onclick=function(){t.remove();};
-      t.appendChild(i); t.appendChild(s); t.appendChild(b); box.appendChild(t);
-      setTimeout(function(){t.classList.add('hide'); setTimeout(function(){t.remove();},400);}, err?9000:5000);
-    }
-    window.wcToast=toast;
-    var p=new URLSearchParams(location.search), ok=p.get('ok'), er=p.get('err');
-    var BAD=/(nicht gefunden|fehlgeschlagen|ungültig|fehler|keine|abgelehnt|nicht erlaubt|bitte)/i;
-    if(ok||er){
-      var msg = ok==='1' ? 'Gespeichert.' : (er==='1' ? 'Eingabe ungültig – bitte prüfen.' : (er||ok));
-      toast(msg, !!er || BAD.test(msg));
-      // doppelte Hinweisbalken der Cog-Seiten ausblenden
-      document.querySelectorAll('#wc-content [class*="-flash"]').forEach(function(el){ el.style.display='none'; });
-      p.delete('ok'); p.delete('err');
-      var qs=p.toString(); history.replaceState(null,'',location.pathname+(qs?'?'+qs:'')+location.hash);
-    }
-    {% if readonly %}
-    // Nur-Ansicht: alle speichernden Formulare sperren (der Server lehnt sie ohnehin ab)
-    document.querySelectorAll('#wc-content form').forEach(function(f){
-      if((f.getAttribute('method')||'get').toLowerCase()!=='post') return;
-      f.setAttribute('data-wc-locked','1');
-      f.querySelectorAll('input,select,textarea,button').forEach(function(el){ if(el.type!=='hidden') el.disabled=true; });
-      f.addEventListener('submit', function(e){ e.preventDefault(); toast('Nur Ansicht – dir fehlt die Berechtigung zum Bearbeiten.', true); });
-    });
-    {% endif %}
-  })();
-  </script>
+  <script src="/static/webcore.js?v={{ asset_version }}"></script>
 </body>
 </html>

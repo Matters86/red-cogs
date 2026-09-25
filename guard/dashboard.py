@@ -1,13 +1,15 @@
 """WebCore-Dashboard für den Guard-Cog.
 
 Aufgaben (gleiches Muster wie poll/raidhelper):
-* GET                 -> Übersicht: Statistik, Notmodus-Schalter, Einstellungen, Verlauf
+* GET                 -> Seite mit Reitern (siehe unten)
 * POST form=settings  -> Alle Einstellungen speichern (Post/Redirect/Get)
 * POST form=lockdown  -> Notmodus an-/ausschalten
 
-Es werden nur die Theme-Klassen (card-x, table, stat, …) plus die ohnehin
-geladenen Bootstrap-Klassen genutzt – kein eigenes Design. Nutzereingaben werden
-mit ``html.escape`` abgesichert.
+Aufbau mit dem UI-Baukasten von WebCore (``request.app["webcore"].ui``), kein
+eigenes CSS: Reiter Übersicht (Einrichtung, Notmodus-Schalter, Verlauf) ·
+Honeypot · Spamschutz · Eskalation · Raid & Notmodus · Allgemein & Ausnahmen.
+Die Einstellungs-Reiter liegen in *einem* Formular – ein Speichern sendet alles.
+Nutzereingaben werden mit ``html.escape`` abgesichert.
 """
 
 from __future__ import annotations
@@ -65,60 +67,31 @@ INT_FIELDS = {
     "lockdown_auto_minutes": (0, 1440),
 }
 
-_FORM_STYLE = """
-<style>
-  .gd-form label{display:block;color:var(--muted);font-size:.8rem;
-    text-transform:uppercase;letter-spacing:.05em;margin:14px 0 5px}
-  .gd-form input,.gd-form select,.gd-form textarea{width:100%;background:var(--panel-2);
-    color:var(--text);border:1px solid var(--border);border-radius:9px;
-    padding:9px 11px;font-family:inherit;font-size:.92rem}
-  .gd-form textarea{min-height:70px;resize:vertical;line-height:1.5}
-  .gd-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px}
-  .gd-check{display:flex;align-items:center;gap:8px;margin-top:12px}
-  .gd-check input{width:auto}
-  .gd-flash{background:rgba(61,220,151,.12);border:1px solid var(--accent);
-    color:var(--text);border-radius:10px;padding:11px 14px;margin-bottom:18px}
-  .gd-title{font-family:"Archivo",sans-serif;font-weight:700;font-size:1.15rem;margin:0 0 14px}
-  .gd-sub{font-family:"Archivo",sans-serif;font-weight:700;font-size:1rem;margin:22px 0 6px}
-  .gd-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px}
-  .gd-spacer{height:24px}
-  .gd-bar{display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap}
-  .gd-pill{display:inline-block;padding:3px 10px;border-radius:999px;font-size:.78rem;
-    border:1px solid var(--border)}
-  .gd-on{color:var(--accent);border-color:var(--accent)}
-  .gd-off{color:var(--muted)}
-  .gd-hint{color:var(--muted);font-size:.8rem;margin-top:4px}
-</style>
-"""
+HISTORY_LIMIT = 50
+
+_KIND_LABEL = {
+    "honeypot": ("Honeypot", "bad"), "spam": ("Spam", "warn"), "raid": ("Raid/Notmodus", "bad"),
+    "lockdown_join": ("Beitritt (Notmodus)", "info"), "lockdown_end": ("Notmodus beendet", "ok"),
+}
+_ACTION_LABEL = {"ban": "Bann", "softban": "Softban", "kick": "Kick", "timeout": "Timeout",
+                 "warn": "Verwarnung", "delete": "gelöscht", "none": "—"}
+_RULE_LABEL = {"honeypot": "Honeypot", "rate": "Rate", "repeat": "Wiederholung",
+               "mentions": "Erwähnungen", "invite": "Einladung", "link": "Link",
+               "wall": "Wall", "newaccount": "neues Konto", "lockdown_join": "Beitritt"}
 
 
 def _esc(value) -> str:
     return html.escape(str(value)) if value is not None else ""
 
 
-def _options(items, selected, *, none_label=None) -> str:
-    sel = {str(s) for s in (selected if isinstance(selected, (list, tuple, set)) else [selected])}
-    out = []
-    if none_label is not None:
-        out.append(f"<option value=''{'' if any(sel) else ' selected'}>{_esc(none_label)}</option>")
-    for ident, label in items:
-        is_sel = " selected" if str(ident) in sel else ""
-        out.append(f"<option value='{_esc(ident)}'{is_sel}>{_esc(label)}</option>")
-    return "".join(out)
-
-
-def _num(name, label, value, *, hint=None) -> str:
+def _num(ui, conf, name, default, *, unit=None) -> str:
+    """Zahlenfeld mit den Grenzen aus ``INT_FIELDS``."""
     lo, hi = INT_FIELDS[name]
-    h = f"<div class='gd-hint'>{_esc(hint)}</div>" if hint else ""
-    return (
-        f"<div><label>{_esc(label)}</label>"
-        f"<input type='number' name='{name}' min='{lo}' max='{hi}' value='{int(value)}'>{h}</div>"
-    )
+    return ui.number(name, int(conf.get(name, default)), min=lo, max=hi, unit=unit)
 
 
-def _check(name, label, checked) -> str:
-    c = "checked" if checked else ""
-    return f"<div class='gd-check'><input type='checkbox' name='{name}' {c}><span>{_esc(label)}</span></div>"
+def _switches(*items) -> str:
+    return "<div class='wc-switches'>" + "".join(items) + "</div>"
 
 
 # --------------------------------------------------------------------------- #
@@ -152,272 +125,302 @@ def _pick_guild(guilds, request):
 #  Rendern (GET)
 # --------------------------------------------------------------------------- #
 async def _render(cog, request):
+    ui = request.app["webcore"].ui
     guilds = await _visible_guilds(cog, request)
     guild = _pick_guild(guilds, request)
     if guild is None:
-        return {"title": "Guard", "content": "<div class='card-x'>Der Bot ist auf keinem Server.</div>"}
+        return {"title": "Guard", "content": ui.card(body=ui.empty("bi-hdd-network", "Der Bot ist auf keinem Server."))}
 
     conf = await cog.config.guild(guild).all()
     csrf = request.get("webcore_csrf", "")
 
-    flash = ""
-    if request.query.get("ok"):
-        flash = f"<div class='gd-flash'>{_esc(request.query.get('ok'))}</div>"
+    # Eigene Server-Auswahl nur ohne globalen Server-Wechsler von WebCore.
+    bar = ""
+    if not request.get("wc_switcher"):
+        bar = ui.form("/cogs/guard", ui.select("guild", [(g.id, g.name) for g in guilds], guild.id, autosubmit=True),
+                      csrf="", method="get", cls="wc-inline-form")
 
-    guild_opts = _options([(g.id, g.name) for g in guilds], guild.id)
-    bar = (
-        "<div class='gd-bar'>"
-        "<form method='get' action='/cogs/guard' class='gd-form' style='margin:0'>"
-        f"<select name='guild' onchange='this.form.submit()'>{guild_opts}</select>"
-        "</form>"
-        f"<span class='mono' style='color:var(--muted)'>{_esc(guild.name)}</span>"
-        "</div>"
+    head = ui.hero(
+        "bi-shield-lock", "",
+        "Guard schützt den Server mit drei Bausteinen: einem <b>Honeypot</b>-Kanal als Falle für Spam-Bots, "
+        "einem <b>Spamschutz</b> mit Punktesystem und einer <b>Raid-Erkennung</b>, die bei zu vielen Beitritten "
+        "den <b>Notmodus</b> auslöst.",
+        actions=bar,
+    ) + _render_stats(ui, conf)
+
+    body = (
+        ui.tab("uebersicht", "Übersicht", "bi-speedometer2", _render_overview(ui, guild, conf, csrf))
+        + _render_settings(ui, guild, conf, csrf)
     )
-    # Globaler Server-Wechsler von WebCore aktiv -> eigenes Dropdown ausblenden.
-    if request.get("wc_switcher"):
-        bar = ""
-
-    stats = _render_stats(guild, conf)
-    lockdown = _render_lockdown(guild, conf, csrf)
-    settings = _render_settings(guild, conf, csrf)
-    history = _render_history(guild, conf)
-
-    return {
-        "title": "Guard",
-        "content": _FORM_STYLE + bar + flash + stats
-        + "<div class='gd-spacer'></div>" + lockdown
-        + "<div class='gd-spacer'></div>" + settings
-        + "<div class='gd-spacer'></div>" + history,
-    }
+    return {"title": "Guard", "content": head + body}
 
 
-def _render_stats(guild, conf) -> str:
+def _lockdown_text(conf) -> str:
+    until = conf.get("lockdown_until")
+    # (Früher stand hier Discord-Markdown "<t:…:R>" – im Browser ein unsichtbares Tag.)
+    if until and until > 0:
+        mins = max(0, int((until - time.time()) // 60))
+        return f"endet automatisch in ca. {mins} Min."
+    return "bis zur manuellen Aufhebung"
+
+
+def _lockdown_short(conf) -> str:
+    until = conf.get("lockdown_until")
+    if until and until > 0:
+        return f"noch ca. {max(0, int((until - time.time()) // 60))} Min."
+    return "bis manuell beendet"
+
+
+def _render_stats(ui, conf) -> str:
     today = sum(1 for r in (conf.get("history") or []) if time.time() - r.get("ts", 0) <= 86400)
-    hp = "<span class='gd-pill gd-on'>an</span>" if conf.get("hp_enabled") else "<span class='gd-pill gd-off'>aus</span>"
-    spam = "<span class='gd-pill gd-on'>an</span>" if conf.get("spam_enabled") else "<span class='gd-pill gd-off'>aus</span>"
-    ld = "<span class='gd-pill gd-on'>aktiv</span>" if conf.get("lockdown_until") else "<span class='gd-pill gd-off'>aus</span>"
-    return (
-        "<div class='gd-grid'>"
-        f"<div class='stat'><div class='stat-label'>Auslösungen gesamt</div><div>{int(conf.get('stats_total', 0))}</div></div>"
-        f"<div class='stat'><div class='stat-label'>Letzte 24 h</div><div>{today}</div></div>"
-        f"<div class='stat'><div class='stat-label'>Honeypot</div><div>{hp}</div></div>"
-        f"<div class='stat'><div class='stat-label'>Spamschutz</div><div>{spam}</div></div>"
-        f"<div class='stat'><div class='stat-label'>Notmodus</div><div>{ld}</div></div>"
-        "</div>"
-    )
+    ld_active = bool(conf.get("lockdown_until"))
+    return ui.stats([
+        ("Auslösungen gesamt", int(conf.get("stats_total", 0)), "bi-lightning", None, None),
+        ("Letzte 24 h", today, "bi-clock-history", None, "warn" if today else None),
+        ("Honeypot", "an" if conf.get("hp_enabled") else "aus", "bi-bug", None, "ok" if conf.get("hp_enabled") else None),
+        ("Spamschutz", "an" if conf.get("spam_enabled") else "aus", "bi-shield-check", None,
+         "ok" if conf.get("spam_enabled") else None),
+        ("Notmodus", "aktiv" if ld_active else "aus", "bi-lock", _lockdown_short(conf) if ld_active else None,
+         "bad" if ld_active else None),
+    ])
 
 
-def _render_lockdown(guild, conf, csrf) -> str:
+def _setup_checks(guild, conf) -> list[tuple[str, str]]:
+    """Kurze Einrichtungs-Prüfung: [(tone, text)]."""
+    out = []
+    hp_chan = conf.get("hp_channel")
+    if conf.get("hp_enabled") and not hp_chan:
+        out.append(("bad", "Der <b>Honeypot</b> ist an, aber es ist kein <b>Honeypot-Kanal</b> gewählt – er greift nicht."))
+    elif hp_chan and guild.get_channel(int(hp_chan)) is None:
+        out.append(("warn", "Der gewählte <b>Honeypot-Kanal</b> existiert nicht mehr – wähle im Reiter „Honeypot“ einen neuen."))
+    if not conf.get("hp_enabled") and not conf.get("spam_enabled"):
+        out.append(("warn", "<b>Honeypot</b> und <b>Spamschutz</b> sind beide aus – Guard reagiert derzeit nur auf Raids."))
+    if not conf.get("raid_enabled", True):
+        out.append(("info", "Die <b>Raid-Erkennung</b> ist aus – der Notmodus startet nur noch manuell."))
+    if not conf.get("log_channel"):
+        out.append(("info", "Kein <b>Log-Kanal</b> gesetzt – Aktionen erscheinen nur im Verlauf unten. Festlegen unter „Allgemein &amp; Ausnahmen“."))
+    return out
+
+
+def _render_overview(ui, guild, conf, csrf) -> str:
+    checks = _setup_checks(guild, conf)
+    if checks:
+        check_html = "".join(ui.callout(text, tone=tone) for tone, text in checks)
+    else:
+        check_html = ui.callout("Alles eingerichtet – Guard ist aktiv.", tone="ok")
+    setup = ui.card("Einrichtung", check_html, icon="bi-clipboard-check")
+    # Karten in eigenen <div>s behalten ihren Abstand nach unten (wc-cols setzt ihn sonst auf 0).
+    top = ui.columns(f"<div>{_render_lockdown(ui, guild, conf, csrf)}</div>", f"<div>{setup}</div>")
+    return top + _render_history(ui, conf)
+
+
+def _render_lockdown(ui, guild, conf, csrf) -> str:
     active = bool(conf.get("lockdown_until"))
     if active:
-        until = conf.get("lockdown_until")
-        # (Früher stand hier Discord-Markdown "<t:…:R>" – im Browser ein unsichtbares Tag.)
-        if until and until > 0:
-            mins = max(0, int((until - time.time()) // 60))
-            when = f"endet automatisch in ca. {mins} Min."
-        else:
-            when = "bis zur manuellen Aufhebung"
-        btn = "<button class='btn-accent' name='state' value='off'>Notmodus beenden</button>"
-        note = f"<div class='gd-hint'>Aktiv – {_esc(when)}</div>"
+        text = ui.callout(f"<b>Der Notmodus ist aktiv</b> – {_esc(_lockdown_text(conf))}", tone="bad", icon="bi-lock-fill")
+        btn = ui.button("Notmodus beenden", icon="bi-unlock", name="state", value="off")
     else:
-        btn = "<button class='btn-accent' name='state' value='on'>Notmodus jetzt aktivieren</button>"
-        note = "<div class='gd-hint'>Setzt Slowmode, pausiert (falls möglich) Einladungen und behandelt neue Beitritte gemäß Einstellung.</div>"
-    return (
-        "<div class='card-x'><div class='gd-title'>Notmodus (Lockdown)</div>"
-        "<form class='gd-form' method='post' action='/cogs/guard' style='margin:0'>"
-        f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-        "<input type='hidden' name='form' value='lockdown'>"
-        f"<input type='hidden' name='guild' value='{guild.id}'>"
-        f"{btn}{note}</form></div>"
-    )
+        text = ("<p class='wc-help'>Setzt Slowmode in allen Textkanälen, pausiert (falls möglich) Einladungen "
+                "und behandelt neue Beitritte gemäß Reiter „Raid &amp; Notmodus“.</p>")
+        btn = ui.button("Notmodus jetzt aktivieren", icon="bi-lock", kind="danger", name="state", value="on",
+                        confirm="Der Notmodus setzt sofort Slowmode in allen Textkanälen und pausiert ggf. Einladungen.")
+    form = ui.form("/cogs/guard", text + ui.actions(btn), csrf=csrf,
+                   hidden={"form": "lockdown", "guild": guild.id})
+    return ui.card("Notmodus (Lockdown)", form, icon="bi-lock", tone="bad" if active else None,
+                   desc="Manuell ein- und ausschalten – unabhängig von der Raid-Erkennung.")
 
 
-def _render_settings(guild, conf, csrf) -> str:
-    text_channels = [(c.id, f"#{c.name}") for c in guild.text_channels]
-    roles = [(r.id, r.name) for r in guild.roles if not r.is_default()]
-
-    lang_opts = _options(list(LANGUAGES.items()), conf.get("language", "de"))
-    log_opts = _options(text_channels, conf.get("log_channel"), none_label="— keiner —")
-    hp_chan_opts = _options(text_channels, conf.get("hp_channel"), none_label="— keiner —")
-    hp_action_opts = _options(ACTIONS, conf.get("hp_action", "softban"))
-    join_opts = _options(JOIN_ACTIONS, conf.get("lockdown_action_joins", "none"))
-    role_opts = _options(roles, conf.get("whitelist_roles") or [])
-    chan_opts = _options(text_channels, conf.get("whitelist_channels") or [])
-    wl_users = " ".join(str(u) for u in (conf.get("whitelist_users") or []))
-
-    overrides = conf.get("messages") or {}
-    override_fields = ""
-    for key in OVERRIDABLE_KEYS:
-        cur = overrides.get(key, "")
-        default = STRINGS["de"].get(key, "")
-        override_fields += (
-            f"<label>Text „{_esc(key)}\"</label>"
-            f"<textarea name='ovr_{key}' placeholder='{_esc(default)}'>{_esc(cur)}</textarea>"
-        )
-
-    # ---- Module & Allgemein
-    general = (
-        "<div class='gd-sub'>Module & Allgemein</div>"
-        + _check("hp_enabled", "Honeypot aktiv", conf.get("hp_enabled"))
-        + _check("spam_enabled", "Spamschutz aktiv", conf.get("spam_enabled"))
-        + _check("ignore_bots", "Andere Bots ignorieren", conf.get("ignore_bots", True))
-        + _check("use_modlog", "Aktionen zusätzlich in Reds modlog spiegeln", conf.get("use_modlog", True))
-        + "<div class='gd-row'>"
-        + f"<div><label>Sprache</label><select name='language'>{lang_opts}</select></div>"
-        + f"<div><label>Log-Kanal</label><select name='log_channel'>{log_opts}</select></div>"
-        + "</div>"
-    )
-
-    # ---- Honeypot
-    honeypot = (
-        "<div class='gd-sub'>Honeypot</div>"
-        "<div class='gd-row'>"
-        f"<div><label>Honeypot-Kanal (bestehenden markieren)</label><select name='hp_channel'>{hp_chan_opts}</select>"
-        "<div class='gd-hint'>Neuen Kanal anlegen: <span class='mono'>[p]guardset honeypot create</span></div></div>"
-        f"<div><label>Aktion bei Auslösung</label><select name='hp_action'>{hp_action_opts}</select></div>"
-        "</div>"
-        "<div class='gd-row'>"
-        + _num("hp_delete_seconds", "Nachrichten löschen (Sek., bei Bann/Softban)", conf.get("hp_delete_seconds", 86400),
-               hint="0–604800 (max. 7 Tage)")
-        + _num("hp_timeout_minutes", "Timeout-Dauer (Min., falls Aktion = Timeout)", conf.get("hp_timeout_minutes", 60))
-        + "</div>"
-    )
-
-    # ---- Spamschutz-Heuristiken
-    spam = (
-        "<div class='gd-sub'>Spamschutz – Heuristiken</div>"
-        + _check("s_rate", "Nachrichten-Rate", conf.get("s_rate", True))
-        + "<div class='gd-row'>"
-        + _num("s_rate_count", "max. Nachrichten", conf.get("s_rate_count", 6))
-        + _num("s_rate_seconds", "im Zeitfenster (Sek.)", conf.get("s_rate_seconds", 5))
-        + "</div>"
-        + _check("s_repeat", "Wiederholungen", conf.get("s_repeat", True))
-        + _check("s_repeat_crosschannel", "Wiederholungen kanalübergreifend zählen", conf.get("s_repeat_crosschannel", True))
-        + "<div class='gd-row'>"
-        + _num("s_repeat_count", "gleiche Nachrichten ab", conf.get("s_repeat_count", 4))
-        + _num("s_repeat_seconds", "im Zeitfenster (Sek.)", conf.get("s_repeat_seconds", 20))
-        + "</div>"
-        + _check("s_mentions", "Massen-Erwähnungen", conf.get("s_mentions", True))
-        + "<div class='gd-row'>"
-        + _num("s_mentions_max", "max. Erwähnungen je Nachricht", conf.get("s_mentions_max", 5))
-        + "</div>"
-        + _check("s_invites", "Einladungslinks erkennen", conf.get("s_invites", True))
-        + _check("s_links", "Alle externen Links erkennen", conf.get("s_links", False))
-        + _check("s_walls", "Anhang-/Emoji-/Zeilen-Walls", conf.get("s_walls", True))
-        + "<div class='gd-row'>"
-        + _num("s_walls_attachments", "max. Anhänge", conf.get("s_walls_attachments", 6))
-        + _num("s_walls_emojis", "max. Custom-Emojis", conf.get("s_walls_emojis", 12))
-        + _num("s_walls_newlines", "max. Zeilenumbrüche", conf.get("s_walls_newlines", 12))
-        + "</div>"
-        + _check("s_newaccount", "Sehr neue Konten strenger behandeln (verstärkt andere Treffer)", conf.get("s_newaccount", True))
-        + "<div class='gd-row'>"
-        + _num("s_newaccount_hours", "Konto jünger als (Std.)", conf.get("s_newaccount_hours", 24))
-        + "</div>"
-    )
-
-    # ---- Punkte & Eskalation
-    escalation = (
-        "<div class='gd-sub'>Punkte & Eskalation</div>"
-        "<div class='gd-row'>"
-        + _num("pts_rate", "Punkte: Rate", conf.get("pts_rate", 3))
-        + _num("pts_repeat", "Punkte: Wiederholung", conf.get("pts_repeat", 3))
-        + _num("pts_mentions", "Punkte: Erwähnungen", conf.get("pts_mentions", 4))
-        + _num("pts_invite", "Punkte: Einladung", conf.get("pts_invite", 5))
-        + _num("pts_link", "Punkte: Link", conf.get("pts_link", 2))
-        + _num("pts_wall", "Punkte: Wall", conf.get("pts_wall", 2))
-        + _num("pts_newaccount", "Punkte: neues Konto", conf.get("pts_newaccount", 2))
-        + _num("decay_seconds", "Punkte verfallen nach (Sek.)", conf.get("decay_seconds", 60))
-        + "</div>"
-        "<div class='gd-row'>"
-        + _num("warn_at", "Verwarnen ab Punkten", conf.get("warn_at", 3))
-        + _num("timeout_at", "Timeout ab Punkten", conf.get("timeout_at", 6))
-        + _num("kick_at", "Kick ab Punkten", conf.get("kick_at", 9))
-        + _num("ban_at", "Bann ab Punkten", conf.get("ban_at", 12))
-        + _num("spam_timeout_minutes", "Timeout-Dauer Spam (Min.)", conf.get("spam_timeout_minutes", 10))
-        + "</div>"
-        + _check("delete_violations", "Auslösende Nachricht löschen", conf.get("delete_violations", True))
-    )
-
-    # ---- Raid / Notmodus
-    raid = (
-        "<div class='gd-sub'>Raid-Erkennung & Notmodus</div>"
-        + _check("raid_enabled", "Raid-Erkennung aktiv (zu viele Beitritte → Notmodus)", conf.get("raid_enabled", True))
-        + "<div class='gd-row'>"
-        + _num("raid_joins", "Beitritte ab", conf.get("raid_joins", 8))
-        + _num("raid_seconds", "im Zeitfenster (Sek.)", conf.get("raid_seconds", 20))
-        + "</div>"
-        + _check("lockdown_pause_invites", "Im Notmodus Einladungen pausieren (falls von Discord unterstützt)", conf.get("lockdown_pause_invites", True))
-        + "<div class='gd-row'>"
-        + _num("lockdown_slowmode", "Slowmode im Notmodus (Sek.)", conf.get("lockdown_slowmode", 10))
-        + _num("lockdown_auto_minutes", "Notmodus automatisch beenden nach (Min., 0 = manuell)", conf.get("lockdown_auto_minutes", 10))
-        + f"<div><label>Neue Beitritte im Notmodus</label><select name='lockdown_action_joins'>{join_opts}</select></div>"
-        + "</div>"
-    )
-
-    # ---- Ausnahmen
-    exemptions = (
-        "<div class='gd-sub'>Ausnahmen</div>"
-        "<div class='gd-hint'>Owner, Admins/„Server verwalten\", der Bot selbst und Reds Immunität "
-        "(<span class='mono'>[p]immune</span>) sind ohnehin immer ausgenommen.</div>"
-        "<div class='gd-row'>"
-        f"<div><label>Rollen ausnehmen</label><select name='whitelist_roles' multiple size='5'>{role_opts}</select></div>"
-        f"<div><label>Kanäle (nur Spamschutz)</label><select name='whitelist_channels' multiple size='5'>{chan_opts}</select></div>"
-        "</div>"
-        f"<label>Nutzer ausnehmen (IDs, mit Leerzeichen getrennt)</label>"
-        f"<input name='whitelist_users' value='{_esc(wl_users)}' placeholder='z. B. 123456789012345678 987654321098765432'>"
-        "<div class='gd-spacer'></div>"
-        f"{override_fields}"
-    )
-
-    return (
-        "<div class='card-x'><div class='gd-title'>Einstellungen</div>"
-        "<form class='gd-form' method='post' action='/cogs/guard'>"
-        f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-        "<input type='hidden' name='form' value='settings'>"
-        f"<input type='hidden' name='guild' value='{guild.id}'>"
-        f"{general}{honeypot}{spam}{escalation}{raid}{exemptions}"
-        "<div class='gd-spacer'></div>"
-        "<button class='btn-accent' type='submit'>Speichern</button>"
-        "</form></div>"
-    )
-
-
-def _render_history(guild, conf) -> str:
+def _render_history(ui, conf) -> str:
     hist = conf.get("history") or []
     if not hist:
-        return "<div class='card-x'><div class='gd-title'>Verlauf</div>Noch keine Aktionen protokolliert.</div>"
-    kind_label = {"honeypot": "Honeypot", "spam": "Spam", "raid": "Raid/Notmodus",
-                  "lockdown_join": "Beitritt (Notmodus)", "lockdown_end": "Notmodus beendet"}
-    action_label = {"ban": "Bann", "softban": "Softban", "kick": "Kick", "timeout": "Timeout",
-                    "warn": "Verwarnung", "delete": "gelöscht", "none": "—"}
-    rule_label = {"honeypot": "Honeypot", "rate": "Rate", "repeat": "Wiederholung",
-                  "mentions": "Erwähnungen", "invite": "Einladung", "link": "Link",
-                  "wall": "Wall", "newaccount": "neues Konto", "lockdown_join": "Beitritt"}
-    rows = ""
+        return ui.card("Verlauf", ui.empty("bi-clock-history", "Noch keine Aktionen protokolliert.",
+                                           "Hier erscheinen Honeypot-, Spam- und Raid-Auslösungen."),
+                       icon="bi-clock-history")
+    rows = []
     for r in hist[:HISTORY_LIMIT]:
-        rules = ", ".join(rule_label.get(x, x) for x in (r.get("rules") or [])) or "—"
+        rules = ", ".join(_RULE_LABEL.get(x, x) for x in (r.get("rules") or [])) or "—"
         chan = f"#{r['channel']}" if r.get("channel") else "—"
-        user = r.get("user") or "—"
         pts = r.get("points")
-        pts_cell = "—" if pts is None else str(pts)
-        rows += (
-            f"<tr><td>{_esc(_ago(r.get('ts', 0)))}</td>"
-            f"<td>{_esc(kind_label.get(r.get('kind'), r.get('kind')))}</td>"
-            f"<td>{_esc(user)}</td>"
-            f"<td>{_esc(rules)}</td>"
-            f"<td>{_esc(action_label.get(r.get('action'), r.get('action')))}</td>"
-            f"<td>{_esc(chan)}</td>"
-            f"<td class='mono'>{_esc(pts_cell)}</td></tr>"
-        )
-    return (
-        "<div class='card-x'><div class='gd-title'>Verlauf (letzte Aktionen)</div>"
-        "<table class='table'><thead><tr><th>Wann</th><th>Auslöser</th><th>Nutzer</th>"
-        "<th>Regel(n)</th><th>Aktion</th><th>Kanal</th><th>Punkte</th></tr></thead>"
-        f"<tbody>{rows}</tbody></table></div>"
+        kind, tone = _KIND_LABEL.get(r.get("kind"), (r.get("kind"), "muted"))
+        rows.append(ui.row(
+            f"<span class='mono'>{_esc(_ago(r.get('ts', 0))).replace(' ', '&nbsp;')}</span>",
+            ui.badge(kind or "—", tone),
+            _esc(r.get("user") or "—"),
+            _esc(rules),
+            _esc(_ACTION_LABEL.get(r.get("action"), r.get("action"))),
+            _esc(chan),
+            f"><span class='mono'>{_esc('—' if pts is None else pts)}</span>",
+        ))
+    return ui.card(
+        "Verlauf", ui.table(["Wann", "Auslöser", "Nutzer", "Regel(n)", "Aktion", "Kanal", ">Punkte"], rows,
+                            search=True, search_placeholder="Nach Nutzer, Regel oder Kanal suchen …", id="gd-history"),
+        icon="bi-clock-history", desc=f"Die letzten {HISTORY_LIMIT} Aktionen, neueste zuerst.",
     )
 
 
-HISTORY_LIMIT = 50
+def _render_settings(ui, guild, conf, csrf) -> str:
+    text_channels = [(c.id, f"#{c.name}") for c in guild.text_channels]
+    roles = [
+        (r.id, r.name, f"#{r.color.value:06x}" if getattr(r, "color", None) and r.color.value else None)
+        for r in sorted(guild.roles, key=lambda r: r.position, reverse=True) if not r.is_default()
+    ]
+    save = ui.save_row("Einstellungen speichern")
+
+    # ---- Honeypot
+    honeypot = ui.card("Honeypot", _switches(
+        ui.switch("hp_enabled", "Honeypot aktiv", conf.get("hp_enabled"),
+                  desc="Wer im Honeypot-Kanal schreibt, wird sofort bestraft."),
+    ) + ui.grid(
+        ui.field("Honeypot-Kanal", ui.select("hp_channel", text_channels, conf.get("hp_channel"), none_label="— keiner —"),
+                 help="Bestehenden Kanal markieren. Neuen anlegen: <code>[p]guardset honeypot create</code>"),
+        ui.field("Aktion bei Auslösung", ui.select("hp_action", ACTIONS, conf.get("hp_action", "softban"))),
+        ui.field("Nachrichten löschen", _num(ui, conf, "hp_delete_seconds", 86400, unit="Sek."),
+                 help="Nur bei Bann/Softban: Nachrichten der letzten X Sekunden entfernen (0–604800, max. 7 Tage)."),
+        ui.field("Timeout-Dauer", _num(ui, conf, "hp_timeout_minutes", 60, unit="Min."),
+                 help="Nur wenn die Aktion „Timeout“ ist."),
+    ), icon="bi-bug",
+        desc="Ein Kanal, in dem kein Mensch schreiben soll – Spam-Bots posten dort trotzdem und verraten sich.")
+
+    overrides = conf.get("messages") or {}
+    text_labels = {"hp_warning": ("Warntext im Honeypot-Kanal",
+                                  "Wird beim Anlegen per <code>[p]guardset honeypot create</code> als Kanalthema und erste Nachricht gesetzt.")}
+    text_fields = []
+    for key in OVERRIDABLE_KEYS:
+        label, hint = text_labels.get(key, (key, None))
+        text_fields.append(ui.field(label, ui.textarea(f"ovr_{key}", overrides.get(key, ""), rows=3,
+                                                       placeholder=STRINGS["de"].get(key, "")), help=hint, wide=True))
+    texts = ui.card("Eigene Texte", ui.grid(*text_fields, cols=1), icon="bi-chat-left-text",
+                    desc="Leer lassen = Standardtext der gewählten Sprache (als grauer Platzhalter sichtbar).")
+
+    # ---- Spamschutz
+    spam_main = ui.card("Spamschutz", _switches(
+        ui.switch("spam_enabled", "Spamschutz aktiv", conf.get("spam_enabled"),
+                  desc="Hauptschalter – ohne ihn greift keine der Regeln unten."),
+    ), icon="bi-shield-check",
+        desc="Jede Regel, die anschlägt, gibt Punkte. Erreicht ein Mitglied eine Schwelle aus dem Reiter "
+             "„Eskalation“, folgt die passende Maßnahme.")
+    pts = "Punkte"
+    rate = ui.card("Nachrichten-Rate", _switches(
+        ui.switch("s_rate", "Regel aktiv", conf.get("s_rate", True), desc="Zu viele Nachrichten in kurzer Zeit."),
+    ) + ui.grid(
+        ui.field("Max. Nachrichten", _num(ui, conf, "s_rate_count", 6)),
+        ui.field("im Zeitfenster", _num(ui, conf, "s_rate_seconds", 5, unit="Sek.")),
+        ui.field(pts, _num(ui, conf, "pts_rate", 3, unit="Pkt.")),
+        cols=3), icon="bi-speedometer")
+    repeat = ui.card("Wiederholungen", _switches(
+        ui.switch("s_repeat", "Regel aktiv", conf.get("s_repeat", True), desc="Dieselbe Nachricht mehrfach."),
+        ui.switch("s_repeat_crosschannel", "Kanalübergreifend zählen", conf.get("s_repeat_crosschannel", True),
+                  desc="Auch in verschiedenen Kanälen gepostet."),
+    ) + ui.grid(
+        ui.field("Gleiche Nachr. ab", _num(ui, conf, "s_repeat_count", 4)),
+        ui.field("im Zeitfenster", _num(ui, conf, "s_repeat_seconds", 20, unit="Sek.")),
+        ui.field(pts, _num(ui, conf, "pts_repeat", 3, unit="Pkt.")),
+        cols=3), icon="bi-files")
+    mentions = ui.card("Massen-Erwähnungen", _switches(
+        ui.switch("s_mentions", "Regel aktiv", conf.get("s_mentions", True), desc="Viele @Erwähnungen in einer Nachricht."),
+    ) + ui.grid(
+        ui.field("Max. Erwähnungen je Nachricht", _num(ui, conf, "s_mentions_max", 5)),
+        ui.field(pts, _num(ui, conf, "pts_mentions", 4, unit="Pkt.")),
+    ), icon="bi-at")
+    links = ui.card("Einladungen & Links", _switches(
+        ui.switch("s_invites", "Einladungslinks erkennen", conf.get("s_invites", True), desc="discord.gg/… und Ähnliches."),
+        ui.switch("s_links", "Alle externen Links erkennen", conf.get("s_links", False), desc="Streng – jeder Link zählt."),
+    ) + ui.grid(
+        ui.field("Punkte je Einladung", _num(ui, conf, "pts_invite", 5, unit="Pkt.")),
+        ui.field("Punkte je Link", _num(ui, conf, "pts_link", 2, unit="Pkt.")),
+    ), icon="bi-link-45deg")
+    walls = ui.card("Anhang-, Emoji- & Zeilen-Walls", _switches(
+        ui.switch("s_walls", "Regel aktiv", conf.get("s_walls", True), desc="Überlange oder überladene Nachrichten."),
+    ) + ui.grid(
+        ui.field("Max. Anhänge", _num(ui, conf, "s_walls_attachments", 6)),
+        ui.field("Max. Custom-Emojis", _num(ui, conf, "s_walls_emojis", 12)),
+        ui.field("Max. Zeilenumbrüche", _num(ui, conf, "s_walls_newlines", 12)),
+        ui.field(pts, _num(ui, conf, "pts_wall", 2, unit="Pkt.")),
+    ), icon="bi-bricks")
+    newacc = ui.card("Neue Konten", _switches(
+        ui.switch("s_newaccount", "Neue Konten strenger behandeln", conf.get("s_newaccount", True),
+                  desc="Verstärkt andere Treffer: sehr junge Konten bekommen Zusatzpunkte."),
+    ) + ui.grid(
+        ui.field("Konto jünger als", _num(ui, conf, "s_newaccount_hours", 24, unit="Std.")),
+        ui.field("Zusatzpunkte", _num(ui, conf, "pts_newaccount", 2, unit="Pkt.")),
+    ), icon="bi-person-plus")
+    spam = spam_main + ui.columns(rate, repeat, mentions, links, walls, newacc)
+
+    # ---- Eskalation
+    escalation = ui.card("Schwellen", ui.grid(
+        ui.field("Verwarnen ab", _num(ui, conf, "warn_at", 3, unit="Pkt.")),
+        ui.field("Timeout ab", _num(ui, conf, "timeout_at", 6, unit="Pkt.")),
+        ui.field("Kick ab", _num(ui, conf, "kick_at", 9, unit="Pkt.")),
+        ui.field("Bann ab", _num(ui, conf, "ban_at", 12, unit="Pkt.")),
+        cols=4), icon="bi-bar-chart-steps",
+        desc="Die Punkte eines Mitglieds werden zusammengezählt; die höchste erreichte Stufe wird ausgeführt.")
+    escalation += ui.card("Punkte & Maßnahmen", ui.grid(
+        ui.field("Punkte verfallen nach", _num(ui, conf, "decay_seconds", 60, unit="Sek."),
+                 help="Nur Treffer innerhalb dieses Zeitfensters zählen zusammen."),
+        ui.field("Timeout-Dauer (Spam)", _num(ui, conf, "spam_timeout_minutes", 10, unit="Min."),
+                 help="Dauer des Timeouts, wenn die Stufe „Timeout“ erreicht wird."),
+    ) + _switches(
+        ui.switch("delete_violations", "Auslösende Nachricht löschen", conf.get("delete_violations", True),
+                  desc="Die Nachricht, die eine Regel ausgelöst hat, wird entfernt."),
+    ), icon="bi-hourglass-split")
+
+    # ---- Raid / Notmodus
+    raid = ui.card("Raid-Erkennung", _switches(
+        ui.switch("raid_enabled", "Raid-Erkennung aktiv", conf.get("raid_enabled", True),
+                  desc="Zu viele Beitritte in kurzer Zeit schalten den Notmodus automatisch ein."),
+    ) + ui.grid(
+        ui.field("Beitritte ab", _num(ui, conf, "raid_joins", 8)),
+        ui.field("im Zeitfenster", _num(ui, conf, "raid_seconds", 20, unit="Sek.")),
+    ), icon="bi-people")
+    raid += ui.card("Verhalten im Notmodus", ui.grid(
+        ui.field("Slowmode", _num(ui, conf, "lockdown_slowmode", 10, unit="Sek."),
+                 help="Wird in allen Textkanälen gesetzt (0 = kein Slowmode)."),
+        ui.field("Automatisch beenden nach", _num(ui, conf, "lockdown_auto_minutes", 10, unit="Min."),
+                 help="0 = nur manuell beenden."),
+        ui.field("Neue Beitritte", ui.select("lockdown_action_joins", JOIN_ACTIONS, conf.get("lockdown_action_joins", "none")),
+                 help="Was mit Mitgliedern passiert, die während des Notmodus beitreten.", wide=True),
+    ) + _switches(
+        ui.switch("lockdown_pause_invites", "Einladungen pausieren", conf.get("lockdown_pause_invites", True),
+                  desc="Falls von Discord unterstützt."),
+    ), icon="bi-lock", desc="Manuell ein- und ausschalten kannst du den Notmodus im Reiter „Übersicht“.")
+
+    # ---- Allgemein & Ausnahmen
+    general = ui.card("Allgemein", ui.grid(
+        ui.field("Sprache", ui.select("language", list(LANGUAGES.items()), conf.get("language", "de")),
+                 help="Sprache der Bot-Meldungen."),
+        ui.field("Log-Kanal", ui.select("log_channel", text_channels, conf.get("log_channel"), none_label="— keiner —"),
+                 help="Hier protokolliert Guard jede Aktion."),
+    ) + _switches(
+        ui.switch("ignore_bots", "Andere Bots ignorieren", conf.get("ignore_bots", True),
+                  desc="Nachrichten anderer Bots lösen nichts aus."),
+        ui.switch("use_modlog", "In Reds Modlog spiegeln", conf.get("use_modlog", True),
+                  desc="Aktionen zusätzlich als Modlog-Fall eintragen."),
+    ), icon="bi-gear")
+    wl_users = " ".join(str(u) for u in (conf.get("whitelist_users") or []))
+    exemptions = ui.card("Ausnahmen", ui.grid(
+        ui.field("Rollen ausnehmen", ui.select("whitelist_roles", roles, conf.get("whitelist_roles") or [],
+                                               multiple=True, placeholder="Rollen suchen …"),
+                 help="Mitglieder mit diesen Rollen lösen nichts aus."),
+        ui.field("Kanäle ausnehmen", ui.select("whitelist_channels", text_channels, conf.get("whitelist_channels") or [],
+                                               multiple=True, placeholder="Kanäle suchen …"),
+                 help="Gilt nur für den Spamschutz – der Honeypot bleibt aktiv."),
+        ui.field("Nutzer ausnehmen", ui.text_input("whitelist_users", wl_users,
+                                                   placeholder="z. B. 123456789012345678 987654321098765432"),
+                 help="Nutzer-IDs, mit Leerzeichen getrennt.", wide=True),
+    ), icon="bi-person-check",
+        desc="Owner, Admins/„Server verwalten“, der Bot selbst und Reds Immunität (<code>[p]immune</code>) "
+             "sind ohnehin immer ausgenommen.")
+
+    # Ein Formular über alle Einstellungs-Reiter – ein Speichern sendet alles.
+    return ui.form(
+        "/cogs/guard",
+        ui.tab("honeypot", "Honeypot", "bi-bug", honeypot + texts + save)
+        + ui.tab("spamschutz", "Spamschutz", "bi-shield-check", spam + save)
+        + ui.tab("eskalation", "Eskalation", "bi-bar-chart-steps", escalation + save)
+        + ui.tab("raid", "Raid & Notmodus", "bi-lock", raid + save)
+        + ui.tab("allgemein", "Allgemein & Ausnahmen", "bi-gear", general + exemptions + save),
+        csrf=csrf, hidden={"form": "settings", "guild": guild.id}, savebar=True,
+    )
 
 
 def _ago(ts: int) -> str:

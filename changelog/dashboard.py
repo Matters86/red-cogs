@@ -1,15 +1,15 @@
 """WebCore-Dashboard für den Changelog-Cog.
 
 Aufgaben (gleiches Muster wie poll/dashboard.py):
-* GET                 -> Übersicht: Einstellungen + Historie-Tabelle
+* GET                 -> Übersicht mit Reitern Einstellungen · Kategorien · Texte · Historie
 * GET ?entry=<id>     -> Detailansicht eines Changelogs (read-only)
 * POST form=settings  -> Einstellungen speichern (Post/Redirect/Get)
 * POST form=action    -> Changelog löschen (optional inkl. Discord-Nachricht)
 
-Es werden nur die Theme-Klassen (card-x, table, stat, mono, btn-accent) plus die
-ohnehin geladenen Bootstrap-Klassen genutzt – kein eigenes Design. Nutzereingaben
-werden mit ``html.escape`` abgesichert. Die Server-Auswahl ist auf die für den
-eingeloggten User sichtbaren Server beschränkt (``visible_guilds``).
+Oberfläche über den UI-Baukasten von WebCore (``request.app["webcore"].ui``) –
+kein eigenes CSS. Nutzereingaben werden mit ``html.escape`` abgesichert. Die
+Server-Auswahl ist auf die für den eingeloggten User sichtbaren Server beschränkt
+(``visible_guilds``).
 """
 
 from __future__ import annotations
@@ -21,50 +21,15 @@ from aiohttp import web
 
 from .strings import LANGUAGES, OVERRIDABLE_KEYS, STRINGS
 
-_FORM_STYLE = """
-<style>
-  .cl-form label{display:block;color:var(--muted);font-size:.8rem;
-    text-transform:uppercase;letter-spacing:.05em;margin:14px 0 5px}
-  .cl-form input,.cl-form select,.cl-form textarea{width:100%;background:var(--panel-2);
-    color:var(--text);border:1px solid var(--border);border-radius:9px;
-    padding:9px 11px;font-family:inherit;font-size:.92rem}
-  .cl-form input[type=color]{padding:4px;height:42px}
-  .cl-form textarea{min-height:110px;resize:vertical;line-height:1.5}
-  .cl-form .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  .cl-check{display:flex;align-items:center;gap:8px;margin-top:12px}
-  .cl-check input{width:auto}
-  .cl-flash{background:rgba(61,220,151,.12);border:1px solid var(--accent);
-    color:var(--text);border-radius:10px;padding:11px 14px;margin-bottom:18px}
-  .cl-title{font-family:"Archivo",sans-serif;font-weight:700;font-size:1.15rem;margin:0 0 14px}
-  .cl-spacer{height:24px}
-  .cl-bar{display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap}
-  .cl-actions{display:flex;gap:6px;flex-wrap:wrap}
-  .cl-actions button,.cl-actions a{font-size:.78rem;padding:5px 9px;border-radius:8px;
-    border:1px solid var(--border);background:var(--panel-2);color:var(--text);
-    text-decoration:none;cursor:pointer}
-  .cl-actions .danger{border-color:var(--danger);color:var(--danger)}
-  .cl-sec{margin:14px 0}
-  .cl-sec h4{margin:0 0 6px;font-size:.95rem}
-  .cl-sec ul{margin:0;padding-left:20px;color:var(--text)}
-  .cl-note{border:1px solid var(--danger);border-radius:9px;padding:10px 12px;margin-top:12px}
-  .cl-hint{color:var(--muted);font-size:.82rem;margin-top:4px}
-</style>
-"""
+# Anzeige-Namen + Hilfetexte für die überschreibbaren Texte.
+_OVERRIDE_LABELS = {
+    "embed_title": ("Embed-Titel", "Platzhalter <code>{title}</code> = Titel aus dem Formular."),
+    "footer": ("Fußzeile", "Platzhalter <code>{author}</code> = Name der postenden Person."),
+}
 
 
 def _esc(value) -> str:
     return html.escape(str(value)) if value is not None else ""
-
-
-def _options(items, selected_ids, *, none_label: str | None = None) -> str:
-    sel = {str(s) for s in (selected_ids or [])}
-    out = []
-    if none_label is not None:
-        out.append(f"<option value=''{'' if sel else ' selected'}>{_esc(none_label)}</option>")
-    for ident, label in items:
-        is_sel = " selected" if str(ident) in sel else ""
-        out.append(f"<option value='{_esc(ident)}'{is_sel}>{_esc(label)}</option>")
-    return "".join(out)
 
 
 def _lines_html(raw: str) -> str:
@@ -73,7 +38,7 @@ def _lines_html(raw: str) -> str:
     lines = [ln for ln in lines if ln]
     if not lines:
         return ""
-    return "<ul>" + "".join(f"<li>{_esc(ln)}</li>" for ln in lines) + "</ul>"
+    return "<ul class='mb-0'>" + "".join(f"<li>{_esc(ln)}</li>" for ln in lines) + "</ul>"
 
 
 def _parse_color(text: str | None) -> int | None:
@@ -106,6 +71,20 @@ def _pick_guild(guilds, request):
     return guilds[0] if guilds else None
 
 
+def _role_items(guild):
+    return [
+        (r.id, r.name, f"#{r.color.value:06x}" if getattr(r, "color", None) and r.color.value else None)
+        for r in sorted(guild.roles, key=lambda r: r.position, reverse=True) if not r.is_default()
+    ]
+
+
+def _jump_url(guild, r: dict):
+    channel = guild.get_channel(r.get("channel_id")) if r.get("channel_id") else None
+    if channel is not None and r.get("message_id"):
+        return channel, f"https://discord.com/channels/{guild.id}/{channel.id}/{r['message_id']}"
+    return channel, None
+
+
 # --------------------------------------------------------------------------- #
 #  Einstieg
 # --------------------------------------------------------------------------- #
@@ -119,181 +98,190 @@ async def dashboard_handler(cog, request):
 #  Rendern (GET)
 # --------------------------------------------------------------------------- #
 async def _render(cog, request):
+    ui = request.app["webcore"].ui
     guilds = await _visible_guilds(cog, request)
     guild = _pick_guild(guilds, request)
     if guild is None:
-        return {"title": "Changelog", "content": "<div class='card-x'>Keine Server verfügbar.</div>"}
+        return {"title": "Changelog", "content": ui.card(body=ui.empty("bi-hdd-network", "Keine Server verfügbar."))}
 
     conf = await cog.config.guild(guild).all()
     csrf = request.get("webcore_csrf", "")
     entries = conf.get("entries") or {}
 
-    flash = ""
-    if request.query.get("ok"):
-        flash = f"<div class='cl-flash'>{_esc(request.query.get('ok'))}</div>"
-
-    guild_opts = _options([(g.id, g.name) for g in guilds], [guild.id])
-    bar = (
-        "<div class='cl-bar'>"
-        "<form method='get' action='/cogs/changelog' class='cl-form' style='margin:0'>"
-        f"<select name='guild' onchange='this.form.submit()'>{guild_opts}</select>"
-        "</form>"
-        f"<span class='mono' style='color:var(--muted)'>{_esc(guild.name)}</span>"
-        "</div>"
-    )
-    # Globaler Server-Wechsler von WebCore aktiv -> eigenes Dropdown ausblenden.
+    # Eigene Server-Auswahl nur ohne globalen Server-Wechsler von WebCore.
+    bar = ui.card(body=ui.form(
+        "/cogs/changelog",
+        ui.field("Server", ui.select("guild", [(g.id, g.name) for g in guilds], guild.id, autosubmit=True)),
+        csrf="", method="get",
+    ))
     if request.get("wc_switcher"):
         bar = ""
 
     # Detailansicht eines Changelogs?
     sel = request.query.get("entry")
     if sel and sel in entries:
-        return {"title": "Changelog", "content": _FORM_STYLE + bar + _render_detail(guild, entries[sel])}
+        return {"title": "Changelog · Eintrag", "content": bar + _render_detail(ui, guild, entries[sel])}
 
-    settings = _render_settings(cog, guild, conf, csrf)
-    history = _render_history(guild, entries, csrf)
-    return {
-        "title": "Changelog",
-        "content": _FORM_STYLE + bar + flash + settings + "<div class='cl-spacer'></div>" + history,
-    }
+    channel = guild.get_channel(conf.get("channel_id")) if conf.get("channel_id") else None
+    last_ts = max((r.get("created_ts", 0) for r in entries.values()), default=0)
+    n_roles = len(conf.get("poster_roles") or [])
+    head = ui.hero(
+        "bi-megaphone", "",
+        "Berechtigte Mitglieder posten Update-Notizen mit <code>/changelog</code> als einheitliches Embed. "
+        "Hier legst du Ziel-Kanal, Rechte, Aussehen und Kategorien fest und siehst alle bisherigen Einträge.",
+    ) + ui.stats([
+        ("Changelogs", len(entries), "bi-journal-text", None, None),
+        ("Ziel-Kanal", "Ja" if channel else "Nein", "bi-hash",
+         f"#{channel.name}" if channel else "nicht festgelegt", "ok" if channel else "warn"),
+        ("Poster-Rollen", n_roles, "bi-person-check", None if n_roles else "nur Admins/Verwalter", None),
+        # Kurzer Wert (Tag.Monat.), Rest als Hinweis – lange Werte werden in der Kachel abgeschnitten.
+        ("Letzter Eintrag", _fmt_ts(last_ts)[:6] if last_ts else "—", "bi-clock-history",
+         f"{_fmt_ts(last_ts)[6:10]} · {_fmt_ts(last_ts)[11:]} Uhr (UTC)" if last_ts else None, None),
+    ])
 
-
-def _render_settings(cog, guild, conf, csrf) -> str:
-    channel_opts = _options(
-        [(c.id, f"#{c.name}") for c in guild.text_channels],
-        [conf.get("channel_id")],
-        none_label="— kein Kanal —",
+    body = (
+        _render_settings(ui, cog, guild, conf, channel, csrf)
+        + ui.tab("historie", "Historie", "bi-clock-history", _render_history(ui, guild, entries, csrf),
+                 count=len(entries))
     )
-    role_items = [(r.id, r.name) for r in guild.roles if not r.is_default()]
-    poster_opts = _options(role_items, conf.get("poster_roles") or [])
-    ping_opts = _options(role_items, [conf.get("ping_role_id")], none_label="— keine —")
-    lang_opts = _options(list(LANGUAGES.items()), [conf.get("language", "de")])
-    ping_checked = "checked" if conf.get("ping_enabled") else ""
+    return {"title": "Changelog", "content": bar + head + body}
+
+
+def _render_settings(ui, cog, guild, conf, channel, csrf) -> str:
+    text_items = [(c.id, f"#{c.name}") for c in guild.text_channels]
+    role_items = _role_items(guild)
     color_hex = f"#{int(conf.get('color', 0x3DDC97)):06X}"
+
+    setup = ""
+    if channel is None:
+        setup = ui.callout("Es ist noch <b>kein Ziel-Kanal</b> festgelegt – <code>/changelog</code> kann erst posten, "
+                           "wenn einer ausgewählt ist.", tone="warn")
+
+    post = ui.card("Kanal & Rechte", ui.grid(
+        ui.field("Ziel-Kanal", ui.select("channel", text_items, conf.get("channel_id"), none_label="— kein Kanal —"),
+                 help="Hier erscheinen alle Changelogs."),
+        ui.field("Poster-Rollen", ui.select("poster_roles", role_items, conf.get("poster_roles") or [], multiple=True,
+                                            placeholder="Rollen suchen …"),
+                 help="Diese Rollen dürfen <code>/changelog</code> nutzen (Admins und Server-Verwalter dürfen immer)."),
+    ), icon="bi-send", desc="Wohin gepostet wird und wer posten darf.")
+
+    ping = ui.card("Benachrichtigung", ui.grid(
+        ui.field("Ping-Rolle", ui.select("ping_role", [(i, n) for i, n, _c in role_items], conf.get("ping_role_id"),
+                                         none_label="— keine —"),
+                 help="Z. B. eine @Updates-Rolle, die Mitglieder selbst abonnieren."),
+        ui.field("Ping", ui.switch("ping_enabled", "Ping-Rolle vor dem Embed anpingen", conf.get("ping_enabled"),
+                                   desc="Die Rolle wird in der Nachricht über dem Embed erwähnt.")),
+    ), icon="bi-bell")
+
+    look = ui.card("Aussehen", ui.grid(
+        ui.field("Sprache", ui.select("language", list(LANGUAGES.items()), conf.get("language", "de")),
+                 help="Sprache der Embed-Überschriften und des Eingabe-Formulars."),
+        ui.field("Embed-Farbe", ui.text_input("color", color_hex, type="color",
+                                              attrs={"style": "height:42px;padding:4px 6px;cursor:pointer"}),
+                 help="Farbstreifen am linken Rand des Embeds."),
+    ), icon="bi-palette")
 
     cats = cog._categories(conf)
     cats_text = "\n".join(f"{c.get('emoji', '')}|{c.get('label', '')}" for c in cats)
+    categories = ui.card("Kategorien", ui.field(
+        "Kategorien (eine pro Zeile)",
+        ui.textarea("categories", cats_text, rows=8, mono=True, placeholder="🚗|Fahrzeuge\n🌾|Landwirtschaft"),
+        help="Format: <code>Emoji|Bezeichnung</code>, max. 25. Die postende Person wählt beim Befehl "
+             "<code>/changelog</code> eine Kategorie – ihr Emoji steht dann vor dem „Neu“-Bereich.",
+    ), icon="bi-tags")
 
     overrides = conf.get("messages") or {}
-    override_fields = ""
+    override_fields = []
     for key in OVERRIDABLE_KEYS:
-        current = overrides.get(key, "")
-        default = STRINGS["de"].get(key, "")
-        override_fields += (
-            f"<label>{_esc(key)}</label>"
-            f"<input name='ovr_{key}' value='{_esc(current)}' placeholder='{_esc(default)}'>"
-        )
+        label, hint = _OVERRIDE_LABELS.get(key, (key, None))
+        override_fields.append(ui.field(
+            label, ui.text_input(f"ovr_{key}", overrides.get(key, ""), placeholder=STRINGS["de"].get(key, "")),
+            help=hint,
+        ))
+    texts = ui.card("Eigene Texte", ui.grid(*override_fields), icon="bi-chat-left-text",
+                    desc="Leer lassen = Standardtext der gewählten Sprache (als grauer Platzhalter sichtbar). "
+                         "Platzhalter in geschweiften Klammern beibehalten.")
 
-    return (
-        "<div class='card-x'><div class='cl-title'>Einstellungen</div>"
-        "<form class='cl-form' method='post' action='/cogs/changelog'>"
-        f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-        "<input type='hidden' name='form' value='settings'>"
-        f"<input type='hidden' name='guild' value='{guild.id}'>"
-        "<div class='row2'>"
-        f"<div><label>Ziel-Kanal</label><select name='channel'>{channel_opts}</select></div>"
-        f"<div><label>Sprache</label><select name='language'>{lang_opts}</select></div>"
-        "</div>"
-        "<div class='row2'>"
-        f"<div><label>Poster-Rollen (Mehrfachauswahl)</label>"
-        f"<select name='poster_roles' multiple size='5'>{poster_opts}</select></div>"
-        f"<div><label>Ping-Rolle</label><select name='ping_role'>{ping_opts}</select>"
-        f"<div class='cl-check'><input type='checkbox' name='ping_enabled' {ping_checked}>"
-        "<span>Ping-Rolle vor dem Embed anpingen</span></div></div>"
-        "</div>"
-        "<div class='row2'>"
-        f"<div><label>Embed-Farbe</label><input type='color' name='color' value='{_esc(color_hex)}'></div>"
-        "<div></div>"
-        "</div>"
-        "<label>Kategorien (eine pro Zeile, Format: Emoji|Bezeichnung)</label>"
-        f"<textarea name='categories' placeholder='🚗|Fahrzeuge&#10;🌾|Landwirtschaft'>{_esc(cats_text)}</textarea>"
-        "<div class='cl-hint'>Die postende Person wählt beim Befehl <span class='mono'>/changelog</span> eine dieser Kategorien als Emoji für den „Neu\"-Bereich.</div>"
-        "<div class='cl-spacer'></div>"
-        "<div class='cl-title' style='font-size:1rem'>Texte überschreiben</div>"
-        f"{override_fields}"
-        "<div class='cl-hint'>Platzhalter beibehalten: <span class='mono'>{title}</span> im Titel, <span class='mono'>{author}</span> in der Fußzeile.</div>"
-        "<div class='cl-spacer'></div>"
-        "<button class='btn-accent' type='submit'>Speichern</button>"
-        "</form></div>"
+    save = ui.save_row("Einstellungen speichern")
+    # Ein Formular über drei Reiter – jedes Speichern sendet alle Einstellungen.
+    return ui.form(
+        "/cogs/changelog",
+        ui.tab("einstellungen", "Einstellungen", "bi-sliders", setup + post + ping + look + save)
+        + ui.tab("kategorien", "Kategorien", "bi-tags", categories + save, count=len(cats))
+        + ui.tab("texte", "Texte", "bi-chat-left-text", texts + save),
+        csrf=csrf, hidden={"form": "settings", "guild": guild.id}, savebar=True,
     )
 
 
-def _render_history(guild, entries, csrf) -> str:
+def _render_history(ui, guild, entries, csrf) -> str:
     if not entries:
-        return "<div class='card-x'>Für diesen Server sind noch keine Changelogs gespeichert.</div>"
-    rows = ""
+        return ui.card(body=ui.empty(
+            "bi-journal-text", "Für diesen Server sind noch keine Changelogs gespeichert.",
+            "Sobald jemand <code>/changelog</code> nutzt, erscheint der Eintrag hier."))
+    rows = []
     for r in sorted(entries.values(), key=lambda x: x.get("created_ts", 0), reverse=True):
-        eid = _esc(r.get("id"))
-        ts = r.get("created_ts", 0)
+        eid = r.get("id")
         # Discord-Zeitstempel rendern im Web nicht – daher lesbares Datum bauen.
-        when_txt = _fmt_ts(ts)
-        channel = guild.get_channel(r.get("channel_id")) if r.get("channel_id") else None
+        when_txt = _fmt_ts(r.get("created_ts", 0))
+        channel, url = _jump_url(guild, r)
         ch_name = f"#{channel.name}" if channel is not None else "—"
-        cat = f"{_esc(r.get('category_emoji', ''))}"
-        detail_link = f"<a href='/cogs/changelog?guild={guild.id}&entry={eid}'>Ansehen</a>"
-        jump = ""
-        if channel is not None and r.get("message_id"):
-            url = f"https://discord.com/channels/{guild.id}/{channel.id}/{r['message_id']}"
-            jump = f"<a href='{url}' target='_blank' rel='noopener'>Zur Nachricht</a>"
-        delete_form = (
-            "<form method='post' action='/cogs/changelog' style='display:inline' "
-            f"onsubmit=\"return confirm('Changelog {eid} wirklich löschen?')\">"
-            f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-            "<input type='hidden' name='form' value='action'>"
-            f"<input type='hidden' name='guild' value='{guild.id}'>"
-            f"<input type='hidden' name='entry_id' value='{eid}'>"
-            "<button class='danger' name='action' value='delete'>Löschen</button>"
-            "</form>"
+        detail_link = f"/cogs/changelog?guild={guild.id}&entry={_esc(eid)}"
+        view = ui.button("", icon="bi-eye", kind="ghost", small=True, href=detail_link, attrs={"title": "Ansehen"})
+        jump = ui.button("", icon="bi-discord", kind="ghost", small=True, href=url,
+                         attrs={"title": "Zur Nachricht", "target": "_blank", "rel": "noopener"}) if url else ""
+        delete = ui.form(
+            "/cogs/changelog",
+            ui.button("", icon="bi-trash", kind="danger", small=True, name="action", value="delete",
+                      confirm=f"Changelog {eid} wirklich löschen? Die Nachricht in Discord wird ebenfalls entfernt.",
+                      attrs={"title": "Löschen"}),
+            csrf=csrf, hidden={"form": "action", "guild": guild.id, "entry_id": eid},
         )
-        rows += (
-            f"<tr><td class='mono'>{eid}</td><td>{_esc(when_txt)}</td><td>{cat}</td>"
-            f"<td>{_esc((r.get('title') or '')[:70])}</td><td>{_esc(ch_name)}</td>"
-            f"<td>{_esc(r.get('author_name', '?'))}</td>"
-            f"<td><div class='cl-actions'>{detail_link}{jump}{delete_form}</div></td></tr>"
-        )
-    return (
-        "<div class='card-x'><div class='cl-title'>Historie</div>"
-        "<table class='table'><thead><tr><th>ID</th><th>Datum</th><th>Kat.</th>"
-        "<th>Titel</th><th>Kanal</th><th>Autor</th><th>Aktionen</th></tr></thead>"
-        f"<tbody>{rows}</tbody></table></div>"
+        rows.append(ui.row(
+            f"<div class='wc-cell-title'>{_esc(r.get('category_emoji', ''))} "
+            f"<a href='{detail_link}'>{_esc((r.get('title') or '(ohne Titel)')[:70])}</a></div>"
+            f"<div class='wc-cell-sub'><span class='mono'>{_esc(eid)}</span> · {_esc(r.get('author_name', '?'))}"
+            f" · {_esc(ch_name)}</div>",
+            f"<span class='mono'>{_esc(when_txt)}</span>",
+            f"><div class='wc-row-actions'>{view}{jump}{delete}</div>",
+        ))
+    return ui.card(
+        "Historie",
+        ui.table(["Changelog", "Datum (UTC)", ">"], rows, search=True,
+                 search_placeholder="Nach Titel, ID, Autor oder Kanal suchen …", id="cl-history"),
+        icon="bi-clock-history",
+        desc="Alle gespeicherten Changelogs, neueste zuerst. Löschen entfernt auch die Discord-Nachricht.",
     )
 
 
-def _render_detail(guild, r: dict) -> str:
-    channel = guild.get_channel(r.get("channel_id")) if r.get("channel_id") else None
+def _render_detail(ui, guild, r: dict) -> str:
+    channel, url = _jump_url(guild, r)
     ch_name = f"#{channel.name}" if channel is not None else "—"
-    meta = f"{_esc(_fmt_ts(r.get('created_ts', 0)))} · {ch_name} · {_esc(r.get('author_name', '?'))}"
+    actions = [ui.button("Zurück zur Historie", icon="bi-arrow-left", kind="ghost",
+                         href=f"/cogs/changelog?guild={guild.id}#historie")]
+    if url:
+        actions.append(ui.button("Zur Nachricht", icon="bi-discord", kind="ghost", href=url,
+                                 attrs={"target": "_blank", "rel": "noopener"}))
+    head = f"<div class='wc-toolbar'>{''.join(actions)}</div>" + ui.hero(
+        "bi-megaphone", r.get("title", "(ohne Titel)"),
+        f"{_esc(_fmt_ts(r.get('created_ts', 0)))} UTC · {_esc(ch_name)} · {_esc(r.get('author_name', '?'))} · "
+        f"<span class='mono'>{_esc(r.get('id'))}</span>",
+    )
 
-    sections = ""
+    sections = []
     new_html = _lines_html(r.get("neu", ""))
     if new_html:
-        sections += f"<div class='cl-sec'><h4>{_esc(r.get('category_emoji', ''))} Neu</h4>{new_html}</div>"
+        sections.append(f"<div class='wc-sub'>{_esc(r.get('category_emoji', ''))} Neu</div>{new_html}")
     changed_html = _lines_html(r.get("geaendert", ""))
     if changed_html:
-        sections += f"<div class='cl-sec'><h4>🔧 Geändert</h4>{changed_html}</div>"
+        sections.append(f"<div class='wc-sub'>🔧 Geändert</div>{changed_html}")
     fixes_html = _lines_html(r.get("fixes", ""))
     if fixes_html:
-        sections += f"<div class='cl-sec'><h4>🐛 Fixes</h4>{fixes_html}</div>"
+        sections.append(f"<div class='wc-sub'>🐛 Fixes</div>{fixes_html}")
+    body = "".join(sections) or ui.empty("bi-journal", "Kein Inhalt.")
     note = (r.get("hinweis") or "").strip()
     if note:
-        sections += f"<div class='cl-note'>⚠️ <strong>{_esc(note)}</strong></div>"
-
-    jump = ""
-    if channel is not None and r.get("message_id"):
-        url = f"https://discord.com/channels/{guild.id}/{channel.id}/{r['message_id']}"
-        jump = f" · <a href='{url}' target='_blank' rel='noopener' style='color:var(--accent)'>Zur Nachricht</a>"
-    back = f"<a href='/cogs/changelog?guild={guild.id}' style='color:var(--accent)'>&larr; Zurück</a>"
-
-    # Kein Backslash in f-String-Ausdrücken (bricht auf Python 3.11) -> Fallback separat.
-    empty_html = "<div style='color:var(--muted)'>Kein Inhalt.</div>"
-    return (
-        "<div class='card-x'>"
-        f"<div class='cl-title'>🆕 {_esc(r.get('title', '(ohne Titel)'))} "
-        f"<span class='mono' style='color:var(--muted);font-size:.8rem'>{_esc(r.get('id'))}</span></div>"
-        f"<div style='color:var(--muted);margin-bottom:14px'>{meta}{jump}</div>"
-        f"{sections or empty_html}"
-        f"<div class='cl-spacer'></div>{back}</div>"
-    )
+        body += "<div class='wc-divider'></div>" + ui.callout(f"<b>{_esc(note)}</b>", tone="warn")
+    return head + ui.card("Inhalt", body, icon="bi-journal-text")
 
 
 def _fmt_ts(ts) -> str:

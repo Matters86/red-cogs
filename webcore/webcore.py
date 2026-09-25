@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 import discord
 
 from . import access as acl
+from . import ui as _ui
 from .admin_pages import render_access, render_audit
 
 try:
@@ -41,7 +42,7 @@ DISCORD_TOKEN = f"{DISCORD_API}/oauth2/token"
 # das verschlüsselte Cookie unbegrenzt – ein einmal abgegriffenes Cookie für immer.
 SESSION_MAX_AGE = 7 * 86400
 # Cache-Buster für /static/webcore.css (bei Theme-Änderungen erhöhen).
-ASSET_VERSION = "2"
+ASSET_VERSION = "5"
 # Rollen mit diesen Rechten darf nur vergeben (per Autorole/Ticket-Inhaberrolle …),
 # wer Owner/Allowlist oder Discord-Administrator ist – sonst könnte sich ein
 # Team-Mitglied mit Dashboard-Rechten selbst hochstufen.
@@ -83,6 +84,34 @@ class DashboardPage:
         self.icon = icon
 
 
+@web.middleware
+async def _security_headers(request, handler):
+    """Sicherheits-Header für jede Antwort (wichtig, sobald das Dashboard öffentlich erreichbar ist).
+
+    HSTS setzt bewusst der Reverse-Proxy (z. B. Synology), weil es für den ganzen Hostnamen gilt.
+    """
+    try:
+        resp = await handler(request)
+    except web.HTTPException as exc:
+        _apply_security_headers(exc)
+        raise
+    _apply_security_headers(resp)
+    return resp
+
+
+def _apply_security_headers(resp) -> None:
+    h = resp.headers
+    h.setdefault("X-Frame-Options", "DENY")
+    h.setdefault("X-Content-Type-Options", "nosniff")
+    h.setdefault("Referrer-Policy", "same-origin")
+    h.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+    h.setdefault("Content-Security-Policy", "frame-ancestors 'none'; base-uri 'self'; object-src 'none'")
+    ctype = h.get("Content-Type", "")
+    if ctype.startswith("text/html"):
+        # Seiten mit Sitzungsdaten nicht in fremden/geteilten Caches ablegen.
+        h.setdefault("Cache-Control", "no-store")
+
+
 class WebCore(commands.Cog):
     """Zentrales Web-Dashboard für eigene Cogs.
 
@@ -109,6 +138,8 @@ class WebCore(commands.Cog):
             audit=[],
         )
         self.pages: dict[str, DashboardPage] = {}
+        # UI-Baukasten für Cog-Seiten: ``request.app["webcore"].ui`` (siehe ui.py)
+        self.ui = _ui
         self.app: web.Application | None = None
         self.runner: web.AppRunner | None = None
         self.site: web.TCPSite | None = None
@@ -186,6 +217,10 @@ class WebCore(commands.Cog):
             }
         )
 
+    async def handle_health(self, request):
+        """Einfacher Gesundheitscheck (z. B. für Docker/Uptime-Monitor), ohne Login und ohne Daten."""
+        return web.Response(text="ok", headers={"Cache-Control": "no-store"})
+
     async def _start_webserver(self):
         data = await self.config.all()
 
@@ -195,8 +230,11 @@ class WebCore(commands.Cog):
             await self.config.secret_key.set(secret_key)
         fernet_key = hashlib.sha256(secret_key.encode()).digest()  # 32 Bytes
 
-        app = web.Application()
+        app = web.Application(middlewares=[_security_headers])
         storage_kwargs = {"cookie_name": "WEBCORE_SESSION", "max_age": SESSION_MAX_AGE, "httponly": True}
+        # Öffentlich per HTTPS erreichbar (redirect_uri https://…) → Cookie nur noch über HTTPS senden.
+        if str(data.get("redirect_uri") or "").lower().startswith("https://"):
+            storage_kwargs["secure"] = True
         # samesite erst ab neueren aiohttp_session-Versionen – nur setzen, wenn unterstützt.
         if "samesite" in inspect.signature(EncryptedCookieStorage.__init__).parameters:
             storage_kwargs["samesite"] = "Lax"
@@ -222,6 +260,7 @@ class WebCore(commands.Cog):
                 web.post("/access", self.handle_access),
                 web.get("/audit", self.handle_audit),
                 web.get("/api/overview", self.handle_overview_api),
+                web.get("/healthz", self.handle_health),
                 web.static("/static", str(Path(__file__).parent / "static")),
             ]
         )
@@ -1025,7 +1064,16 @@ class WebCore(commands.Cog):
             await ctx.message.delete()
         except Exception:
             pass
-        await ctx.send("OAuth2-Daten gespeichert. Übernehmen mit `[p]reload webcore`.")
+        msg = "OAuth2-Daten gespeichert. Übernehmen mit `[p]reload webcore`."
+        low = redirect_uri.lower()
+        if not low.endswith("/callback"):
+            msg += "\n⚠️ Die redirect_uri muss auf `/callback` enden."
+        if low.startswith("http://") and not any(x in low for x in ("localhost", "127.0.0.1", "192.168.", "10.", "172.")):
+            msg += ("\n⚠️ Öffentliche Adresse ohne HTTPS: Sitzungscookies würden unverschlüsselt übertragen. "
+                    "Nutze einen Reverse-Proxy mit Zertifikat und eine `https://`-Adresse.")
+        elif low.startswith("https://"):
+            msg += "\nHTTPS erkannt: Das Sitzungscookie wird nach dem Reload nur noch über HTTPS gesendet."
+        await ctx.send(msg)
 
     @webcore.command(name="port")
     async def webcore_port(self, ctx: commands.Context, port: int):

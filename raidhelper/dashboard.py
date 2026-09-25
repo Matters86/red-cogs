@@ -1,14 +1,15 @@
 """WebCore-Dashboard für den RaidHelper-Cog.
 
 Aufgaben (gleiches Muster wie tickets/dashboard.py):
-* GET                     -> Übersicht: Statistik, Einstellungen, Event-Tabelle
+* GET                     -> Seite mit Reitern: Events · Einstellungen · Texte · Spec-Icons
 * GET ?event=<id>         -> Roster eines Events (read-only)
 * POST form=settings      -> Einstellungen speichern  (Post/Redirect/Get)
 * POST form=action        -> Event schließen/öffnen/löschen
+* POST form=icons         -> Spec-Icons hochladen/entfernen (nur Bot-Owner)
 
-Es werden nur die Theme-Klassen (card-x, table, stat, …) plus die ohnehin
-geladenen Bootstrap-Formularklassen genutzt – kein eigenes Design. Datums-
-angaben werden in der Server-Zeitzone gerendert (kein Discord-``<t:>`` im Web).
+Aufbau mit dem UI-Baukasten von WebCore (``request.app["webcore"].ui``) – kein
+eigenes CSS. Datumsangaben werden in der Server-Zeitzone gerendert (kein
+Discord-``<t:>`` im Web).
 """
 
 from __future__ import annotations
@@ -38,50 +39,26 @@ def _emoji_img(emoji_str) -> str | None:
     ext = "gif" if m.group(1) == "a" else "png"
     return f"https://cdn.discordapp.com/emojis/{m.group(3)}.{ext}"
 
+
 _STATUS_LABEL_DE = {
     "bench": "Bank", "late": "Spät", "tentative": "Vielleicht", "absence": "Abwesend",
 }
+_STATUS_ICON = {
+    "bench": "bi-hourglass-split", "late": "bi-clock-history", "tentative": "bi-question-circle",
+    "absence": "bi-x-circle",
+}
 
-_FORM_STYLE = """
-<style>
-  .rh-form label{display:block;color:var(--muted);font-size:.8rem;
-    text-transform:uppercase;letter-spacing:.05em;margin:14px 0 5px}
-  .rh-form input,.rh-form select{width:100%;background:var(--panel-2);
-    color:var(--text);border:1px solid var(--border);border-radius:9px;
-    padding:9px 11px;font-family:inherit;font-size:.92rem}
-  .rh-form .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  .rh-check{display:flex;align-items:center;gap:8px;margin-top:12px}
-  .rh-check input{width:auto}
-  .rh-flash{background:rgba(61,220,151,.12);border:1px solid var(--accent);
-    color:var(--text);border-radius:10px;padding:11px 14px;margin-bottom:18px}
-  .rh-title{font-family:"Archivo",sans-serif;font-weight:700;font-size:1.15rem;margin:0 0 14px}
-  .rh-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px}
-  .rh-actions{display:flex;gap:6px;flex-wrap:wrap}
-  .rh-actions button,.rh-actions a{font-size:.78rem;padding:5px 9px;border-radius:8px;
-    border:1px solid var(--border);background:var(--panel-2);color:var(--text);
-    text-decoration:none;cursor:pointer}
-  .rh-actions .danger{border-color:var(--danger);color:var(--danger)}
-  .rh-roster{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:16px}
-  .rh-roster ol{margin:6px 0 0;padding-left:20px}
-  .rh-spacer{height:24px}
-  .rh-bar{display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap}
-</style>
-"""
+# Beschriftung + Hilfe der überschreibbaren Texte (Schlüssel aus strings.OVERRIDABLE_KEYS)
+_OVERRIDE_LABELS = {
+    "embed_no_signups": ("Leeres Roster", "Steht im Event, solange sich noch niemand angemeldet hat."),
+    "reminder": ("Erinnerung im Kanal",
+                 "Platzhalter: <code>{title}</code> (Event), <code>{rel}</code> (z. B. „in 15 Minuten“), "
+                 "<code>{signups}</code> (Anzahl Anmeldungen)."),
+}
 
 
 def _esc(value) -> str:
     return html.escape(str(value)) if value is not None else ""
-
-
-def _options(items, selected_ids, *, none_label: str | None = None) -> str:
-    sel = {str(s) for s in (selected_ids or [])}
-    out = []
-    if none_label is not None:
-        out.append(f"<option value=''{'' if sel else ' selected'}>{_esc(none_label)}</option>")
-    for ident, label in items:
-        is_sel = " selected" if str(ident) in sel else ""
-        out.append(f"<option value='{_esc(ident)}'{is_sel}>{_esc(label)}</option>")
-    return "".join(out)
 
 
 def _one_id(value):
@@ -126,274 +103,284 @@ def _selected_guild(guilds, request):
     return guilds[0] if guilds else None
 
 
+def _guild_bar(ui, guilds, guild, request) -> str:
+    """Cog-eigene Server-Auswahl – nur ohne globalen WebCore-Server-Wechsler."""
+    if request.get("wc_switcher"):
+        return ""
+    return ui.form(
+        "/cogs/raidhelper",
+        ui.field("Server", ui.select("guild", [(g.id, g.name) for g in guilds], guild.id, autosubmit=True)),
+        csrf="", method="get",
+    )
+
+
 # --------------------------------------------------------------------------- #
 #  Rendern (GET)
 # --------------------------------------------------------------------------- #
 async def _render(cog, request):
+    ui = request.app["webcore"].ui
     guilds = await _visible_guilds(cog, request)
     guild = _selected_guild(guilds, request)
     if guild is None:
-        return {"title": "Raidplaner", "content": "<div class='card-x'>Der Bot ist auf keinem Server.</div>"}
+        return {"title": "Raidplaner",
+                "content": ui.card(body=ui.empty("bi-hdd-network", "Der Bot ist auf keinem Server."))}
 
     conf = await cog.config.guild(guild).all()
     csrf = request.get("webcore_csrf", "")
     tz_name = conf.get("timezone", "Europe/Berlin")
     events = conf.get("events") or {}
-
-    flash = ""
-    if request.query.get("ok"):
-        flash = f"<div class='rh-flash'>{_esc(request.query.get('ok'))}</div>"
-
-    # Server-Auswahl
-    guild_opts = _options([(g.id, g.name) for g in guilds], [guild.id])
-    bar = f"""
-    <div class='rh-bar'>
-      <form method='get' action='/cogs/raidhelper' class='rh-form' style='margin:0'>
-        <select name='guild' onchange='this.form.submit()'>{guild_opts}</select>
-      </form>
-      <span class='mono' style='color:var(--muted)'>{_esc(guild.name)}</span>
-    </div>
-    """
-    # Globaler Server-Wechsler von WebCore aktiv -> eigenes Dropdown ausblenden.
-    if request.get("wc_switcher"):
-        bar = ""
+    bar = _guild_bar(ui, guilds, guild, request)
 
     # Roster-Detailansicht?
     sel_event = request.query.get("event")
     if sel_event and sel_event in events:
-        return {"title": "Raidplaner", "content": _FORM_STYLE + bar + _render_roster(events[sel_event], guild.id)}
+        return {"title": "Raidplaner · Roster",
+                "content": bar + _render_roster(ui, events[sel_event], guild.id, tz_name)}
 
-    # Statistik-Kacheln
     now = int(datetime.now(tz=timezone.utc).timestamp())
     upcoming = sum(1 for e in events.values() if (e.get("start_ts") or 0) >= now)
     total_signups = sum(signup_counts(e)[0] for e in events.values())
-    stats = f"""
-    <div class='rh-grid'>
-      <div class='stat'><div class='stat-label'>Kommende Events</div><div>{upcoming}</div></div>
-      <div class='stat'><div class='stat-label'>Anmeldungen gesamt</div><div>{total_signups}</div></div>
-      <div class='stat'><div class='stat-label'>Standard-Spiel</div><div>{_esc(games.game_label(conf.get('default_game')))}</div></div>
-    </div>
-    <div class='rh-spacer'></div>
-    """
 
-    # Einstellungs-Formular
-    lang_opts = _options(list(LANGUAGES.items()), [conf.get("language", "de")])
-    game_opts = _options(games.list_games(), [conf.get("default_game")])
-    channel_opts = _options([(c.id, f"#{c.name}") for c in guild.text_channels],
-                            [conf.get("signup_channel")], none_label="— kein Kanal —")
-    overrides = conf.get("messages") or {}
-    override_fields = ""
-    for key in OVERRIDABLE_KEYS:
-        current = overrides.get(key, "")
-        default = STRINGS["de"].get(key, "")
-        override_fields += (
-            f"<label>{_esc(key)}</label>"
-            f"<input name='ovr_{key}' value='{_esc(current)}' placeholder='{_esc(default)}'>"
-        )
-    rem_checked = "checked" if conf.get("reminders") else ""
-    ping_checked = "checked" if conf.get("ping_signed_up") else ""
+    head = ui.hero(
+        "bi-calendar-event", "",
+        "Events legst du in Discord mit <code>[p]raid create</code> an – Mitglieder melden sich dort per "
+        "Button mit Klasse und Spezialisierung an. Hier siehst du alle Events samt Roster und stellst "
+        "Sprache, Kanal, Zeitzone und Erinnerungen ein.",
+    ) + ui.stats([
+        ("Kommende Events", upcoming, "bi-calendar-event", None, "ok" if upcoming else None),
+        ("Events gesamt", len(events), "bi-collection", f"Standard-Spiel: {games.game_label(conf.get('default_game'))}", None),
+        ("Anmeldungen", total_signups, "bi-person-check", "über alle Events", None),
+        ("Erinnerungen", "an" if conf.get("reminders") else "aus", "bi-bell",
+         "60 & 15 Min. vor Start", "ok" if conf.get("reminders") else None),
+    ])
 
-    settings = f"""
-    <div class='card-x'>
-      <div class='rh-title'>Einstellungen</div>
-      <form class='rh-form' method='post' action='/cogs/raidhelper'>
-        <input type='hidden' name='csrf_token' value='{csrf}'>
-        <input type='hidden' name='form' value='settings'>
-        <input type='hidden' name='guild' value='{guild.id}'>
-        <div class='row2'>
-          <div><label>Sprache</label><select name='language'>{lang_opts}</select></div>
-          <div><label>Standard-Spiel</label><select name='default_game'>{game_opts}</select></div>
-        </div>
-        <div class='row2'>
-          <div><label>Anmelde-Kanal</label><select name='signup_channel'>{channel_opts}</select></div>
-          <div><label>Zeitzone</label><input name='timezone' value='{_esc(tz_name)}'></div>
-        </div>
-        <div class='rh-check'><input type='checkbox' name='reminders' {rem_checked}><span>Erinnerungen senden (60 & 15 Min vorher)</span></div>
-        <div class='rh-check'><input type='checkbox' name='ping_signed_up' {ping_checked}><span>Angemeldete zusätzlich per DM erinnern</span></div>
-        <div class='rh-spacer'></div>
-        <div class='rh-title' style='font-size:1rem'>Texte überschreiben</div>
-        {override_fields}
-        <div class='rh-spacer'></div>
-        <button class='btn-accent' type='submit'>Speichern</button>
-      </form>
-    </div>
-    <div class='rh-spacer'></div>
-    """
-
-    # Event-Tabelle
-    table = _render_events_table(events, guild.id, tz_name, csrf)
-
-    # Spec-Icons
-    spec_emojis = await cog._spec_emojis()
-    supported = cog._supports_app_emojis()
-    structure = cog._known_spec_structure()
     # Spec-Icons sind Application Emojis und gelten botweit -> nur Owner/Allowlist.
     webcore = request.app.get("webcore")
     full = await webcore.has_full_scope(request) if webcore is not None else True
+    spec_emojis = await cog._spec_emojis()
     if full:
-        icons_card = _render_icons(csrf, guild.id, spec_emojis, supported, structure)
+        icons = _render_icons(ui, csrf, guild.id, spec_emojis, cog._supports_app_emojis(),
+                              cog._known_spec_structure())
     else:
-        icons_card = (
-            "<div class='card-x'><div style='color:var(--muted)'>Spec-Icons gelten botweit und können nur "
-            "vom Bot-Owner verwaltet werden.</div></div>"
+        icons = ui.card(body=ui.empty(
+            "bi-lock", "Nur für den Bot-Owner",
+            "Spec-Icons gelten botweit (für alle Server) und können nur vom Bot-Owner verwaltet werden."))
+
+    body = (
+        ui.tab("events", "Events", "bi-calendar-event",
+               _render_events(ui, conf, events, guild, tz_name, csrf, now), count=len(events))
+        + _render_settings(ui, guild, conf, tz_name, csrf)
+        + ui.tab("icons", "Spec-Icons", "bi-person-badge", icons, count=len(spec_emojis) if full else None)
+    )
+    return {"title": "Raidplaner", "content": bar + head + body}
+
+
+def _render_settings(ui, guild, conf, tz_name, csrf) -> str:
+    text_items = [(c.id, f"#{c.name}") for c in guild.text_channels]
+
+    general = ui.card("Allgemein", ui.grid(
+        ui.field("Sprache", ui.select("language", list(LANGUAGES.items()), conf.get("language", "de")),
+                 help="Sprache der Event-Nachrichten, Buttons und Erinnerungen."),
+        ui.field("Standard-Spiel", ui.select("default_game", games.list_games(), conf.get("default_game")),
+                 help="Wird bei <code>[p]raid create</code> verwendet (Klassen, Specs und Rollen)."),
+        ui.field("Anmelde-Kanal", ui.select("signup_channel", text_items, conf.get("signup_channel"),
+                                            none_label="— kein Kanal —"),
+                 help="Standard-Kanal, in dem neue Events gepostet werden."),
+        ui.field("Zeitzone", ui.text_input("timezone", tz_name, placeholder="Europe/Berlin"),
+                 help="IANA-Name wie <code>Europe/Berlin</code> – gilt für Datumseingaben und Zeiten hier. "
+                      "Ungültige Werte werden ignoriert."),
+    ), icon="bi-gear", desc="Grundeinstellungen für neue Events auf diesem Server.")
+
+    reminders = ui.card("Erinnerungen", "<div class='wc-switches'>"
+        + ui.switch("reminders", "Erinnerungen senden", conf.get("reminders"),
+                    desc="60 und 15 Minuten vor dem Start im Event-Kanal.")
+        + ui.switch("ping_signed_up", "Angemeldete per DM erinnern", conf.get("ping_signed_up"),
+                    desc="Zusätzlich eine Direktnachricht an alle im Roster und Verspäteten.")
+        + "</div>", icon="bi-bell")
+
+    overrides = conf.get("messages") or {}
+    fields = []
+    for key in OVERRIDABLE_KEYS:
+        label, hint = _OVERRIDE_LABELS.get(key, (key, None))
+        fields.append(ui.field(label, ui.text_input(f"ovr_{key}", overrides.get(key, ""),
+                                                    placeholder=STRINGS["de"].get(key, "")),
+                               help=hint, wide=True))
+    texts = ui.card("Eigene Texte", ui.grid(*fields), icon="bi-chat-left-text",
+                    desc="Leer lassen = Standardtext der gewählten Sprache (als grauer Platzhalter sichtbar).")
+
+    save = ui.save_row("Einstellungen speichern")
+    # Ein Formular über zwei Reiter (Einstellungen + Texte) – beide speichern alles.
+    return ui.form(
+        "/cogs/raidhelper",
+        ui.tab("einstellungen", "Einstellungen", "bi-sliders", general + reminders + save)
+        + ui.tab("texte", "Texte", "bi-chat-left-text", texts + save),
+        csrf=csrf, hidden={"form": "settings", "guild": guild.id}, savebar=True,
+    )
+
+
+def _render_events(ui, conf, events: dict, guild, tz_name: str, csrf: str, now: int) -> str:
+    hint = ""
+    if not conf.get("signup_channel"):
+        hint = ui.callout("Kein <b>Anmelde-Kanal</b> gesetzt – <code>[p]raid create</code> braucht einen "
+                          "(Reiter „Einstellungen“) oder du nutzt <code>[p]raid quickcreate</code> mit Kanal.",
+                          tone="warn")
+    if not events:
+        return hint + ui.card(body=ui.empty(
+            "bi-calendar-x", "Für diesen Server sind keine Events gespeichert.",
+            "Lege in Discord mit <code>[p]raid create 13.06.2026 20:00 Titel</code> ein Event an."))
+
+    rows = []
+    for e in sorted(events.values(), key=lambda x: x.get("start_ts", 0)):
+        total, roster = signup_counts(e)
+        eid = e["id"]
+        closed = bool(e.get("closed"))
+        past = (e.get("start_ts") or 0) < now
+        hidden = {"form": "action", "guild": guild.id, "event_id": eid}
+        roster_btn = ui.button("Roster", icon="bi-people", kind="ghost", small=True,
+                               href=f"/cogs/raidhelper?guild={guild.id}&event={quote(str(eid))}")
+        toggle = ui.form(
+            "/cogs/raidhelper",
+            ui.button("Öffnen" if closed else "Schließen", icon="bi-unlock" if closed else "bi-lock",
+                      kind="ghost", small=True,
+                      attrs={"title": "Anmeldung wieder öffnen" if closed else "Anmeldung schließen"}),
+            csrf=csrf, hidden={**hidden, "action": "reopen" if closed else "close"},
         )
+        delete = ui.form(
+            "/cogs/raidhelper",
+            ui.button("", icon="bi-trash", kind="danger", small=True, attrs={"title": "Event löschen"}),
+            csrf=csrf, hidden={**hidden, "action": "delete"},
+            confirm=f"Event „{e.get('title') or eid}“ und seine Discord-Nachricht werden gelöscht.",
+        )
+        cap = e.get("max_signups")
+        roster_txt = f"{roster} / {int(cap)}" if cap else str(roster)
+        status = ui.badge("geschlossen", "muted") if closed else ui.badge("offen", "ok")
+        rows.append(ui.row(
+            f"<div class='wc-cell-title'>{_esc(e.get('title') or '—')}</div>"
+            f"<div class='wc-cell-sub'><span class='mono'>{_esc(eid)}</span> · {_esc(games.game_label(e.get('game')))}</div>",
+            f"<span class='mono'>{_esc(_fmt(e.get('start_ts'), tz_name))}</span>"
+            + ("<div class='wc-cell-sub'>vorbei</div>" if past else ""),
+            f"<span class='mono'>{_esc(roster_txt)}</span>"
+            f"<div class='wc-cell-sub'>{total} Rückmeldung{'' if total == 1 else 'en'}</div>",
+            status,
+            f"><div class='wc-row-actions'>{roster_btn}{toggle}{delete}</div>",
+        ))
+    table = ui.card(
+        "Events", ui.table(["Event", "Start", "Im Roster", "Status", ">"], rows,
+                           search=True, search_placeholder="Nach Titel, ID oder Spiel suchen …", id="rh-events"),
+        icon="bi-calendar-event",
+        desc=f"Zeiten in der Zeitzone <b>{_esc(tz_name)}</b>. „Schließen“ beendet nur die Anmeldung, "
+             "das Event bleibt bestehen.",
+    )
+    return hint + table
 
-    return {"title": "Raidplaner",
-            "content": _FORM_STYLE + bar + flash + stats + settings + table + "<div class='rh-spacer'></div>" + icons_card}
 
-
-def _render_icons(csrf: str, guild_id: int, emojis: dict, supported: bool, structure) -> str:
-    rows = ""
+def _render_icons(ui, csrf: str, guild_id: int, emojis: dict, supported: bool, structure) -> str:
+    rows = []
     for cid, clabel, specs in structure:
-        rows += (
-            f"<tr><td colspan='4' style='padding-top:12px;color:#fff;font-weight:700'>{_esc(clabel)}</td></tr>"
-        )
         for sid, slabel in specs:
-            key = f"{cid}:{sid}"
-            cur = emojis.get(key)
+            cur = emojis.get(f"{cid}:{sid}")
             img = _emoji_img(cur)
             if img:
-                cell = f"<img src='{img}' width='22' height='22' style='border-radius:5px;vertical-align:middle'>"
+                cell = f"<img src='{_esc(img)}' width='24' height='24' alt='{_esc(slabel)}'>"
             elif cur:
                 cell = f"<span class='mono'>{_esc(cur)}</span>"
             else:
-                cell = "<span style='color:var(--muted)'>—</span>"
-            rows += (
-                f"<tr><td style='padding-left:18px'>{_esc(slabel)}</td>"
-                f"<td class='mono' style='color:var(--muted)'>{_esc(cid)}_{_esc(sid)}</td>"
-                f"<td>{cell}</td>"
-                f"<td><label class='rh-check' style='margin:0'><input type='checkbox' name='remove_{_esc(cid)}_{_esc(sid)}'>"
-                f"<span>entfernen</span></label></td></tr>"
-            )
+                cell = "<span class='wc-muted'>—</span>"
+            rows.append(ui.row(
+                f"<div class='wc-cell-title'>{_esc(slabel)}</div><div class='wc-cell-sub'>{_esc(clabel)}</div>",
+                f"<span class='mono wc-muted'>{_esc(cid)}_{_esc(sid)}</span>",
+                cell,
+                f"><label class='wc-muted'><input type='checkbox' name='remove_{_esc(cid)}_{_esc(sid)}'> entfernen</label>",
+            ))
+
     warning = ""
     if not supported:
-        warning = (
-            "<div class='rh-flash' style='background:rgba(255,107,107,.12);border-color:var(--danger);color:#ffd9d9'>"
-            "Dieser Bot unterst&uuml;tzt keine Application-Emojis (discord.py &lt; 2.4). Der Upload funktioniert nicht – "
-            "bitte Red aktualisieren oder Icons per Befehl <span class='mono'>[p]raidset specicon</span> setzen."
-            "</div>"
-        )
-    disabled = " disabled" if not supported else ""
-    return f"""
-    <div class='card-x'>
-      <div class='rh-title'>Spec-Icons</div>
-      <div style='color:var(--muted);font-size:.85rem;margin-bottom:14px'>
-        Icons gelten <b>botweit</b> (Application Emojis) und pro Spezialisierung. Pro Datei max. 256&nbsp;KB,
-        Gesamt-Upload m&ouml;glichst unter 1&nbsp;MB. Dateiname = <span class='mono'>klasse_spec</span>,
-        z.&nbsp;B. <span class='mono'>krieger_furor.png</span>.
-      </div>
-      {warning}
-      <form class='rh-form' method='post' action='/cogs/raidhelper' enctype='multipart/form-data'>
-        <input type='hidden' name='csrf_token' value='{csrf}'>
-        <input type='hidden' name='form' value='icons'>
-        <input type='hidden' name='guild' value='{guild_id}'>
-        <table class='table'>
-          <thead><tr><th>Spec</th><th>Datei-ID</th><th>Aktuelles Icon</th><th>Aktion</th></tr></thead>
-          <tbody>{rows}</tbody>
-        </table>
-        <label>Icons hochladen (mehrere Dateien m&ouml;glich)</label>
-        <input type='file' name='icons' accept='image/png,image/gif,image/jpeg' multiple{disabled}>
-        <div class='rh-spacer'></div>
-        <button class='btn-accent' type='submit'>Hochladen / &Auml;nderungen speichern</button>
-      </form>
-    </div>
-    """
+        warning = ui.callout(
+            "Dieser Bot unterstützt keine Application-Emojis (discord.py &lt; 2.4). Der Upload funktioniert nicht – "
+            "bitte Red aktualisieren oder Icons per Befehl <code>[p]raidset specicon</code> setzen.", tone="bad")
+    file_attrs = " disabled" if not supported else ""
+    upload = ui.card("Icons hochladen", warning + ui.field(
+        "Bilddateien (mehrere möglich)",
+        f"<input class='wc-input' type='file' name='icons' accept='image/png,image/gif,image/jpeg' multiple{file_attrs}>",
+        help="Dateiname = <code>klasse_spec</code>, z. B. <code>krieger_furor.png</code>. Pro Datei max. 256&nbsp;KB, "
+             "insgesamt möglichst unter 1&nbsp;MB. Unbekannte Namen werden übersprungen.",
+    ) + ui.save_row("Hochladen & Änderungen speichern"), icon="bi-upload",
+        desc="Icons gelten <b>botweit</b> (Application Emojis) für jede Spezialisierung – auf allen Servern.")
+
+    table = ui.card("Aktuelle Icons", ui.table(
+        ["Spezialisierung", "Dateiname", "Icon", ">Entfernen"], rows,
+        search=True, search_placeholder="Klasse oder Spec suchen …", id="rh-icons",
+    ) + ui.save_row("Hochladen & Änderungen speichern"), icon="bi-grid-3x3-gap",
+        desc="Zum Entfernen Haken setzen und speichern.")
+
+    # ui.form() kennt kein enctype -> Formular-Tag selbst schreiben (Datei-Upload). Ohne Speicherleiste:
+    # deren Serialisierung hält <input type=file multiple> für ein Mehrfach-Select (JS-Fehler).
+    return (
+        "<form class='wc-form' method='post' action='/cogs/raidhelper' enctype='multipart/form-data'>"
+        f"<input type='hidden' name='csrf_token' value='{_esc(csrf)}'>"
+        "<input type='hidden' name='form' value='icons'>"
+        f"<input type='hidden' name='guild' value='{_esc(guild_id)}'>"
+        + upload + table + "</form>"
+    )
 
 
-def _render_events_table(events: dict, guild_id: int, tz_name: str, csrf: str) -> str:
-    if not events:
-        return "<div class='card-x'>Für diesen Server sind keine Events gespeichert.</div>"
-    rows = ""
-    for e in sorted(events.values(), key=lambda x: x.get("start_ts", 0)):
-        total, roster = signup_counts(e)
-        status = "geschlossen" if e.get("closed") else "offen"
-        eid = _esc(e["id"])
-        toggle = "reopen" if e.get("closed") else "close"
-        toggle_label = "Öffnen" if e.get("closed") else "Schließen"
-        action_form = (
-            f"<form method='post' action='/cogs/raidhelper' style='display:inline'>"
-            f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-            f"<input type='hidden' name='form' value='action'>"
-            f"<input type='hidden' name='guild' value='{guild_id}'>"
-            f"<input type='hidden' name='event_id' value='{eid}'>"
-            f"<button name='action' value='{toggle}'>{toggle_label}</button>"
-            f"</form>"
-        )
-        delete_form = (
-            f"<form method='post' action='/cogs/raidhelper' style='display:inline' "
-            f"onsubmit=\"return confirm('Event {eid} wirklich löschen?')\">"
-            f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-            f"<input type='hidden' name='form' value='action'>"
-            f"<input type='hidden' name='guild' value='{guild_id}'>"
-            f"<input type='hidden' name='event_id' value='{eid}'>"
-            f"<button class='danger' name='action' value='delete'>Löschen</button>"
-            f"</form>"
-        )
-        roster_link = f"<a href='/cogs/raidhelper?guild={guild_id}&event={eid}'>Roster</a>"
-        rows += (
-            f"<tr><td class='mono'>{eid}</td><td>{_esc(e.get('title'))}</td>"
-            f"<td>{_esc(games.game_label(e.get('game')))}</td>"
-            f"<td>{_esc(_fmt(e.get('start_ts'), tz_name))}</td>"
-            f"<td>{total} ({roster})</td><td>{status}</td>"
-            f"<td><div class='rh-actions'>{roster_link}{action_form}{delete_form}</div></td></tr>"
-        )
-    return f"""
-    <div class='card-x'>
-      <div class='rh-title'>Events</div>
-      <table class='table'>
-        <thead><tr><th>ID</th><th>Titel</th><th>Spiel</th><th>Start</th>
-        <th>Anmeldungen</th><th>Status</th><th>Aktionen</th></tr></thead>
-        <tbody>{rows}</tbody>
-      </table>
-    </div>
-    """
-
-
-def _render_roster(event: dict, guild_id: int) -> str:
+def _render_roster(ui, event: dict, guild_id: int, tz_name: str) -> str:
     game_id = event.get("game") or games.DEFAULT_GAME
     signups = event.get("signups") or {}
     ordered = sorted(signups.items(), key=lambda kv: (kv[1].get("at") or 0, kv[0]))
 
     by_role = {r: [] for r in games.role_order(game_id)}
     by_status = {s: [] for s in _STATUS_LABEL_DE}
-    for uid, e in ordered:
+    for _uid, e in ordered:
         st = e.get("status") or "signed"
-        name = _esc(e.get("name"))
-        spec = _esc(games.spec_label(game_id, e.get("class"), e.get("spec"))) if e.get("class") else ""
-        spec_html = f"<span class='mono'>{spec}</span> " if spec else ""
-        line = f"<li>{spec_html}{name}</li>"
+        spec = games.spec_label(game_id, e.get("class"), e.get("spec")) if e.get("class") else ""
+        entry = (_esc(e.get("name")), _esc(spec))
         if st == "signed":
             role = e.get("role") or games.spec_role(game_id, e.get("class"), e.get("spec"))
-            by_role.setdefault(role, []).append(line)
+            by_role.setdefault(role, []).append(entry)
         elif st in by_status:
-            by_status[st].append(line)
+            by_status[st].append(entry)
 
-    cols = ""
+    def _list(entries) -> str:
+        if not entries:
+            return "<div class='wc-muted'>Noch niemand.</div>"
+        items = "".join(
+            f"<li><span class='mono wc-muted'>{i}.</span><span>{name}</span>"
+            + (f"<span class='wc-muted'>{spec}</span>" if spec else "") + "</li>"
+            for i, (name, spec) in enumerate(entries, 1)
+        )
+        return f"<ul class='wc-list'>{items}</ul>"
+
+    role_cards = []
     for role in games.role_order(game_id):
         meta = games.role_meta(game_id, role)
-        items = "".join(by_role.get(role, [])) or "<li style='color:var(--muted)'>—</li>"
-        cols += (
-            f"<div><div class='stat-label'>{_esc(meta.get('emoji',''))} "
-            f"{_esc(role_name('de', role))} ({len(by_role.get(role, []))})</div>"
-            f"<ol>{items}</ol></div>"
-        )
-    status_cols = ""
-    for st, label in _STATUS_LABEL_DE.items():
-        people = by_status.get(st, [])
-        if people:
-            status_cols += f"<div><div class='stat-label'>{_esc(label)} ({len(people)})</div><ol>{''.join(people)}</ol></div>"
+        people = by_role.get(role, [])
+        title = f"{meta.get('emoji', '')} {role_name('de', role)}".strip()
+        role_cards.append(ui.card(f"{title} ({len(people)})", _list(people)))
+
+    status_cards = [
+        ui.card(f"{label} ({len(by_status[st])})", _list(by_status[st]), icon=_STATUS_ICON.get(st))
+        for st, label in _STATUS_LABEL_DE.items() if by_status.get(st)
+    ]
 
     total, roster = signup_counts(event)
-    back = f"<a href='/cogs/raidhelper?guild={guild_id}' style='color:var(--accent)'>&larr; Zurück</a>"
-    return f"""
-    <div class='card-x'>
-      <div class='rh-title'>{_esc(event.get('title'))} <span class='mono' style='color:var(--muted);font-size:.8rem'>{_esc(event.get('id'))}</span></div>
-      <div style='color:var(--muted);margin-bottom:14px'>{_esc(games.game_label(game_id))} · {total} Anmeldungen · {roster} im Roster</div>
-      <div class='rh-roster'>{cols}</div>
-      {("<div class='rh-spacer'></div><div class='rh-roster'>" + status_cols + "</div>") if status_cols else ""}
-      <div class='rh-spacer'></div>{back}
-    </div>
-    """
+    cap = event.get("max_signups")
+    back = ui.button("Zurück zu den Events", icon="bi-arrow-left", kind="ghost", small=True,
+                     href=f"/cogs/raidhelper?guild={guild_id}#events")
+    status = "geschlossen" if event.get("closed") else "Anmeldung offen"
+    # Zurück-Button im Kopftext (ui.hero(actions=…) bricht auf dem Handy nicht um).
+    head = ui.hero(
+        "bi-people", event.get("title") or "Event",
+        f"<span class='mono'>{_esc(event.get('id'))}</span> · {_esc(games.game_label(game_id))} · "
+        f"{_esc(_fmt(event.get('start_ts'), tz_name))} · {_esc(status)}<br><br>{back}",
+    ) + ui.stats([
+        ("Im Roster", f"{roster} / {int(cap)}" if cap else roster, "bi-people", None, "ok" if roster else None),
+        ("Rückmeldungen", total, "bi-person-lines-fill", "inkl. Bank, Spät, Vielleicht, Abwesend", None),
+    ])
+    out = head + ui.columns(*role_cards, cols=2)
+    if status_cards:
+        out += "<h3 class='wc-sub'>Weitere Rückmeldungen</h3>" + ui.columns(*status_cards, cols=2)
+    return out
 
 
 # --------------------------------------------------------------------------- #

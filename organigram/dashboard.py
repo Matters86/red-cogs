@@ -1,13 +1,14 @@
 """WebCore-Dashboard für den Organigram-Cog.
 
 Aufbau:
-* GET  -> Seite rendern: Server-Auswahl, Organigramm-Liste, Editor.
-         Zusätzlich Bild-Endpunkte ``?preview=<id>`` und ``?download=<id>``,
-         die direkt ein PNG zurückgeben (Live-Vorschau / Export).
+* GET  -> Seite rendern: Organigramm-Liste (Reiter „Organigramme“ · „Neu anlegen“)
+         bzw. Editor eines Organigramms (Reiter „Positionen“ · „Einstellungen“ ·
+         „Vorschau & Posten“). Zusätzlich Bild-Endpunkte ``?preview=<id>`` und
+         ``?download=<id>``, die direkt ein PNG zurückgeben (Live-Vorschau / Export).
 * POST -> Formular verarbeiten, danach Redirect (Post/Redirect/Get).
 
-Es werden nur die Theme-Klassen (card-x, table, btn-accent …) sowie die ohnehin
-geladenen Bootstrap-Formularklassen genutzt – kein eigenes Design.
+Oberfläche über den UI-Baukasten von WebCore (``request.app["webcore"].ui``) –
+kein eigenes CSS.
 """
 
 from __future__ import annotations
@@ -33,49 +34,23 @@ _PREVIEW_DIR = os.path.join(os.path.dirname(__file__), "assets", "previews")
 # Eingabe (DE im Formular) -> intern gespeicherter Modus
 MODE_MAP = {"bild": "image", "embed": "embed", "text": "text"}
 MODE_LABEL = {"image": "Bild", "embed": "Embed", "text": "Text"}
+# Auswahl im Formular: (Formularwert, Anzeige) – Formularwert wird per MODE_MAP umgesetzt.
+_MODE_ITEMS = [("bild", "Bild (gerendertes PNG)"), ("embed", "Embed"), ("text", "Text")]
+_MODE_FORM = {intern: val for val, intern in MODE_MAP.items()}
 
-_FORM_STYLE = """
-<style>
-  .og-form label{display:block;color:var(--muted);font-size:.8rem;
-    text-transform:uppercase;letter-spacing:.05em;margin:14px 0 5px}
-  .og-form input,.og-form select,.og-form textarea{width:100%;
-    background:var(--panel-2);color:var(--text);border:1px solid var(--border);
-    border-radius:9px;padding:9px 11px;font-family:inherit;font-size:.92rem}
-  .og-form textarea{min-height:80px;resize:vertical;font-family:"IBM Plex Mono",monospace}
-  .og-form input[type=color]{height:42px;padding:4px;cursor:pointer}
-  .og-form .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  .og-form .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
-  .og-form .hint{color:var(--muted);font-size:.78rem;margin-top:4px}
-  .og-check{display:flex;align-items:center;gap:8px;margin-top:12px}
-  .og-check input{width:auto}
-  .og-flash{background:rgba(61,220,151,.12);border:1px solid var(--accent);
-    color:var(--text);border-radius:10px;padding:11px 14px;margin-bottom:18px}
-  .og-section-title{font-family:"Archivo",sans-serif;font-weight:700;
-    font-size:1.15rem;margin:0 0 14px}
-  .og-spacer{height:26px}
-  .og-actions{display:flex;gap:8px;flex-wrap:wrap}
-  .og-actions form{margin:0}
-  .og-btn-sm{padding:5px 12px}
-  .og-preview-wrap{background:var(--panel-2);border:1px solid var(--border);
-    border-radius:12px;padding:14px;text-align:center}
-  .og-preview-wrap img{max-width:100%;height:auto;border-radius:8px}
-  .og-grid2{display:grid;grid-template-columns:1.1fr .9fr;gap:20px;align-items:start}
-  @media (max-width:860px){.og-grid2{grid-template-columns:1fr}}
-  .og-muster{margin-top:10px;background:var(--panel-2);border:1px solid var(--border);
-    border-radius:10px;padding:10px;text-align:center}
-  .og-muster img{max-width:100%;max-height:240px;height:auto;border-radius:7px;
-    display:block;margin:0 auto}
-  .og-muster-cap{display:block;color:var(--muted);font-size:.78rem;margin-top:7px}
-</style>
+# Muster-Vorschau: Bild unter der Muster-Auswahl beim Wechsel austauschen.
+_MUSTER_SCRIPT = """
 <script>
-  function ogMuster(sel){
-    var box = sel.parentNode.querySelector('.og-muster');
-    if(!box){ return; }
-    var img = box.querySelector('img');
-    var cap = box.querySelector('.og-muster-cap');
-    if(img){ img.src = img.getAttribute('data-base') + encodeURIComponent(sel.value); }
-    if(cap){ cap.textContent = sel.options[sel.selectedIndex].text; }
-  }
+  document.querySelectorAll("select[name=pattern]").forEach(function (sel) {
+    sel.addEventListener("change", function () {
+      var box = document.getElementById(sel.form.id + "-muster");
+      if (!box) { return; }
+      var img = box.querySelector("img");
+      var cap = box.querySelector(".wc-help");
+      if (img) { img.src = img.getAttribute("data-base") + encodeURIComponent(sel.value); }
+      if (cap) { cap.textContent = sel.options[sel.selectedIndex].text; }
+    });
+  });
 </script>
 """
 
@@ -87,18 +62,6 @@ def _esc(value) -> str:
 def _slug(value: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", (value or "organigramm").lower()).strip("-")
     return s or "organigramm"
-
-
-def _options(items, selected_ids, *, none_label: str | None = None) -> str:
-    sel = {str(s) for s in (selected_ids or [])}
-    out = []
-    if none_label is not None:
-        is_sel = " selected" if not sel else ""
-        out.append(f"<option value=''{is_sel}>{_esc(none_label)}</option>")
-    for ident, label in items:
-        is_sel = " selected" if str(ident) in sel else ""
-        out.append(f"<option value='{_esc(ident)}'{is_sel}>{_esc(label)}</option>")
-    return "".join(out)
 
 
 def _descendants(nodes: dict, root_id: str) -> set[str]:
@@ -116,6 +79,40 @@ def _descendants(nodes: dict, root_id: str) -> set[str]:
         out.add(c)
         stack.extend(children.get(c, []))
     return out
+
+
+def _label_of(guild, nodes: dict, nid) -> str:
+    nd = nodes.get(nid, {})
+    if nd.get("label"):
+        return nd["label"]
+    if nd.get("role_id"):
+        r = guild.get_role(nd["role_id"])
+        if r:
+            return r.name
+    return "(ohne Titel)"
+
+
+def _people_count(guild, nd: dict) -> int:
+    role = guild.get_role(nd["role_id"]) if nd.get("role_id") else None
+    manual = len([m for m in nd.get("manual_names", []) if (m or "").strip()])
+    return (len(role.members) if role else 0) + manual
+
+
+def _posted_channels(guild, chart: dict) -> list[str]:
+    return [
+        f"#{ch.name}" for p in chart.get("posts", [])
+        if (ch := guild.get_channel_or_thread(p.get("channel_id"))) is not None
+    ]
+
+
+def _accent(value) -> str:
+    accent = (value or "#3ddc97").strip()
+    return accent if accent.startswith("#") else "#" + accent
+
+
+def _color_input(ui, name: str, value: str) -> str:
+    # Farbwähler im Kit-Stil; nur Höhe/Innenabstand an das native Farbfeld angepasst.
+    return ui.text_input(name, value, type="color", attrs={"style": "height:42px;padding:4px 6px;cursor:pointer"})
 
 
 # --------------------------------------------------------------------------- #
@@ -162,11 +159,12 @@ async def _render(cog, request):
         return web.Response(body=data, content_type="image/png",
                             headers={"Cache-Control": "public, max-age=86400"})
 
+    ui = request.app["webcore"].ui
     guilds = await _visible_guilds(cog, request)
     guild = _pick_guild(guilds, request)
     if guild is None:
         return {"title": "Organigramm",
-                "content": "<div class='card-x'>Der Bot ist auf keinem Server.</div>"}
+                "content": ui.card(body=ui.empty("bi-hdd-network", "Der Bot ist auf keinem Server."))}
 
     charts = await cog.config.guild(guild).charts()
 
@@ -190,23 +188,12 @@ async def _render(cog, request):
 
     csrf = request.get("webcore_csrf", "")
 
-    flash = ""
-    if request.query.get("ok"):
-        flash = f"<div class='og-flash'>{_esc(request.query.get('ok'))}</div>"
-
-    guild_opts = _options(
-        [(g.id, g.name) for g in guilds],
-        [guild.id],
-    )
-    guild_picker = f"""
-    <div class='card-x' style='margin-bottom:20px'>
-      <form method='get' action='/cogs/organigram' class='og-form' style='margin:0'>
-        <label style='margin-top:0'>Server</label>
-        <select name='guild' onchange='this.form.submit()'>{guild_opts}</select>
-      </form>
-    </div>
-    """
-    # Globaler Server-Wechsler von WebCore aktiv -> eigenes Dropdown ausblenden.
+    # Eigene Server-Auswahl nur ohne globalen Server-Wechsler von WebCore.
+    guild_picker = ui.card(body=ui.form(
+        "/cogs/organigram",
+        ui.field("Server", ui.select("guild", [(g.id, g.name) for g in guilds], guild.id, autosubmit=True)),
+        csrf="", method="get",
+    ))
     if request.get("wc_switcher"):
         guild_picker = ""
 
@@ -214,265 +201,213 @@ async def _render(cog, request):
     selected = charts.get(sel_cid) if sel_cid else None
 
     if selected:
-        body = _render_editor(cog, guild, sel_cid, selected, csrf, request)
+        body = _render_editor(ui, guild, sel_cid, selected, csrf, request)
+        title = "Organigramm · bearbeiten"
     else:
-        body = _render_list(guild, charts, csrf) + "<div class='og-spacer'></div>" + _render_new(guild, csrf)
+        body = _render_overview(ui, guild, charts, csrf)
+        title = "Organigramm"
 
-    content = _FORM_STYLE + flash + guild_picker + body
-    return {"title": "Organigramm", "content": content}
+    return {"title": title, "content": guild_picker + body + _MUSTER_SCRIPT}
 
 
-def _render_list(guild, charts, csrf) -> str:
+# --------------------------------------------------------------------------- #
+#  Übersicht: Liste + Neu anlegen
+# --------------------------------------------------------------------------- #
+def _render_overview(ui, guild, charts, csrf) -> str:
+    n_nodes = sum(len(c.get("nodes", {})) for c in charts.values())
+    n_posts = sum(len(c.get("posts", [])) for c in charts.values())
+    n_auto = sum(1 for c in charts.values() if c.get("auto_update", True))
+    head = ui.hero(
+        "bi-diagram-3", "",
+        "Zeigt die Struktur eures Teams als <b>Bild</b>, <b>Embed</b> oder <b>Text</b>. Positionen können mit "
+        "Discord-Rollen verknüpft werden – gepostete Organigramme aktualisieren sich dann automatisch.",
+    ) + ui.stats([
+        ("Organigramme", len(charts), "bi-diagram-3", None, None),
+        ("Positionen", n_nodes, "bi-person-badge", None, None),
+        ("Gepostet", n_posts, "bi-send", "Beiträge in Kanälen", "ok" if n_posts else None),
+        ("Auto-Update", n_auto, "bi-arrow-repeat", "Organigramme mit automatischer Aktualisierung", None),
+    ])
+    return (
+        head
+        + ui.tab("organigramme", "Organigramme", "bi-diagram-3", _render_list(ui, guild, charts, csrf), count=len(charts))
+        + ui.tab("neu", "Neu anlegen", "bi-plus-square", _render_new(ui, guild, csrf))
+    )
+
+
+def _render_list(ui, guild, charts, csrf) -> str:
+    if not charts:
+        return ui.card(body=ui.empty(
+            "bi-diagram-3", "Noch keine Organigramme.",
+            "Lege im Reiter „Neu anlegen“ dein erstes Organigramm an.",
+            action=ui.button("Organigramm anlegen", icon="bi-plus-lg", href="#neu",
+                             attrs={"onclick": "if (window.wcActivateTab) { wcActivateTab('neu', true); return false; }"}),
+        ))
     rows = []
     for cid, c in charts.items():
         n = len(c.get("nodes", {}))
-        posts = c.get("posts", [])
-        where = ", ".join(
-            f"#{ch.name}" for p in posts
-            if (ch := guild.get_channel_or_thread(p.get("channel_id"))) is not None
-        ) or "—"
+        where = _posted_channels(guild, c)
         pat = PATTERNS.get(c.get("pattern", "baum"), c.get("pattern", "baum"))
         edit_link = f"/cogs/organigram?guild={guild.id}&chart={_esc(cid)}"
-        rows.append(
-            "<tr>"
-            f"<td><strong>{_esc(c.get('name', '?'))}</strong></td>"
-            f"<td>{_esc(pat)}</td>"
-            f"<td>{_esc(MODE_LABEL.get(c.get('mode', 'image'), 'Bild'))}</td>"
-            f"<td>{n}</td>"
-            f"<td style='color:var(--muted)'>{_esc(where)}</td>"
-            "<td><div class='og-actions'>"
-            f"<a class='btn-accent og-btn-sm' href='{edit_link}'>Bearbeiten</a>"
-            f"<form method='post' action='/cogs/organigram' onsubmit=\"return confirm('Organigramm wirklich löschen?')\">"
-            f"<input type='hidden' name='csrf_token' value='{_esc(csrf)}'>"
-            f"<input type='hidden' name='form' value='chart_delete'>"
-            f"<input type='hidden' name='guild' value='{guild.id}'>"
-            f"<input type='hidden' name='chart' value='{_esc(cid)}'>"
-            "<button class='btn-accent og-btn-sm'>Löschen</button></form>"
-            "</div></td>"
-            "</tr>"
+        edit = ui.button("Bearbeiten", icon="bi-pencil", kind="ghost", small=True, href=edit_link)
+        delete = ui.form(
+            "/cogs/organigram",
+            ui.button("", icon="bi-trash", kind="danger", small=True, attrs={"title": "Organigramm löschen"}),
+            csrf=csrf, hidden={"form": "chart_delete", "guild": guild.id, "chart": cid},
+            confirm=f"Organigramm „{c.get('name', '?')}“ wirklich löschen? Bereits gepostete Nachrichten bleiben bestehen.",
         )
-    table = (
-        "<table class='table'><thead><tr>"
-        "<th>Name</th><th>Muster</th><th>Standard-Modus</th><th>Positionen</th>"
-        "<th>Gepostet in</th><th></th>"
-        "</tr></thead><tbody>"
-        + ("".join(rows)
-           or "<tr><td colspan='6' style='color:var(--muted)'>Noch keine Organigramme – lege unten eines an.</td></tr>")
-        + "</tbody></table>"
+        posted = ", ".join(where) if where else ""
+        rows.append(ui.row(
+            f"<div class='wc-cell-title'><a href='{edit_link}'>{_esc(c.get('name', '?'))}</a></div>"
+            + (f"<div class='wc-cell-sub'>{_esc(c.get('title'))}</div>" if c.get("title") else ""),
+            _esc(pat),
+            ui.badge(MODE_LABEL.get(c.get("mode", "image"), "Bild"), "info"),
+            f"<span class='mono'>{n}</span>",
+            (ui.badge(posted, "ok") if posted else ui.badge("nicht gepostet", "muted"))
+            + ("" if c.get("auto_update", True) else " " + ui.badge("Auto-Update aus", "warn")),
+            f"><div class='wc-row-actions'>{edit}{delete}</div>",
+        ))
+    return ui.card(
+        "Deine Organigramme",
+        ui.table(["Name", "Muster", "Ausgabe", "Positionen", "Gepostet in", ">"], rows,
+                 search=len(rows) > 6, search_placeholder="Organigramm suchen …", id="og-charts"),
+        icon="bi-diagram-3",
+        desc="Klicke auf einen Namen, um Positionen zu pflegen, das Aussehen anzupassen oder das Organigramm zu posten.",
     )
-    return f"<div class='card-x'><div class='og-section-title'>Organigramme</div>{table}</div>"
 
 
-def _pattern_options(selected: str) -> str:
-    return "".join(
-        f"<option value='{key}'{' selected' if selected == key else ''}>{_esc(label)}</option>"
-        for key, label in PATTERNS.items()
-    )
-
-
-def _muster_preview(selected: str) -> str:
+def _muster_preview(form_id: str, selected: str) -> str:
     base = "/cogs/organigram?muster="
-    label = PATTERNS.get(selected, selected)
     return (
-        "<div class='og-muster'>"
-        f"<img alt='Muster-Vorschau' loading='lazy' data-base='{base}' "
-        f"src='{base}{_esc(selected)}'>"
-        f"<span class='og-muster-cap'>{_esc(label)}</span>"
+        f"<div id='{_esc(form_id)}-muster' class='text-center'>"
+        f"<img class='img-fluid rounded' style='max-height:220px' alt='Muster-Vorschau' loading='lazy' "
+        f"data-base='{base}' src='{base}{_esc(selected)}'>"
+        f"<div class='wc-help'>{_esc(PATTERNS.get(selected, selected))}</div>"
         "</div>"
     )
 
 
-def _mode_options(internal_selected: str) -> str:
-    # internal_selected ist "image"/"embed"/"text"
-    pairs = [("bild", "Bild", "image"), ("embed", "Embed", "embed"), ("text", "Text", "text")]
-    return "".join(
-        f"<option value='{val}'{' selected' if internal_selected == intern else ''}>{label}</option>"
-        for val, label, intern in pairs
+def _chart_cards(ui, chart: dict, form_id: str) -> str:
+    """Gemeinsame Felder für „Neu anlegen“ und „Einstellungen“ (gleiche Feldnamen)."""
+    pattern = chart.get("pattern", "baum")
+    general = ui.card("Allgemein", ui.grid(
+        ui.field("Name", ui.text_input("name", chart.get("name", ""), placeholder="Leitung", attrs={"required": True}),
+                 help="Kurzer, eindeutiger Name – wird auch in Befehlen verwendet, z. B. "
+                      "<code>/organigram show Leitung</code>."),
+        ui.field("Titel im Bild", ui.text_input("title", chart.get("title", ""), placeholder="= Name"),
+                 help="Überschrift über dem Organigramm. Leer lassen = Name."),
+    ), icon="bi-card-heading")
+    look = ui.card("Darstellung", ui.grid(
+        ui.field("Muster (Bild-Ausgabe)", ui.select("pattern", list(PATTERNS.items()), pattern)
+                 + _muster_preview(form_id, pattern),
+                 help="Anordnung der Positionen im gerenderten Bild."),
+        ui.field("Standard-Ausgabe", ui.select("mode", _MODE_ITEMS, _MODE_FORM.get(chart.get("mode", "image"), "bild")),
+                 help="Wird beim Posten vorausgewählt. <b>Bild</b> = gerendertes PNG, <b>Embed</b>/<b>Text</b> = "
+                      "Discord-Nachricht mit den Namen."),
+        ui.field("Akzentfarbe", _color_input(ui, "accent", _accent(chart.get("accent"))),
+                 help="Farbe für Linien und Hervorhebungen im Bild."),
+        cols=3,
+    ), icon="bi-palette")
+    opts = ui.card("Optionen", "<div class='wc-switches'>"
+        + ui.switch("show_avatars", "Avatare im Bild anzeigen", chart.get("show_avatars", True),
+                    desc="Profilbilder der Rollenmitglieder neben den Namen.")
+        + ui.switch("show_vacant", "Leere Positionen zeigen", chart.get("show_vacant", True),
+                    desc="Positionen ohne Personen erscheinen als „unbesetzt“.")
+        + ui.switch("auto_update", "Automatisch aktualisieren", chart.get("auto_update", True),
+                    desc="Gepostete Beiträge werden bei Rollen-Änderungen neu erstellt.")
+        + "</div>", icon="bi-toggles")
+    return general + look + opts
+
+
+def _render_new(ui, guild, csrf) -> str:
+    return ui.form(
+        "/cogs/organigram",
+        _chart_cards(ui, {}, "og-new") + ui.actions(ui.button("Organigramm anlegen", icon="bi-plus-lg")),
+        csrf=csrf, hidden={"form": "chart_new", "guild": guild.id}, id="og-new",
     )
 
 
-def _render_new(guild, csrf) -> str:
-    return f"""
-    <div class='card-x'>
-      <div class='og-section-title'>Neues Organigramm</div>
-      <form class='og-form' method='post' action='/cogs/organigram'>
-        <input type='hidden' name='csrf_token' value='{_esc(csrf)}'>
-        <input type='hidden' name='form' value='chart_new'>
-        <input type='hidden' name='guild' value='{guild.id}'>
-        <div class='row2'>
-          <div>
-            <label>Name (für Befehle, z.&nbsp;B. „Leitung“)</label>
-            <input name='name' required placeholder='Leitung'>
-          </div>
-          <div>
-            <label>Muster (für Bild-Modus)</label>
-            <select name='pattern' onchange='ogMuster(this)'>{_pattern_options('baum')}</select>
-            {_muster_preview('baum')}
-          </div>
-        </div>
-        <div class='row3'>
-          <div>
-            <label>Standard-Ausgabe</label>
-            <select name='mode'>{_mode_options('image')}</select>
-          </div>
-          <div>
-            <label>Akzentfarbe</label>
-            <input type='color' name='accent' value='#3ddc97'>
-          </div>
-          <div>
-            <label>Titel (optional)</label>
-            <input name='title' placeholder='= Name'>
-          </div>
-        </div>
-        <div class='og-check'><input type='checkbox' name='show_avatars' checked>
-          <span>Avatare im Bild anzeigen</span></div>
-        <div class='og-check'><input type='checkbox' name='show_vacant' checked>
-          <span>Leere Positionen als „unbesetzt“ zeigen</span></div>
-        <div class='og-check'><input type='checkbox' name='auto_update' checked>
-          <span>Geposteten Beitrag automatisch aktualisieren</span></div>
-        <div class='og-spacer'></div>
-        <button class='btn-accent' type='submit'>Anlegen</button>
-      </form>
-    </div>
-    """
-
-
-def _render_editor(cog, guild, cid, chart, csrf, request) -> str:
+# --------------------------------------------------------------------------- #
+#  Editor eines Organigramms
+# --------------------------------------------------------------------------- #
+def _render_editor(ui, guild, cid, chart, csrf, request) -> str:
     nodes = chart.get("nodes", {})
-    accent = (chart.get("accent") or "#3ddc97").strip()
-    if not accent.startswith("#"):
-        accent = "#" + accent
+    where = _posted_channels(guild, chart)
+    n_people = sum(_people_count(guild, nd) for nd in nodes.values())
 
-    back = f"/cogs/organigram?guild={guild.id}"
+    back = ui.button("Alle Organigramme", icon="bi-arrow-left", kind="ghost",
+                     href=f"/cogs/organigram?guild={guild.id}#organigramme")
+    # Zurück-Button als eigene Leiste (Hero-Aktionen brechen auf dem Handy nicht um).
+    head = f"<div class='wc-toolbar'>{back}</div>" + ui.hero(
+        "bi-diagram-3", chart.get("name", "?"),
+        "Lege Positionen an, passe das Aussehen an und poste das Organigramm in einen Kanal.",
+    ) + ui.stats([
+        ("Positionen", len(nodes), "bi-person-badge", None, None),
+        ("Personen", n_people, "bi-people", "Rollenmitglieder + zusätzliche Namen", None),
+        ("Gepostet in", len(where), "bi-send", ", ".join(where) or "noch nirgends", "ok" if where else None),
+        ("Ausgabe", MODE_LABEL.get(chart.get("mode", "image"), "Bild"), "bi-image",
+         PATTERNS.get(chart.get("pattern", "baum"), None), None),
+    ])
 
-    # --- Einstellungen ---------------------------------------------------- #
-    settings = f"""
-    <div class='card-x'>
-      <div class='og-section-title'>Einstellungen · {_esc(chart.get('name', '?'))}</div>
-      <form class='og-form' method='post' action='/cogs/organigram'>
-        <input type='hidden' name='csrf_token' value='{_esc(csrf)}'>
-        <input type='hidden' name='form' value='chart_settings'>
-        <input type='hidden' name='guild' value='{guild.id}'>
-        <input type='hidden' name='chart' value='{_esc(cid)}'>
-        <div class='row2'>
-          <div><label>Name</label><input name='name' required value='{_esc(chart.get('name', ''))}'></div>
-          <div><label>Titel im Bild</label>
-            <input name='title' value='{_esc(chart.get('title', ''))}' placeholder='= Name'></div>
-        </div>
-        <div class='row3'>
-          <div><label>Muster (Bild)</label>
-            <select name='pattern' onchange='ogMuster(this)'>{_pattern_options(chart.get('pattern', 'baum'))}</select>
-            {_muster_preview(chart.get('pattern', 'baum'))}</div>
-          <div><label>Standard-Ausgabe</label>
-            <select name='mode'>{_mode_options(chart.get('mode', 'image'))}</select></div>
-          <div><label>Akzentfarbe</label>
-            <input type='color' name='accent' value='{_esc(accent)}'></div>
-        </div>
-        <div class='og-check'><input type='checkbox' name='show_avatars' {'checked' if chart.get('show_avatars', True) else ''}>
-          <span>Avatare im Bild anzeigen</span></div>
-        <div class='og-check'><input type='checkbox' name='show_vacant' {'checked' if chart.get('show_vacant', True) else ''}>
-          <span>Leere Positionen als „unbesetzt“ zeigen</span></div>
-        <div class='og-check'><input type='checkbox' name='auto_update' {'checked' if chart.get('auto_update', True) else ''}>
-          <span>Geposteten Beitrag automatisch aktualisieren</span></div>
-        <div class='og-spacer'></div>
-        <button class='btn-accent' type='submit'>Einstellungen speichern</button>
-      </form>
-    </div>
-    """
+    settings = ui.form(
+        "/cogs/organigram",
+        _chart_cards(ui, chart, "og-settings") + ui.save_row("Einstellungen speichern"),
+        csrf=csrf, hidden={"form": "chart_settings", "guild": guild.id, "chart": cid},
+        savebar=True, id="og-settings",
+    )
 
-    # --- Vorschau + Posten ------------------------------------------------ #
-    cache_bust = int(time.time())
-    preview_src = f"/cogs/organigram?guild={guild.id}&preview={_esc(cid)}&t={cache_bust}"
-    download_src = f"/cogs/organigram?guild={guild.id}&download={_esc(cid)}"
-    chan_opts = _options([(c.id, f"#{c.name}") for c in guild.text_channels],
-                         [], none_label="— Kanal wählen —")
-    preview_post = f"""
-    <div class='card-x'>
-      <div class='og-section-title'>Vorschau &amp; Posten</div>
-      <div class='og-preview-wrap'>
-        <img src='{preview_src}' alt='Vorschau' loading='lazy'>
-      </div>
-      <div class='og-actions' style='margin-top:12px'>
-        <a class='btn-accent og-btn-sm' href='{download_src}'>PNG herunterladen</a>
-      </div>
-      <div class='og-spacer'></div>
-      <form class='og-form' method='post' action='/cogs/organigram'>
-        <input type='hidden' name='csrf_token' value='{_esc(csrf)}'>
-        <input type='hidden' name='form' value='post'>
-        <input type='hidden' name='guild' value='{guild.id}'>
-        <input type='hidden' name='chart' value='{_esc(cid)}'>
-        <div class='row2'>
-          <div><label>Kanal</label><select name='channel' required>{chan_opts}</select></div>
-          <div><label>Modus</label><select name='mode'>{_mode_options(chart.get('mode', 'image'))}</select></div>
-        </div>
-        <div class='hint'>Postet das Organigramm und hält es automatisch aktuell. Ein bereits
-          geposteter Beitrag im selben Kanal wird aktualisiert statt neu erstellt.</div>
-        <div class='og-spacer'></div>
-        <button class='btn-accent' type='submit'>Posten / Aktualisieren</button>
-      </form>
-    </div>
-    """
+    return (
+        head
+        + ui.tab("positionen", "Positionen", "bi-diagram-2",
+                 _render_positions(ui, guild, cid, nodes, csrf, request), count=len(nodes))
+        + ui.tab("einstellungen", "Einstellungen", "bi-sliders", settings)
+        + ui.tab("posten", "Vorschau & Posten", "bi-send", _render_preview_post(ui, guild, cid, chart, where, csrf))
+    )
 
-    # --- Positionen-Tabelle ---------------------------------------------- #
-    def label_of(nid):
-        nd = nodes.get(nid, {})
-        if nd.get("label"):
-            return nd["label"]
-        if nd.get("role_id"):
-            r = guild.get_role(nd["role_id"])
-            if r:
-                return r.name
-        return "(ohne Titel)"
 
+def _render_positions(ui, guild, cid, nodes, csrf, request) -> str:
     prows = []
-    for nid, nd in sorted(nodes.items(), key=lambda kv: (kv[1].get("order", 0), label_of(kv[0]).lower())):
+    for nid, nd in sorted(nodes.items(), key=lambda kv: (kv[1].get("order", 0), _label_of(guild, nodes, kv[0]).lower())):
         role = guild.get_role(nd["role_id"]) if nd.get("role_id") else None
         role_name = f"@{role.name}" if role else ("@gelöscht" if nd.get("role_id") else "—")
-        parent_lbl = label_of(nd["parent"]) if nd.get("parent") in nodes else "— (oberste Ebene)"
+        parent_lbl = f"unter {_label_of(guild, nodes, nd['parent'])}" if nd.get("parent") in nodes else "oberste Ebene"
         manual = len([m for m in nd.get("manual_names", []) if (m or "").strip()])
-        n_people = (len(role.members) if role else 0) + manual
-        edit_link = f"/cogs/organigram?guild={guild.id}&chart={_esc(cid)}&node={_esc(nid)}"
-        prows.append(
-            "<tr>"
-            f"<td><strong>{_esc(label_of(nid))}</strong></td>"
-            f"<td style='color:var(--muted)'>{_esc(role_name)}</td>"
-            f"<td style='color:var(--muted)'>{_esc(parent_lbl)}</td>"
-            f"<td>{n_people}</td>"
-            "<td><div class='og-actions'>"
-            f"<a class='btn-accent og-btn-sm' href='{edit_link}'>Bearbeiten</a>"
-            f"<form method='post' action='/cogs/organigram' onsubmit=\"return confirm('Position löschen?')\">"
-            f"<input type='hidden' name='csrf_token' value='{_esc(csrf)}'>"
-            f"<input type='hidden' name='form' value='node_delete'>"
-            f"<input type='hidden' name='guild' value='{guild.id}'>"
-            f"<input type='hidden' name='chart' value='{_esc(cid)}'>"
-            f"<input type='hidden' name='node' value='{_esc(nid)}'>"
-            "<button class='btn-accent og-btn-sm'>Löschen</button></form>"
-            "</div></td>"
-            "</tr>"
+        edit_link = f"/cogs/organigram?guild={guild.id}&chart={_esc(cid)}&node={_esc(nid)}#positionen"
+        edit = ui.button("Bearbeiten", icon="bi-pencil", kind="ghost", small=True, href=edit_link)
+        delete = ui.form(
+            "/cogs/organigram",
+            ui.button("", icon="bi-trash", kind="danger", small=True, attrs={"title": "Position löschen"}),
+            csrf=csrf, hidden={"form": "node_delete", "guild": guild.id, "chart": cid, "node": nid},
+            confirm="Position wirklich löschen? Untergeordnete Positionen rücken eine Ebene nach oben.",
         )
-    ptable = (
-        "<table class='table'><thead><tr>"
-        "<th>Position</th><th>Rolle</th><th>Übergeordnet</th><th>Personen</th><th></th>"
-        "</tr></thead><tbody>"
-        + ("".join(prows)
-           or "<tr><td colspan='5' style='color:var(--muted)'>Noch keine Positionen.</td></tr>")
-        + "</tbody></table>"
-    )
-    positions = f"<div class='card-x'><div class='og-section-title'>Positionen</div>{ptable}</div>"
+        sub = f"{parent_lbl} · Reihenfolge {int(nd.get('order', 0) or 0)}" + (f" · {manual} zusätzl. Name(n)" if manual else "")
+        prows.append(ui.row(
+            f"<div class='wc-cell-title'>{_esc(nd.get('emoji') or '')} "
+            f"<a href='{edit_link}'>{_esc(_label_of(guild, nodes, nid))}</a></div>"
+            f"<div class='wc-cell-sub'>{_esc(sub)}</div>",
+            ui.badge(role_name, "bad" if role_name == "@gelöscht" else "muted") if role_name != "—"
+            else "<span class='wc-muted'>—</span>",
+            f"><span class='mono'>{_people_count(guild, nd)}</span>",
+            f"><div class='wc-row-actions'>{edit}{delete}</div>",
+        ))
+    if prows:
+        table = ui.card(
+            "Positionen", ui.table(["Position", "Rolle", ">Personen", ">"], prows,
+                                   search=len(prows) > 8, search_placeholder="Position oder Rolle suchen …",
+                                   id="og-nodes"),
+            icon="bi-diagram-2",
+            desc="Jede Position kann eine Rolle (Mitglieder erscheinen automatisch) und/oder feste Namen haben.",
+        )
+    else:
+        table = ui.card(body=ui.empty(
+            "bi-diagram-2", "Noch keine Positionen.",
+            "Lege unten die oberste Position an (z. B. „Leitung“) und ordne weitere darunter an."))
 
-    # --- Knoten-Editor --------------------------------------------------- #
-    node_editor = _render_node_editor(guild, cid, nodes, csrf, request)
-
-    head = (
-        f"<div style='margin-bottom:14px'><a class='btn-accent og-btn-sm' href='{back}'>"
-        "← Alle Organigramme</a></div>"
-    )
-    grid = f"<div class='og-grid2'>{settings}{preview_post}</div>"
-    return (head + grid + "<div class='og-spacer'></div>" + positions
-            + "<div class='og-spacer'></div>" + node_editor)
+    editor = _render_node_editor(ui, guild, cid, nodes, csrf, request)
+    # Beim Bearbeiten steht der Editor oben, damit er nach dem Klick sofort sichtbar ist.
+    return editor + table if request.query.get("node") in nodes else table + editor
 
 
-def _render_node_editor(guild, cid, nodes, csrf, request) -> str:
+def _render_node_editor(ui, guild, cid, nodes, csrf, request) -> str:
     sel_nid = request.query.get("node")
     nd = nodes.get(sel_nid) if sel_nid else None
     nd = nd or {}
@@ -485,77 +420,85 @@ def _render_node_editor(guild, cid, nodes, csrf, request) -> str:
     # Rollen (ohne @everyone), nach Position absteigend
     roles = [r for r in guild.roles if not r.is_default()]
     roles.sort(key=lambda r: r.position, reverse=True)
-    role_opts = _options([(r.id, r.name) for r in roles],
-                         [nd.get("role_id")] if nd.get("role_id") else [],
-                         none_label="— keine Rolle —")
+    role_items = [(r.id, r.name) for r in roles]
 
     # Übergeordnete Position: alle außer sich selbst und eigenen Nachfahren
     forbidden = {sel_nid} | (_descendants(nodes, sel_nid) if sel_nid else set())
-
-    def label_of(nid):
-        n = nodes.get(nid, {})
-        if n.get("label"):
-            return n["label"]
-        if n.get("role_id"):
-            r = guild.get_role(n["role_id"])
-            if r:
-                return r.name
-        return "(ohne Titel)"
-
-    parent_items = [(nid, label_of(nid)) for nid in nodes if nid not in forbidden]
-    parent_opts = _options(parent_items,
-                           [nd.get("parent")] if nd.get("parent") else [],
-                           none_label="— (oberste Ebene)")
+    parent_items = [(nid, _label_of(guild, nodes, nid)) for nid in nodes if nid not in forbidden]
 
     manual_text = "\n".join(nd.get("manual_names", []) or [])
-    title = "Position bearbeiten" if is_edit else "Neue Position"
-    node_hidden = f"<input type='hidden' name='node' value='{_esc(sel_nid)}'>" if sel_nid else ""
+    hidden = {"form": "node_save", "guild": guild.id, "chart": cid}
+    if sel_nid:
+        hidden["node"] = sel_nid
 
-    return f"""
-    <div class='card-x'>
-      <div class='og-section-title'>{_esc(title)}</div>
-      <form class='og-form' method='post' action='/cogs/organigram'>
-        <input type='hidden' name='csrf_token' value='{_esc(csrf)}'>
-        <input type='hidden' name='form' value='node_save'>
-        <input type='hidden' name='guild' value='{guild.id}'>
-        <input type='hidden' name='chart' value='{_esc(cid)}'>
-        {node_hidden}
-        <div class='row2'>
-          <div><label>Bezeichnung der Position</label>
-            <input name='label' value='{_esc(nd.get('label', ''))}' placeholder='z.&nbsp;B. Administration'>
-            <div class='hint'>Leer lassen, um den Rollennamen zu verwenden.</div></div>
-          <div><label>Übergeordnete Position</label>
-            <select name='parent'>{parent_opts}</select></div>
-        </div>
-        <div class='row2'>
-          <div><label>Verknüpfte Rolle (Mitglieder automatisch)</label>
-            <select name='role_id'>{role_opts}</select></div>
-          <div><label>Reihenfolge</label>
-            <input type='number' name='order' value='{int(nd.get('order', 0) or 0)}'>
-            <div class='hint'>Kleinere Zahl = weiter links/oben.</div></div>
-        </div>
-        <label>Zusätzliche Namen (eine Person pro Zeile)</label>
-        <textarea name='manual_names' placeholder='Max Mustermann&#10;Erika Beispiel'>{_esc(manual_text)}</textarea>
-        <div class='hint'>Für Personen ohne passende Discord-Rolle. Werden zusätzlich zu den
-          Rollenmitgliedern angezeigt.</div>
-        <div class='row2'>
-          <div><label>Emoji (nur Embed-/Text-Modus)</label>
-            <input name='emoji' value='{_esc(nd.get('emoji', ''))}' placeholder='👑'></div>
-          <div>
-            <div class='og-check' style='margin-top:32px'>
-              <input type='checkbox' name='use_color' {'checked' if has_color else ''}>
-              <span>Eigene Farbe statt Rollenfarbe</span></div>
-            <input type='color' name='color' value='{_esc(color_val)}'></div>
-        </div>
-        <div class='og-spacer'></div>
-        <div class='og-actions'>
-          <button class='btn-accent' type='submit'>Position speichern</button>
-          <a class='btn-accent og-btn-sm' href='/cogs/organigram?guild={guild.id}&chart={_esc(cid)}'
-             style='display:inline-flex;align-items:center'>Abbrechen / Neu</a>
-        </div>
-      </form>
-    </div>
-    """
+    fields = ui.grid(
+        ui.field("Bezeichnung", ui.text_input("label", nd.get("label", ""), placeholder="z. B. Administration"),
+                 help="Leer lassen, um den Namen der verknüpften Rolle zu verwenden."),
+        ui.field("Übergeordnete Position", ui.select("parent", parent_items, nd.get("parent"),
+                                                      none_label="— (oberste Ebene)"),
+                 help="Unter welcher Position diese im Organigramm hängt."),
+        ui.field("Verknüpfte Rolle", ui.select("role_id", role_items, nd.get("role_id"), none_label="— keine Rolle —"),
+                 help="Alle Mitglieder dieser Rolle erscheinen automatisch."),
+        ui.field("Reihenfolge", ui.number("order", int(nd.get("order", 0) or 0)),
+                 help="Kleinere Zahl = weiter links bzw. oben."),
+        ui.field("Zusätzliche Namen", ui.textarea("manual_names", manual_text, rows=3,
+                                                   placeholder="Max Mustermann\nErika Beispiel"),
+                 help="Eine Person pro Zeile – für Personen ohne passende Discord-Rolle. "
+                      "Werden zusätzlich zu den Rollenmitgliedern angezeigt.", wide=True),
+        ui.field("Emoji", ui.text_input("emoji", nd.get("emoji", ""), placeholder="👑"),
+                 help="Nur in der Embed- und Text-Ausgabe."),
+        ui.field("Farbe", ui.switch("use_color", "Eigene Farbe statt Rollenfarbe", has_color)
+                 + _color_input(ui, "color", color_val),
+                 help="Ohne eigene Farbe wird die Farbe der verknüpften Rolle genutzt."),
+    )
+    buttons = [ui.button("Position speichern" if is_edit else "Position anlegen", icon="bi-check2")]
+    if is_edit:
+        buttons.append(ui.button("Abbrechen", icon="bi-x-lg", kind="ghost",
+                                 href=f"/cogs/organigram?guild={guild.id}&chart={_esc(cid)}#positionen"))
+    title = f"Position bearbeiten: {_label_of(guild, nodes, sel_nid)}" if is_edit else "Neue Position"
+    return ui.card(
+        title,
+        ui.form("/cogs/organigram", fields + ui.actions(*buttons), csrf=csrf, hidden=hidden, savebar=is_edit),
+        icon="bi-pencil-square" if is_edit else "bi-plus-square",
+        desc="Bezeichnung oder Rolle ist Pflicht." if not is_edit else None,
+    )
+
+
+def _render_preview_post(ui, guild, cid, chart, where, csrf) -> str:
+    cache_bust = int(time.time())
+    preview_src = f"/cogs/organigram?guild={guild.id}&preview={_esc(cid)}&t={cache_bust}"
+    download_src = f"/cogs/organigram?guild={guild.id}&download={_esc(cid)}"
+    preview = ui.card(
+        "Vorschau",
+        f"<div class='text-center'><img class='img-fluid rounded' src='{preview_src}' alt='Vorschau' loading='lazy'></div>",
+        icon="bi-image", desc="So sieht die Bild-Ausgabe mit den aktuellen Einstellungen aus.",
+        actions=ui.button("PNG herunterladen", icon="bi-download", kind="ghost", small=True, href=download_src),
+    )
+    chan_items = [(c.id, f"#{c.name}") for c in guild.text_channels]
+    # Pflichtauswahl: ohne Kanal meldet der Browser das Feld direkt.
+    chan_select = ui.select("channel", chan_items, None, none_label="— Kanal wählen —").replace(
+        "<select ", "<select required ", 1)
+    current = (
+        "".join(ui.badge(w, "ok") + " " for w in where) if where else ui.badge("noch nicht gepostet", "muted")
+    )
+    post = ui.card(
+        "Posten",
+        ui.form(
+            "/cogs/organigram",
+            ui.grid(
+                ui.field("Kanal", chan_select),
+                ui.field("Ausgabe", ui.select("mode", _MODE_ITEMS, _MODE_FORM.get(chart.get("mode", "image"), "bild"))),
+                cols=1,
+            )
+            + ui.callout("Ein bereits geposteter Beitrag im selben Kanal wird aktualisiert statt neu erstellt. "
+                         "Mit aktiviertem Auto-Update bleibt er danach automatisch aktuell.", tone="info")
+            + ui.actions(ui.button("Posten / Aktualisieren", icon="bi-send")),
+            csrf=csrf, hidden={"form": "post", "guild": guild.id, "chart": cid},
+        )
+        + f"<div class='wc-sub'>Aktuell gepostet in</div><div>{current}</div>",
+        icon="bi-send",
+    )
+    return ui.columns(preview, post)
 
 
 # --------------------------------------------------------------------------- #

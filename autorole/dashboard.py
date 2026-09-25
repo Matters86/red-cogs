@@ -1,12 +1,12 @@
 """WebCore-Dashboard für den Autorole-Cog.
 
 Aufgaben:
-* GET  -> Seite rendern (Status, Hinweise, Einstellungen, Rollen-Auswahl)
+* GET  -> Seite rendern (Übersicht, Beitrittsrollen, Einstellungen, Rollen-Panels)
+* GET ?panel=<id> -> Editor für ein einzelnes Rollen-Panel
 * POST -> Formular speichern bzw. Aktion ausführen, danach Redirect (Post/Redirect/Get)
 
-Es werden nur die Theme-Klassen (card-x, stat, table, btn-accent …) plus die
-ohnehin geladenen Bootstrap-Klassen genutzt – kein eigenes Design. Die
-Oberfläche ist – wie im übrigen Repo – durchgängig deutsch.
+Aufbau mit dem UI-Baukasten von WebCore (``request.app["webcore"].ui``) – kein
+eigenes CSS. Die Oberfläche ist – wie im übrigen Repo – durchgängig deutsch.
 """
 
 from __future__ import annotations
@@ -19,43 +19,21 @@ from aiohttp import web
 from .panels import MAX_ROLES, MODES, STYLES, new_panel
 from .strings import LANGUAGES
 
-# Auf die Theme-Variablen abgestimmter Style nur für die Formularfelder.
-_FORM_STYLE = """
-<style>
-  .ar-form label{display:block;color:var(--muted);font-size:.8rem;
-    text-transform:uppercase;letter-spacing:.05em;margin:14px 0 5px}
-  .ar-form input,.ar-form select,.ar-form textarea{width:100%;background:var(--panel-2);color:var(--text);
-    border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-family:inherit;font-size:.92rem}
-  .ar-form select[multiple]{min-height:150px;padding:6px}
-  .ar-form select[multiple] option{padding:4px 6px;border-radius:6px}
-  .ar-form .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  .ar-form .hint{color:var(--muted);font-size:.78rem;margin-top:4px}
-  .ar-check{display:flex;align-items:center;gap:8px;margin-top:12px}
-  .ar-check input{width:auto}
-  .ar-flash{background:rgba(61,220,151,.12);border:1px solid var(--accent);
-    color:var(--text);border-radius:10px;padding:11px 14px;margin-bottom:18px}
-  .ar-warn{background:rgba(255,107,107,.08);border:1px solid var(--danger)}
-  .ar-section-title{font-family:"Archivo",sans-serif;font-weight:700;font-size:1.15rem;margin:0 0 14px}
-  .ar-spacer{height:26px}
-</style>
-"""
+_REASON_TEXT = {
+    "reason_default": "@everyone",
+    "reason_managed": "von Discord verwaltet",
+    "reason_too_high": "steht über meiner höchsten Rolle",
+}
+_BTN_COLORS = (("secondary", "Grau"), ("primary", "Blau"), ("success", "Grün"), ("danger", "Rot"))
+_SCREENING = (
+    ("auto", "Automatisch – Verifizierung erkennen"),
+    ("on", "Erst nach der Regel-Verifizierung"),
+    ("off", "Sofort beim Beitritt"),
+)
 
 
 def _esc(value) -> str:
     return html.escape(str(value)) if value is not None else ""
-
-
-def _options(items, selected_ids, *, none_label: str | None = None) -> str:
-    """``items``: Liste von (id, label). ``selected_ids``: Menge/Container von ids."""
-    sel = {str(s) for s in (selected_ids or [])}
-    out = []
-    if none_label is not None:
-        is_sel = " selected" if not sel else ""
-        out.append(f"<option value=''{is_sel}>{_esc(none_label)}</option>")
-    for ident, label in items:
-        is_sel = " selected" if str(ident) in sel else ""
-        out.append(f"<option value='{_esc(ident)}'{is_sel}>{_esc(label)}</option>")
-    return "".join(out)
 
 
 def _ids(values) -> list[int]:
@@ -66,17 +44,24 @@ def _ids(values) -> list[int]:
     return out
 
 
-def _role_options(cog, guild, selected_ids) -> str:
-    """Alle (nicht-@everyone) Rollen, höchste zuerst; nicht zuweisbare mit ⚠ markiert."""
-    sel = {str(s) for s in (selected_ids or [])}
+def _color(role):
+    return f"#{role.color.value:06x}" if getattr(role, "color", None) and role.color.value else None
+
+
+def _role_items(cog, guild, *, only_assignable=False, exclude=()):
+    """Rollen (ohne @everyone), höchste zuerst: [(id, label, farbe)].
+
+    Nicht zuweisbare Rollen werden mit ⚠ markiert (bzw. mit ``only_assignable`` weggelassen).
+    """
     out = []
     for r in sorted(guild.roles, key=lambda r: r.position, reverse=True):
-        if r.is_default():
+        if r.is_default() or r.id in exclude:
             continue
-        mark = "⚠ " if cog._assignable_reason(guild, r) is not None else ""
-        is_sel = " selected" if str(r.id) in sel else ""
-        out.append(f"<option value='{r.id}'{is_sel}>{mark}{_esc(r.name)}</option>")
-    return "".join(out)
+        bad = cog._assignable_reason(guild, r) is not None
+        if bad and only_assignable:
+            continue
+        out.append((r.id, ("⚠ " if bad else "") + r.name, _color(r)))
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -110,79 +95,60 @@ def _selected_guild(guilds, request):
 #  Rendern (GET)
 # --------------------------------------------------------------------------- #
 async def _render(cog, request):
+    ui = request.app["webcore"].ui
     guilds = await _visible_guilds(cog, request)
     guild = _selected_guild(guilds, request)
     if guild is None:
-        return {"title": "Autorole", "content": "<div class='card-x'>Der Bot ist auf keinem Server.</div>"}
+        return {"title": "Autorole", "content": ui.card(body=ui.empty("bi-hdd-network", "Keine Server verfügbar."))}
 
     conf = await cog.config.guild(guild).all()
     csrf = request.get("webcore_csrf", "")
 
-    flash = ""
-    if request.query.get("ok"):
-        flash = f"<div class='ar-flash'>{_esc(request.query.get('ok'))}</div>"
-
-    # Einzelnes Panel bearbeiten?
+    # Einzelnes Panel bearbeiten? (eigene, fokussierte Ansicht)
     panels = conf.get("panels", {})
     pid = request.query.get("panel")
     if pid and pid in panels:
-        content = _FORM_STYLE + flash + _render_panel_editor(cog, guild, panels[pid], csrf)
-        return {"title": f"Autorole · {panels[pid].get('name', 'Panel')}", "content": content}
+        return {
+            "title": f"Autorole · {panels[pid].get('name', 'Panel')}",
+            "content": _render_panel_editor(ui, cog, guild, panels[pid], csrf),
+        }
 
-    guild_opts = _options(
-        [(g.id, g.name) for g in guilds],
-        [guild.id],
-    )
-    guild_picker = f"""
-    <div class='card-x' style='margin-bottom:20px'>
-      <form method='get' action='/cogs/autorole' class='ar-form' style='margin:0'>
-        <label style='margin-top:0'>Server</label>
-        <select name='guild' onchange='this.form.submit()'>{guild_opts}</select>
-      </form>
-    </div>
-    """
     # Globaler Server-Wechsler von WebCore aktiv -> eigenes Dropdown ausblenden.
-    if request.get("wc_switcher"):
-        guild_picker = ""
+    guild_picker = ""
+    if not request.get("wc_switcher"):
+        guild_picker = ui.card(body=ui.form(
+            "/cogs/autorole",
+            ui.field("Server", ui.select("guild", [(g.id, g.name) for g in guilds], guild.id, autosubmit=True)),
+            csrf="", method="get",
+        ))
 
-    content = (
-        _FORM_STYLE
-        + flash
-        + guild_picker
-        + _render_stats(cog, guild, conf)
-        + _render_warnings(cog, guild, conf)
-        + _render_settings(cog, guild, conf, csrf)
-        + "<div class='ar-spacer'></div>"
-        + _render_apply(guild, conf, csrf, cog.apply_status.get(guild.id), cog.apply_running(guild.id))
-        + "<div class='ar-spacer'></div>"
-        + _render_panels(cog, guild, conf, csrf)
+    head = ui.hero(
+        "bi-person-plus", "",
+        "Vergibt neuen Mitgliedern und Bots automatisch Rollen, gibt <b>Sticky-Rollen</b> beim erneuten Beitritt "
+        "zurück und stellt <b>Rollen-Panels</b> bereit, über die sich Mitglieder selbst Rollen nehmen.",
+    ) + ui.stats([
+        ("Status", "Aktiv" if conf["enabled"] else "Aus", "bi-power", None, "ok" if conf["enabled"] else "warn"),
+        ("Mitglieder-Rollen", len(conf["join_roles"]), "bi-person-check", None, None),
+        ("Bot-Rollen", len(conf["bot_roles"]), "bi-robot", None, None),
+        ("Sticky-Rollen", len(conf["sticky_roles"]), "bi-pin-angle", None, None),
+        ("Rollen-Panels", len(panels), "bi-ui-checks-grid", None, None),
+    ])
+
+    body = (
+        ui.tab("uebersicht", "Übersicht", "bi-speedometer2", _render_overview(ui, cog, guild, conf, csrf))
+        + _render_settings(ui, cog, guild, conf, csrf)
+        + ui.tab("panels", "Rollen-Panels", "bi-ui-checks-grid", _render_panels(ui, guild, conf, csrf),
+                 count=len(panels))
     )
-    return {"title": "Autorole", "content": content}
+    return {"title": "Autorole", "content": guild_picker + head + body}
 
 
-def _render_stats(cog, guild, conf) -> str:
-    state = "Aktiv" if conf["enabled"] else "Aus"
-    gate = "Ja" if cog.gate_enabled(guild) else "Nein"
-    return (
-        "<div class='row g-3' style='margin-bottom:18px'>"
-        f"<div class='col-6 col-lg-3'><div class='card-x'><div class='stat-label'>Status</div><div class='stat'>{state}</div></div></div>"
-        f"<div class='col-6 col-lg-3'><div class='card-x'><div class='stat-label'>Mitglieder-Rollen</div><div class='stat'>{len(conf['join_roles'])}</div></div></div>"
-        f"<div class='col-6 col-lg-3'><div class='card-x'><div class='stat-label'>Bot-Rollen</div><div class='stat'>{len(conf['bot_roles'])}</div></div></div>"
-        f"<div class='col-6 col-lg-3'><div class='card-x'><div class='stat-label'>Regel-Verifizierung</div><div class='stat'>{gate}</div></div></div>"
-        "</div>"
-    )
-
-
-def _render_warnings(cog, guild, conf) -> str:
-    human = {
-        "reason_default": "@everyone",
-        "reason_managed": "von Discord verwaltet",
-        "reason_too_high": "steht über meiner höchsten Rolle",
-    }
-    notes = []
+def _setup_checks(cog, guild, conf) -> list[tuple[str, str]]:
+    """Einrichtungs-Prüfung: [(tone, text)]."""
+    out = []
     me = guild.me
     if me is None or not me.guild_permissions.manage_roles:
-        notes.append("Mir fehlt die Berechtigung <b>Rollen verwalten</b> – ohne sie kann ich keine Rollen vergeben.")
+        out.append(("bad", "Mir fehlt die Berechtigung <b>Rollen verwalten</b> – ohne sie kann ich keine Rollen vergeben."))
 
     bad, seen = [], set()
     for rid in list(conf["join_roles"]) + list(conf["bot_roles"]) + list(conf["sticky_roles"]):
@@ -194,386 +160,275 @@ def _render_warnings(cog, guild, conf) -> str:
             continue
         reason = cog._assignable_reason(guild, r)
         if reason is not None:
-            bad.append(f"{_esc(r.name)} ({human.get(reason, reason)})")
+            bad.append(f"{_esc(r.name)} ({_REASON_TEXT.get(reason, _esc(reason))})")
     if bad:
-        notes.append(
-            "Diese eingetragenen Rollen kann ich aktuell <b>nicht</b> vergeben (im Auswahlfeld mit ⚠ markiert): "
+        out.append((
+            "warn",
+            "Diese eingetragenen Rollen kann ich aktuell <b>nicht</b> vergeben (in der Auswahl mit ⚠ markiert): "
             + ", ".join(bad)
-            + ". Verschiebe meine Bot-Rolle in den Servereinstellungen weiter nach oben oder wähle andere Rollen."
-        )
+            + ". Verschiebe meine Bot-Rolle in den Servereinstellungen weiter nach oben oder wähle andere Rollen.",
+        ))
+    if not conf["enabled"]:
+        out.append(("info", "Die automatische Rollenvergabe ist <b>aus</b> – aktiviere sie im Reiter „Einstellungen“."))
+    if not conf["join_roles"]:
+        out.append(("info", "Noch keine <b>Mitglieder-Rollen</b> – trage sie im Reiter „Beitrittsrollen“ ein."))
+    return out
 
-    if not notes:
-        return ""
-    items = "".join(f"<li style='margin-bottom:6px'>{n}</li>" for n in notes)
-    return (
-        "<div class='card-x ar-warn' style='margin-bottom:18px'>"
-        "<div class='ar-section-title'>Hinweise</div>"
-        f"<ul style='margin:0;padding-left:18px;color:var(--text)'>{items}</ul>"
-        "</div>"
+
+def _render_overview(ui, cog, guild, conf, csrf) -> str:
+    checks = _setup_checks(cog, guild, conf)
+    if checks:
+        check_html = "".join(ui.callout(text, tone=tone) for tone, text in checks)
+    else:
+        check_html = ui.callout("Alles eingerichtet – neue Mitglieder erhalten ihre Rollen automatisch.", tone="ok")
+    screening = dict(_SCREENING).get(conf["screening"], conf["screening"])
+    gate = "aktiv" if cog.gate_enabled(guild) else "nicht aktiv"
+    setup = ui.card(
+        "Einrichtung", check_html, icon="bi-clipboard-check",
+        desc=f"Zeitpunkt: <b>{_esc(screening)}</b> · Regel-Verifizierung auf dem Server: <b>{gate}</b>",
     )
+    return setup + _render_apply(ui, guild, conf, csrf, cog.apply_status.get(guild.id), cog.apply_running(guild.id))
 
 
-def _render_settings(cog, guild, conf, csrf) -> str:
-    lang_opts = "".join(
-        f"<option value='{code}'{' selected' if conf['language'] == code else ''}>{_esc(name)}</option>"
-        for code, name in LANGUAGES.items()
-    )
-    scr = conf["screening"]
-    scr_opts = "".join(
-        f"<option value='{code}'{' selected' if scr == code else ''}>{_esc(label)}</option>"
-        for code, label in (
-            ("auto", "Automatisch – Verifizierung erkennen"),
-            ("on", "Erst nach der Regel-Verifizierung"),
-            ("off", "Sofort beim Beitritt"),
-        )
-    )
-    return f"""
-    <div class='card-x'>
-      <div class='ar-section-title'>Einstellungen</div>
-      <form class='ar-form' method='post' action='/cogs/autorole'>
-        <input type='hidden' name='csrf_token' value='{_esc(csrf)}'>
-        <input type='hidden' name='form' value='settings'>
-        <input type='hidden' name='guild' value='{guild.id}'>
-
-        <div class='ar-check' style='margin-top:0'>
-          <input type='checkbox' name='enabled' id='ar-enabled' {'checked' if conf['enabled'] else ''}>
-          <span>Automatische Rollenvergabe aktiv</span>
-        </div>
-
-        <div class='row2'>
-          <div>
-            <label>Sprache der Bot-Antworten</label>
-            <select name='language'>{lang_opts}</select>
-          </div>
-          <div>
-            <label>Vergabe-Zeitpunkt</label>
-            <select name='screening'>{scr_opts}</select>
-            <div class='hint'>„Erst nach der Regel-Verifizierung“ wirkt nur, wenn dieser Server Discords Screening nutzt.</div>
-          </div>
-        </div>
-
-        <div class='row2'>
-          <div>
-            <label>Verzögerung (Sekunden)</label>
-            <input name='delay' type='number' min='0' max='3600' value='{int(conf['delay'])}'>
-            <div class='hint'>Wartezeit nach dem Beitritt vor der Vergabe (0 = sofort).</div>
-          </div>
-          <div>
-            <label>Mindest-Kontoalter (Stunden)</label>
-            <input name='min_account_age' type='number' min='0' value='{int(conf['min_account_age'])}'>
-            <div class='hint'>Jüngere Konten erhalten keine Auto-Rollen (0 = aus). Schutz gegen Wegwerf-/Raid-Accounts.</div>
-          </div>
-        </div>
-
-        <label>Rollen für neue <b>Mitglieder</b></label>
-        <select name='join_roles' multiple>{_role_options(cog, guild, conf['join_roles'])}</select>
-        <div class='hint'>Mehrfachauswahl mit Strg/Cmd bzw. langem Tippen. Mit ⚠ markierte Rollen kann ich aktuell nicht vergeben.</div>
-
-        <label>Rollen für neue <b>Bots</b></label>
-        <select name='bot_roles' multiple>{_role_options(cog, guild, conf['bot_roles'])}</select>
-        <div class='hint'>Werden vergeben, sobald ein Bot dem Server hinzugefügt wird (ohne Verifizierung).</div>
-
-        <label><b>Sticky</b>-Rollen (kommen beim erneuten Beitritt zurück)</label>
-        <select name='sticky_roles' multiple>{_role_options(cog, guild, conf['sticky_roles'])}</select>
-        <div class='hint'>Diese Rollen merkt sich der Bot beim Verlassen und vergibt sie beim erneuten Beitritt wieder. <b>Keine</b> Mute-/Straf-Rolle hier eintragen.</div>
-
-        <div class='ar-spacer'></div>
-        <button class='btn-accent' type='submit'>Speichern</button>
-      </form>
-    </div>
-    """
-
-
-def _render_apply(guild, conf, csrf, status=None, running=False) -> str:
+def _render_apply(ui, guild, conf, csrf, status=None, running=False) -> str:
     configured = bool(conf["enabled"] and conf["join_roles"])
     ready = configured and not running
-    disabled = "" if ready else "disabled"
-    status_html = (
-        f"<div class='hint' style='margin-top:8px'>Letzter Lauf: {_esc(status)}</div>" if status else ""
+    note = "" if configured else ui.callout(
+        "Aktiviere das System und trage Mitglieder-Rollen ein, um diese Aktion zu nutzen.", tone="info")
+    status_html = f"<div class='wc-help'>Letzter Lauf: {_esc(status)}</div>" if status else ""
+    btn = ui.button("Jetzt anwenden", icon="bi-people", attrs={"disabled": not ready})
+    return ui.card(
+        "Auf bestehende Mitglieder anwenden",
+        note + ui.form(
+            "/cogs/autorole", ui.actions(btn, status_html),
+            csrf=csrf, hidden={"form": "applyall", "guild": guild.id},
+            confirm="Mitglieder-Rollen an alle bestehenden Mitglieder vergeben?",
+        ),
+        icon="bi-arrow-repeat",
+        desc="Vergibt die eingetragenen <b>Mitglieder-Rollen</b> nachträglich an alle Menschen auf dem Server, "
+             "die sie noch nicht haben. Auf großen Servern kann das einen Moment dauern.",
     )
-    note = (
-        ""
-        if configured
-        else "<div class='hint'>Aktiviere das System und trage Mitglieder-Rollen ein, um diese Aktion zu nutzen.</div>"
+
+
+def _render_settings(ui, cog, guild, conf, csrf) -> str:
+    """Ein Formular über zwei Reiter (Beitrittsrollen + Einstellungen) – beide speichern alles."""
+    help_ms = "Mit ⚠ markierte Rollen kann ich aktuell nicht vergeben."
+    roles = ui.card("Beim Beitritt vergeben", ui.grid(
+        ui.field("Rollen für neue Mitglieder",
+                 ui.select("join_roles", _role_items(cog, guild), conf["join_roles"], multiple=True,
+                           placeholder="Rollen suchen …"),
+                 help="Bekommt jeder Mensch, der dem Server beitritt. " + help_ms, wide=True),
+        ui.field("Rollen für neue Bots",
+                 ui.select("bot_roles", _role_items(cog, guild), conf["bot_roles"], multiple=True,
+                           placeholder="Rollen suchen …"),
+                 help="Werden vergeben, sobald ein Bot dem Server hinzugefügt wird (ohne Verifizierung).", wide=True),
+    ), icon="bi-person-plus", desc="Welche Rollen neue Mitglieder bzw. Bots automatisch erhalten.")
+
+    sticky = ui.card("Sticky-Rollen", ui.grid(
+        ui.field("Sticky-Rollen",
+                 ui.select("sticky_roles", _role_items(cog, guild), conf["sticky_roles"], multiple=True,
+                           placeholder="Rollen suchen …"),
+                 help="<b>Keine</b> Mute-/Straf-Rolle hier eintragen.", wide=True),
+    ), icon="bi-pin-angle",
+        desc="Merkt sich der Bot beim Verlassen und vergibt sie beim erneuten Beitritt wieder.")
+
+    general = ui.card("Allgemein", ui.switch(
+        "enabled", "Automatische Rollenvergabe aktiv", conf["enabled"],
+        desc="Aus = beim Beitritt werden keine Rollen vergeben (Rollen-Panels funktionieren weiter).",
+    ) + "<div class='wc-divider'></div>" + ui.grid(
+        ui.field("Sprache der Bot-Antworten", ui.select("language", list(LANGUAGES.items()), conf["language"])),
+        ui.field("Vergabe-Zeitpunkt", ui.select("screening", _SCREENING, conf["screening"]),
+                 help="„Erst nach der Regel-Verifizierung“ wirkt nur, wenn dieser Server Discords Screening nutzt."),
+    ), icon="bi-gear")
+
+    protect = ui.card("Zeitpunkt & Schutz", ui.grid(
+        ui.field("Verzögerung", ui.number("delay", int(conf["delay"]), min=0, max=3600, unit="Sekunden"),
+                 help="Wartezeit nach dem Beitritt vor der Vergabe (0 = sofort)."),
+        ui.field("Mindest-Kontoalter", ui.number("min_account_age", int(conf["min_account_age"]), min=0, unit="Stunden"),
+                 help="Jüngere Konten erhalten keine Auto-Rollen (0 = aus). Schutz gegen Wegwerf-/Raid-Accounts."),
+    ), icon="bi-shield-check")
+
+    save = ui.save_row("Einstellungen speichern")
+    return ui.form(
+        "/cogs/autorole",
+        ui.tab("rollen", "Beitrittsrollen", "bi-person-plus", roles + sticky + save,
+               count=len(conf["join_roles"]) + len(conf["bot_roles"]))
+        + ui.tab("einstellungen", "Einstellungen", "bi-sliders", general + protect + save),
+        csrf=csrf, hidden={"form": "settings", "guild": guild.id}, savebar=True,
     )
-    return f"""
-    <div class='card-x'>
-      <div class='ar-section-title'>Auf bestehende Mitglieder anwenden</div>
-      <p style='color:var(--muted);margin:0 0 12px'>Vergibt die eingetragenen <b>Mitglieder-Rollen</b> nachträglich an alle Menschen auf dem Server, die sie noch nicht haben. Auf großen Servern kann das einen Moment dauern.</p>
-      <form method='post' action='/cogs/autorole' onsubmit="return confirm('Mitglieder-Rollen an alle bestehenden Mitglieder vergeben?')">
-        <input type='hidden' name='csrf_token' value='{_esc(csrf)}'>
-        <input type='hidden' name='form' value='applyall'>
-        <input type='hidden' name='guild' value='{guild.id}'>
-        <button class='btn-accent' type='submit' {disabled}>Jetzt anwenden</button>
-        {note}
-        {status_html}
-      </form>
-    </div>
-    """
 
 
 # --------------------------------------------------------------------------- #
 #  Rollen-Panels (Übersicht + Editor)
 # --------------------------------------------------------------------------- #
-_BTN_COLORS = (("secondary", "Grau"), ("primary", "Blau"), ("success", "Grün"), ("danger", "Rot"))
-
-
-def _text_channel_options(guild, selected_id) -> str:
-    sel = str(selected_id) if selected_id else ""
-    out = [f"<option value=''{'' if sel else ' selected'}>— Kanal wählen —</option>"]
-    for c in sorted(getattr(guild, "text_channels", []), key=lambda c: c.position):
-        is_sel = " selected" if str(c.id) == sel else ""
-        out.append(f"<option value='{c.id}'{is_sel}>#{_esc(c.name)}</option>")
-    return "".join(out)
-
-
-def _addable_role_options(cog, guild, existing_ids) -> str:
-    out = ["<option value=''>— Rolle wählen —</option>"]
-    for r in sorted(guild.roles, key=lambda r: r.position, reverse=True):
-        if r.is_default() or r.id in existing_ids:
-            continue
-        if cog._assignable_reason(guild, r) is not None:
-            continue
-        out.append(f"<option value='{r.id}'>{_esc(r.name)}</option>")
-    return "".join(out)
-
-
-def _btn_color_options(selected) -> str:
-    return "".join(
-        f"<option value='{v}'{' selected' if selected == v else ''}>{lbl}</option>"
-        for v, lbl in _BTN_COLORS
+def _post_form(ui, guild, pid, csrf, label, *, small=False, kind="accent") -> str:
+    return ui.form(
+        "/cogs/autorole", ui.button(label, icon="bi-send", kind=kind, small=small),
+        csrf=csrf, hidden={"form": "panel_post", "guild": guild.id, "panel": pid},
     )
 
 
-def _render_panels(cog, guild, conf, csrf) -> str:
+def _render_panels(ui, guild, conf, csrf) -> str:
     panels = conf.get("panels", {})
-    rows = ""
+    rows = []
     for pid, p in panels.items():
         ch = guild.get_channel(int(p["channel_id"])) if p.get("channel_id") else None
-        chname = f"#{_esc(ch.name)}" if ch is not None else "<span style='color:var(--muted)'>—</span>"
         style = "Buttons" if p.get("style") == "buttons" else "Dropdown"
         mode = "Toggle" if p.get("mode") == "toggle" else "Nur vergeben"
         if p.get("unique"):
             mode += " · nur eine"
-        status = (
-            "<span style='color:var(--accent)'>● gepostet</span>"
-            if p.get("message_id")
-            else "<span style='color:var(--muted)'>○ nicht gepostet</span>"
-        )
-        edit_btn = (
-            f"<a class='btn-accent' style='padding:5px 10px;font-size:.82rem;text-decoration:none' "
-            f"href='/cogs/autorole?guild={guild.id}&panel={_esc(pid)}'>Bearbeiten</a>"
-        )
-        post_btn = (
-            f"<form method='post' action='/cogs/autorole' style='display:inline;margin-left:6px'>"
-            f"<input type='hidden' name='csrf_token' value='{_esc(csrf)}'>"
-            f"<input type='hidden' name='form' value='panel_post'>"
-            f"<input type='hidden' name='guild' value='{guild.id}'>"
-            f"<input type='hidden' name='panel' value='{_esc(pid)}'>"
-            f"<button class='btn-accent' type='submit' style='padding:5px 10px;font-size:.82rem'>Posten</button></form>"
-        )
-        rows += (
-            f"<tr><td><b>{_esc(p['name'])}</b>"
-            f"<div class='mono' style='color:var(--muted);font-size:.74rem'>{_esc(pid)}</div></td>"
-            f"<td>{chname}</td><td>{style}</td><td>{mode}</td>"
-            f"<td>{len(p.get('roles', []))}</td><td>{status}</td>"
-            f"<td style='white-space:nowrap'>{edit_btn}{post_btn}</td></tr>"
-        )
+        status = ui.badge("gepostet", "ok") if p.get("message_id") else ui.badge("nicht gepostet", "warn")
+        edit = ui.button("Bearbeiten", icon="bi-pencil", kind="ghost", small=True,
+                         href=f"/cogs/autorole?guild={guild.id}&panel={quote_plus(str(pid))}")
+        post = _post_form(ui, guild, pid, csrf, "Posten", small=True, kind="ghost")
+        rows.append(ui.row(
+            f"<div class='wc-cell-title'>{_esc(p['name'])}</div><div class='wc-cell-sub mono'>{_esc(pid)}</div>",
+            _esc("#" + ch.name) if ch is not None else "<span class='wc-muted'>—</span>",
+            style, _esc(mode), f"<span class='mono'>{len(p.get('roles', []))}</span>", status,
+            f"><div class='wc-row-actions'>{edit}{post}</div>",
+        ))
     if rows:
-        table = (
-            "<table class='table' style='margin-bottom:18px'><thead><tr>"
-            "<th>Name</th><th>Kanal</th><th>Stil</th><th>Verhalten</th><th>Rollen</th><th>Status</th><th></th>"
-            f"</tr></thead><tbody>{rows}</tbody></table>"
-        )
+        listing = ui.table(["Panel", "Kanal", "Darstellung", "Verhalten", "Rollen", "Status", ">"], rows,
+                           search=len(rows) > 5, search_placeholder="Panel suchen …", id="ar-panels")
     else:
-        table = "<p style='color:var(--muted);margin:0 0 16px'>Noch keine Panels – erstelle unten dein erstes.</p>"
-
-    create = (
-        "<form class='ar-form' method='post' action='/cogs/autorole' "
-        "style='display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap'>"
-        f"<input type='hidden' name='csrf_token' value='{_esc(csrf)}'>"
-        "<input type='hidden' name='form' value='panel_create'>"
-        f"<input type='hidden' name='guild' value='{guild.id}'>"
-        "<div style='flex:1;min-width:220px'><label style='margin-top:0'>Neues Panel – Name</label>"
-        "<input name='name' maxlength='100' placeholder='z. B. Farb-Rollen' required></div>"
-        "<button class='btn-accent' type='submit'>Panel erstellen</button></form>"
+        listing = ui.empty("bi-ui-checks-grid", "Noch keine Rollen-Panels.", "Lege unten dein erstes Panel an.")
+    table = ui.card(
+        "Deine Rollen-Panels", listing, icon="bi-ui-checks-grid",
+        desc="Eine gepostete Nachricht mit Buttons oder einem Dropdown, über die sich Mitglieder selbst Rollen "
+             "geben oder nehmen. Die Buttons funktionieren auch nach einem Neustart weiter.",
     )
-    return (
-        "<div class='card-x'><div class='ar-section-title'>Rollen-Panels "
-        f"<span style='color:var(--muted);font-weight:400;font-size:.9rem'>({len(panels)})</span></div>"
-        "<p style='color:var(--muted);margin:0 0 14px'>Eine gepostete Nachricht mit Buttons oder einem Dropdown, "
-        "über die sich Mitglieder selbst Rollen geben oder nehmen. Verhalten und Aussehen sind je Panel einstellbar; "
-        "die Buttons funktionieren auch nach einem Neustart weiter.</p>"
-        f"{table}{create}</div>"
-    )
+    create = ui.card("Neues Panel", ui.form(
+        "/cogs/autorole",
+        ui.grid(ui.field("Name", ui.text_input("name", placeholder="z. B. Farb-Rollen",
+                                               attrs={"maxlength": 100, "required": True}),
+                         help="Interner Name (erscheint nicht in der Nachricht). Kanal, Aussehen und Rollen legst du danach fest.",
+                         wide=True))
+        + ui.actions(ui.button("Panel erstellen", icon="bi-plus-lg")),
+        csrf=csrf, hidden={"form": "panel_create", "guild": guild.id},
+    ), icon="bi-plus-square")
+    return table + create
 
 
-def _render_panel_editor(cog, guild, panel, csrf) -> str:
+def _render_panel_editor(ui, cog, guild, panel, csrf) -> str:
     pid = panel["id"]
-    back = (
-        f"<a href='/cogs/autorole?guild={guild.id}' "
-        "style='color:var(--accent);text-decoration:none'>← Zurück zur Übersicht</a>"
-    )
-    style_opts = "".join(
-        f"<option value='{v}'{' selected' if panel.get('style') == v else ''}>{lbl}</option>"
-        for v, lbl in (("buttons", "Buttons"), ("select", "Dropdown (Select-Menü)"))
-    )
-    mode_opts = "".join(
-        f"<option value='{v}'{' selected' if panel.get('mode') == v else ''}>{lbl}</option>"
-        for v, lbl in (("toggle", "Toggle – Klick gibt/entfernt"), ("add", "Nur vergeben (kein Entfernen)"))
-    )
-    props = f"""
-    <div class='card-x'>
-      <div class='ar-section-title'>Eigenschaften</div>
-      <form class='ar-form' method='post' action='/cogs/autorole'>
-        <input type='hidden' name='csrf_token' value='{_esc(csrf)}'>
-        <input type='hidden' name='form' value='panel_save'>
-        <input type='hidden' name='guild' value='{guild.id}'>
-        <input type='hidden' name='panel' value='{_esc(pid)}'>
-        <div class='row2'>
-          <div><label style='margin-top:0'>Name</label>
-            <input name='name' maxlength='100' value='{_esc(panel.get("name"))}'></div>
-          <div><label style='margin-top:0'>Kanal</label>
-            <select name='channel_id'>{_text_channel_options(guild, panel.get("channel_id"))}</select></div>
-        </div>
-        <div class='row2'>
-          <div><label>Darstellung</label><select name='style'>{style_opts}</select></div>
-          <div><label>Klick-Verhalten</label><select name='mode'>{mode_opts}</select></div>
-        </div>
-        <div class='ar-check'>
-          <input type='checkbox' name='unique' id='ar-uniq' {'checked' if panel.get('unique') else ''}>
-          <span>Nur <b>eine</b> Rolle aus diesem Panel gleichzeitig (z. B. Farb-Rollen)</span>
-        </div>
-        <div class='ar-check'>
-          <input type='checkbox' name='use_embed' id='ar-embed' {'checked' if panel.get('use_embed') else ''}>
-          <span>Als Embed posten (mit Titel &amp; Farbe)</span>
-        </div>
-        <div class='row2'>
-          <div><label>Titel</label><input name='title' maxlength='256' value='{_esc(panel.get("title"))}'></div>
-          <div><label>Embed-Farbe (Hex)</label>
-            <input name='color' maxlength='7' placeholder='#3ddc97' value='{_esc(panel.get("color"))}'></div>
-        </div>
-        <label>Text</label>
-        <textarea name='text' rows='3'>{_esc(panel.get("text"))}</textarea>
-        <div class='ar-spacer'></div>
-        <button class='btn-accent' type='submit'>Eigenschaften speichern</button>
-      </form>
-    </div>
-    """
+    back = ui.button("Zurück zu den Panels", icon="bi-arrow-left", kind="ghost",
+                     href=f"/cogs/autorole?guild={guild.id}#panels")
+    head = ui.hero("bi-ui-checks-grid", panel.get("name") or "Panel",
+                   "Einstellungen und Rollen dieses Panels. Ist es gepostet, werden Änderungen automatisch "
+                   "in die Nachricht übernommen.")
 
-    role_rows = ""
+    # Nachricht: Status + Posten/Löschen – über den Reitern, damit immer sichtbar.
+    posted = bool(panel.get("message_id"))
+    delete = ui.form(
+        "/cogs/autorole", ui.button("Panel löschen", icon="bi-trash", kind="danger"),
+        csrf=csrf, hidden={"form": "panel_delete", "guild": guild.id, "panel": pid},
+        confirm="Panel wirklich löschen? Die gepostete Nachricht wird ebenfalls entfernt.",
+    )
+    message = ui.card(
+        "Nachricht im Kanal",
+        ui.actions(_post_form(ui, guild, pid, csrf, "Nachricht aktualisieren" if posted else "Jetzt posten"), delete),
+        icon="bi-send", tone="ok" if posted else "warn",
+        desc="Gepostet – Änderungen an Eigenschaften und Rollen werden automatisch in die Nachricht übernommen."
+        if posted else
+        "Noch nicht gepostet. Wähle einen Kanal, speichere die Eigenschaften und klicke dann „Jetzt posten“.",
+    )
+
+    props = ui.form(
+        "/cogs/autorole",
+        ui.card("Grunddaten", ui.grid(
+            ui.field("Name", ui.text_input("name", panel.get("name"), attrs={"maxlength": 100}),
+                     help="Interner Name – erscheint nicht in der Nachricht."),
+            ui.field("Kanal", ui.select("channel_id", [(c.id, f"#{c.name}") for c in sorted(
+                getattr(guild, "text_channels", []), key=lambda c: getattr(c, "position", 0))],
+                panel.get("channel_id"), none_label="— Kanal wählen —"),
+                help="Hier wird das Panel gepostet."),
+            ui.field("Darstellung", ui.select("style", [("buttons", "Buttons"), ("select", "Dropdown (Select-Menü)")],
+                                               panel.get("style"))),
+            ui.field("Klick-Verhalten", ui.select("mode", [("toggle", "Toggle – Klick gibt/entfernt"),
+                                                            ("add", "Nur vergeben (kein Entfernen)")],
+                                                   panel.get("mode"))),
+        ) + "<div class='wc-switches'>" + ui.switch(
+            "unique", "Nur eine Rolle gleichzeitig", panel.get("unique"),
+            desc="Wählt jemand eine neue Rolle, wird die bisherige aus diesem Panel entfernt (z. B. Farb-Rollen).",
+        ) + "</div>", icon="bi-sliders")
+        + ui.card("Aussehen der Nachricht", ui.switch(
+            "use_embed", "Als Embed posten", panel.get("use_embed"),
+            desc="Mit Titel und farbigem Rand. Aus = einfache Textnachricht.",
+        ) + "<div class='wc-divider'></div>" + ui.grid(
+            ui.field("Titel", ui.text_input("title", panel.get("title"), attrs={"maxlength": 256})),
+            ui.field("Embed-Farbe", ui.text_input("color", panel.get("color"), placeholder="#3ddc97",
+                                                  attrs={"maxlength": 7}),
+                     help="Hex-Wert, z. B. <code>#3ddc97</code>. Leer = Standardfarbe."),
+            ui.field("Text", ui.textarea("text", panel.get("text"), rows=3), wide=True),
+        ), icon="bi-card-heading")
+        + ui.save_row("Eigenschaften speichern"),
+        csrf=csrf, hidden={"form": "panel_save", "guild": guild.id, "panel": pid}, savebar=True,
+    )
+
+    roles = panel.get("roles", [])
+    return (
+        f"<div class='wc-toolbar'>{back}</div>" + head + message
+        + ui.tab("eigenschaften", "Eigenschaften", "bi-sliders", props)
+        + ui.tab("rollen", "Rollen", "bi-person-badge", _render_panel_roles(ui, cog, guild, panel, csrf),
+                 count=len(roles))
+    )
+
+
+def _render_panel_roles(ui, cog, guild, panel, csrf) -> str:
+    """Je Rolle eine Karte (Anzeige bearbeiten / entfernen) plus „Rolle hinzufügen“."""
+    pid = panel["id"]
+    blocks = []
     for r in panel.get("roles", []):
         role = guild.get_role(int(r["role_id"]))
+        hidden = {"guild": guild.id, "panel": pid, "role_id": r["role_id"]}
         if role is None:
-            rname = f"<i style='color:var(--danger)'>Unbekannt ({_esc(r['role_id'])})</i>"
+            title, tone, desc = f"Unbekannte Rolle ({r['role_id']})", "bad", "Die Rolle existiert nicht mehr – entferne sie."
+        elif cog._assignable_reason(guild, role) is not None:
+            title, tone, desc = role.name, "warn", ui.badge("⚠ kann ich aktuell nicht vergeben", "warn")
         else:
-            warn = " ⚠" if cog._assignable_reason(guild, role) is not None else ""
-            rname = f"{_esc(role.name)}{warn}"
-        role_rows += f"""
-        <tr>
-          <td style='min-width:110px'><b>{rname}</b></td>
-          <td>
-            <form method='post' action='/cogs/autorole'
-              style='display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0'>
-              <input type='hidden' name='csrf_token' value='{_esc(csrf)}'>
-              <input type='hidden' name='form' value='panel_role_update'>
-              <input type='hidden' name='guild' value='{guild.id}'>
-              <input type='hidden' name='panel' value='{_esc(pid)}'>
-              <input type='hidden' name='role_id' value='{_esc(r["role_id"])}'>
-              <input name='label' maxlength='80' placeholder='Label'
-                value='{_esc(r.get("label"))}' style='width:130px'>
-              <input name='emoji' maxlength='64' placeholder='Emoji'
-                value='{_esc(r.get("emoji"))}' style='width:80px'>
-              <select name='style' style='width:90px'>{_btn_color_options(r.get("style"))}</select>
-              <input name='description' maxlength='100' placeholder='Beschreibung (Dropdown)'
-                value='{_esc(r.get("description"))}' style='width:190px'>
-              <button class='btn-accent' type='submit' style='padding:6px 10px;font-size:.82rem'>Speichern</button>
-            </form>
-          </td>
-          <td>
-            <form method='post' action='/cogs/autorole' style='margin:0'>
-              <input type='hidden' name='csrf_token' value='{_esc(csrf)}'>
-              <input type='hidden' name='form' value='panel_role_remove'>
-              <input type='hidden' name='guild' value='{guild.id}'>
-              <input type='hidden' name='panel' value='{_esc(pid)}'>
-              <input type='hidden' name='role_id' value='{_esc(r["role_id"])}'>
-              <button type='submit' style='background:transparent;border:1px solid var(--danger);
-                color:var(--danger);border-radius:8px;padding:6px 10px;font-size:.82rem;cursor:pointer'>Entfernen</button>
-            </form>
-          </td>
-        </tr>
-        """
-    if role_rows:
-        roles_table = (
-            "<table class='table'><thead><tr><th>Rolle</th><th>Anzeige</th><th></th></tr></thead>"
-            f"<tbody>{role_rows}</tbody></table>"
+            title, tone, desc = role.name, None, None
+        remove = ui.form(
+            "/cogs/autorole",
+            ui.button("Entfernen", icon="bi-x-lg", kind="danger", small=True),
+            csrf=csrf, hidden={"form": "panel_role_remove", **hidden},
+            confirm="Rolle aus dem Panel entfernen?",
         )
-    else:
-        roles_table = "<p style='color:var(--muted);margin:0 0 8px'>Noch keine Rollen in diesem Panel.</p>"
+        update = ui.form(
+            "/cogs/autorole",
+            ui.grid(
+                ui.field("Label", ui.text_input("label", r.get("label"), placeholder="Label", attrs={"maxlength": 80})),
+                ui.field("Emoji", ui.text_input("emoji", r.get("emoji"), placeholder="🎮 oder <:name:id>",
+                                                attrs={"maxlength": 64})),
+                ui.field("Button-Farbe", ui.select("style", _BTN_COLORS, r.get("style"))),
+                ui.field("Beschreibung", ui.text_input("description", r.get("description"),
+                                                       placeholder="nur im Dropdown sichtbar",
+                                                       attrs={"maxlength": 100})),
+                cols=4,
+            ) + ui.actions(ui.button("Speichern", icon="bi-check2", small=True)),
+            csrf=csrf, hidden={"form": "panel_role_update", **hidden}, savebar=True,
+        )
+        blocks.append(ui.card(title, update, icon="bi-tag", tone=tone, desc=desc, actions=remove))
+
+    if not blocks:
+        blocks.append(ui.card(body=ui.empty("bi-person-badge", "Noch keine Rollen in diesem Panel.",
+                                            "Füge unten die erste Rolle hinzu.")))
 
     existing_ids = {int(r["role_id"]) for r in panel.get("roles", [])}
-    add_role = f"""
-    <form class='ar-form' method='post' action='/cogs/autorole' style='margin-top:14px'>
-      <input type='hidden' name='csrf_token' value='{_esc(csrf)}'>
-      <input type='hidden' name='form' value='panel_role_add'>
-      <input type='hidden' name='guild' value='{guild.id}'>
-      <input type='hidden' name='panel' value='{_esc(pid)}'>
-      <div class='row2'>
-        <div><label style='margin-top:0'>Rolle hinzufügen</label>
-          <select name='role_id'>{_addable_role_options(cog, guild, existing_ids)}</select></div>
-        <div><label style='margin-top:0'>Label (optional)</label>
-          <input name='label' maxlength='80' placeholder='Standard: Rollenname'></div>
-      </div>
-      <div class='row2'>
-        <div><label>Emoji (optional)</label>
-          <input name='emoji' maxlength='64' placeholder='🎮 oder &lt;:name:id&gt;'></div>
-        <div><label>Button-Farbe</label><select name='style'>{_btn_color_options("secondary")}</select></div>
-      </div>
-      <div class='ar-spacer'></div>
-      <button class='btn-accent' type='submit'>Rolle hinzufügen</button>
-      <div class='hint'>Max. {MAX_ROLES} Rollen pro Panel. Mit ⚠ markierte Rollen kann ich aktuell nicht vergeben.</div>
-    </form>
-    """
-    roles_card = f"<div class='card-x'><div class='ar-section-title'>Rollen</div>{roles_table}{add_role}</div>"
-
-    posted = bool(panel.get("message_id"))
-    actions = f"""
-    <div class='card-x'>
-      <div class='ar-section-title'>Aktionen</div>
-      <div style='display:flex;gap:10px;flex-wrap:wrap'>
-        <form method='post' action='/cogs/autorole' style='margin:0'>
-          <input type='hidden' name='csrf_token' value='{_esc(csrf)}'>
-          <input type='hidden' name='form' value='panel_post'>
-          <input type='hidden' name='guild' value='{guild.id}'>
-          <input type='hidden' name='panel' value='{_esc(pid)}'>
-          <button class='btn-accent' type='submit'>{'Nachricht aktualisieren' if posted else 'Jetzt posten'}</button>
-        </form>
-        <form method='post' action='/cogs/autorole' style='margin:0'
-          onsubmit="return confirm('Panel wirklich löschen? Die gepostete Nachricht wird ebenfalls entfernt.')">
-          <input type='hidden' name='csrf_token' value='{_esc(csrf)}'>
-          <input type='hidden' name='form' value='panel_delete'>
-          <input type='hidden' name='guild' value='{guild.id}'>
-          <input type='hidden' name='panel' value='{_esc(pid)}'>
-          <button type='submit' style='background:transparent;border:1px solid var(--danger);
-            color:var(--danger);border-radius:9px;padding:9px 16px;cursor:pointer'>Panel löschen</button>
-        </form>
-      </div>
-      <div class='hint' style='margin-top:10px'>{
-        'Gepostet – Änderungen an Eigenschaften und Rollen werden automatisch in die Nachricht übernommen.'
-        if posted else
-        'Noch nicht gepostet. Wähle oben einen Kanal, speichere die Eigenschaften und klicke dann „Jetzt posten".'
-      }</div>
-    </div>
-    """
-    return (
-        back
-        + "<div style='height:14px'></div>"
-        + props
-        + "<div class='ar-spacer'></div>"
-        + roles_card
-        + "<div class='ar-spacer'></div>"
-        + actions
-    )
+    add = ui.card("Rolle hinzufügen", ui.form(
+        "/cogs/autorole",
+        ui.grid(
+            ui.field("Rolle", ui.select("role_id", _role_items(cog, guild, only_assignable=True, exclude=existing_ids),
+                                        none_label="— Rolle wählen —"),
+                     help="Nur Rollen, die ich vergeben kann."),
+            ui.field("Label (optional)", ui.text_input("label", placeholder="Standard: Rollenname",
+                                                       attrs={"maxlength": 80})),
+            ui.field("Emoji (optional)", ui.text_input("emoji", placeholder="🎮 oder <:name:id>",
+                                                       attrs={"maxlength": 64})),
+            ui.field("Button-Farbe", ui.select("style", _BTN_COLORS, "secondary")),
+        ) + ui.actions(ui.button("Rolle hinzufügen", icon="bi-plus-lg")),
+        csrf=csrf, hidden={"form": "panel_role_add", "guild": guild.id, "panel": pid},
+    ), icon="bi-plus-square", desc=f"Max. {MAX_ROLES} Rollen pro Panel.")
+    return "".join(blocks) + add
 
 
 # --------------------------------------------------------------------------- #

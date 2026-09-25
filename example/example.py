@@ -1,5 +1,3 @@
-import html as html_lib
-
 from redbot.core import Config, commands
 from redbot.core.bot import Red
 
@@ -48,12 +46,17 @@ class Example(commands.Cog):
           (Rollen-Rechte aus „Zugriff & Rollen“).
         * Den gewählten Server liest man aus ``?guild=`` – WebCore setzt ihn automatisch und
           zeigt den globalen Server-Wechsler; ein eigenes Dropdown ist nicht nötig.
-        * Jedes Formular: ``csrf_token`` + ``guild`` mitsenden, danach PRG mit ``?ok=<Text>``.
+        * Jedes Formular: ``csrf_token`` + ``guild`` mitsenden, danach PRG mit ``?ok=<Text>``
+          (WebCore zeigt den Text als Hinweis-Toast).
+        * Markup nur über den UI-Baukasten ``webcore.ui`` – er escaped alle Parameter,
+          bringt Reiter, Karten, Schalter & Speicherleiste mit; kein eigenes CSS nötig.
         """
-        webcore = request.app.get("webcore")
-        guilds = await webcore.visible_guilds(request) if webcore is not None else []
+        webcore = request.app["webcore"]
+        ui = webcore.ui
+        guilds = await webcore.visible_guilds(request)
         by_id = {g.id: g for g in guilds}
 
+        # --- Speichern (POST) -> danach Redirect (Post/Redirect/Get) ---
         if request.method == "POST":
             form = await request.post()
             raw = form.get("guild") or ""
@@ -63,25 +66,41 @@ class Example(commands.Cog):
             await self.config.guild(guild).note.set((form.get("note") or "").strip()[:500])
             return {"redirect": f"/cogs/example?guild={guild.id}&ok=Notiz+gespeichert"}
 
+        # --- Anzeigen (GET) ---
         raw = request.query.get("guild") or ""
         guild = by_id.get(int(raw)) if raw.isdigit() else (guilds[0] if guilds else None)
         if guild is None:
-            return {"title": "Example", "content": "<div class='card-x'>Keine Server verfügbar.</div>"}
+            return {"title": "Example", "content": ui.card(body=ui.empty("bi-hdd-network", "Keine Server verfügbar."))}
         note = await self.config.guild(guild).note()
-        csrf = html_lib.escape(request.get("webcore_csrf", ""))
-        content = (
-            "<div class='card-x'>"
-            f"<div class='section-title'>{html_lib.escape(guild.name)}</div>"
-            f"<p style='color:var(--muted)'>Mitglieder: <span class='mono'>{guild.member_count}</span></p>"
-            "<form method='post' action='/cogs/example' style='display:flex;gap:10px;flex-wrap:wrap'>"
-            f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-            f"<input type='hidden' name='guild' value='{guild.id}'>"
-            f"<input name='note' class='form-control' style='max-width:420px' value='{html_lib.escape(note or '')}' "
-            "placeholder='Notiz für diesen Server'>"
-            "<button class='btn-accent' type='submit'>Speichern</button>"
-            "</form></div>"
+
+        # Kopf: Symbol + kurzer Satz (Titel leer – die Kopfzeile zeigt den Seitennamen schon).
+        # ``text`` ist HTML -> eigene Werte mit ``ui.esc`` escapen.
+        head = ui.hero("bi-stars", "", f"Beispielseite für <b>{ui.esc(guild.name)}</b> – Vorlage für eigene Cogs.")
+        # Kennzahlen: (Label, Wert, Icon, Hinweis, Ton ok/warn/bad/info)
+        stats = ui.stats([
+            ("Mitglieder", guild.member_count, "bi-people", None, None),
+            ("Notiz", "gesetzt" if note else "leer", "bi-sticky", None, "ok" if note else None),
+        ])
+        # Formular: CSRF-Token setzt ui.form selbst, weitere Felder über ``hidden``.
+        # ``savebar=True`` blendet bei Änderungen die Leiste „Ungespeicherte Änderungen“ ein.
+        # Weitere Bausteine für ui.grid(...):
+        #   ui.field("Aktiv", ui.switch("enabled", "Modul aktiv", conf["enabled"]))  # angehakt = Feld gesendet
+        #   ui.field("Limit", ui.number("limit", conf["limit"], min=1, max=10, unit="pro Tag"))
+        #   ui.field("Kanal", ui.select("channel", [(c.id, f"#{c.name}") for c in guild.text_channels],
+        #                               conf["channel"], none_label="— keiner —"))
+        #   ui.select(..., multiple=True) wird automatisch zur Chip-Auswahl mit Suche.
+        # Mehrere Bereiche? Jede ``ui.tab(key, titel, icon, inhalt)``-Sektion wird zu einem Reiter.
+        form = ui.form(
+            "/cogs/example",
+            ui.grid(
+                ui.field("Notiz", ui.text_input("note", note or "", placeholder="Notiz für diesen Server",
+                                                attrs={"maxlength": 500}),
+                         help="Wird mit <code>[p]example note</code> angezeigt (max. 500 Zeichen).", wide=True),
+            ) + ui.save_row(),
+            csrf=request.get("webcore_csrf", ""), hidden={"guild": guild.id}, savebar=True,
         )
-        return {"title": "Example", "content": content}
+        card = ui.card("Server-Notiz", form, icon="bi-sticky", desc="Eine kurze Notiz, die pro Server gespeichert wird.")
+        return {"title": "Example", "content": head + stats + card}
 
     # ----------------------------------------------------------------- #
     #  Befehle (hybrid = Text + Slash)

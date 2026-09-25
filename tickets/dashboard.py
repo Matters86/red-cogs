@@ -5,8 +5,8 @@ Drei Aufgaben:
 * POST -> Formular speichern, danach Redirect (Post/Redirect/Get)
 * GET ?transcript=<num> -> gespeichertes Transcript als eigene Seite ausliefern
 
-Es werden nur die Theme-Klassen (card-x, table, stat, …) plus die ohnehin im
-Theme geladenen Bootstrap-Formularklassen genutzt – kein eigenes Design.
+Aufbau mit dem UI-Baukasten von WebCore (``request.app["webcore"].ui``): Reiter
+Übersicht · Panels · Einstellungen · Texte · Transcripts – kein eigenes CSS.
 """
 
 from __future__ import annotations
@@ -17,29 +17,6 @@ import uuid
 from aiohttp import web
 
 from .strings import LANGUAGES, OVERRIDABLE_KEYS, STRINGS
-
-# Kleiner, auf die Theme-Variablen abgestimmter Style nur für Formularfelder.
-_FORM_STYLE = """
-<style>
-  .tk-form label{display:block;color:var(--muted);font-size:.8rem;
-    text-transform:uppercase;letter-spacing:.05em;margin:14px 0 5px}
-  .tk-form input,.tk-form select,.tk-form textarea{width:100%;
-    background:var(--panel-2);color:var(--text);border:1px solid var(--border);
-    border-radius:9px;padding:9px 11px;font-family:inherit;font-size:.92rem}
-  .tk-form textarea{min-height:78px;resize:vertical;font-family:"IBM Plex Mono",monospace}
-  .tk-form select[multiple]{min-height:120px}
-  .tk-form .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  .tk-form .hint{color:var(--muted);font-size:.78rem;margin-top:4px}
-  .tk-check{display:flex;align-items:center;gap:8px;margin-top:12px}
-  .tk-check input{width:auto}
-  .tk-flash{background:rgba(61,220,151,.12);border:1px solid var(--accent);
-    color:var(--text);border-radius:10px;padding:11px 14px;margin-bottom:18px}
-  .tk-section-title{font-family:"Archivo",sans-serif;font-weight:700;
-    font-size:1.15rem;margin:0 0 14px}
-  .tk-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px}
-  .tk-spacer{height:26px}
-</style>
-"""
 
 
 def _esc(value) -> str:
@@ -89,31 +66,32 @@ def _selected_guild(guilds, request):
     return guilds[0] if guilds else None
 
 
+_TYPE_LABEL = {"category": "Eigener Kanal", "thread": "Privater Thread", "forum": "Forum-Beitrag"}
+
+
+def _role_items(guild):
+    return [
+        (r.id, r.name, f"#{r.color.value:06x}" if getattr(r, "color", None) and r.color.value else None)
+        for r in sorted(guild.roles, key=lambda r: r.position, reverse=True) if not r.is_default()
+    ]
+
+
 # --------------------------------------------------------------------------- #
 #  Rendern (GET)
 # --------------------------------------------------------------------------- #
 async def _render(cog, request):
+    ui = request.app["webcore"].ui
     guilds = await _visible_guilds(cog, request)
     guild = _selected_guild(guilds, request)
     if guild is None:
-        return {"title": "Tickets", "content": "<div class='card-x'>Keine Server verfügbar.</div>"}
+        return {"title": "Tickets", "content": ui.card(body=ui.empty("bi-hdd-network", "Keine Server verfügbar."))}
 
     conf = await cog.config.guild(guild).all()
     csrf = request.get("webcore_csrf", "")
-
-    # Auswahllisten
-    guild_opts = _options(
-        [(g.id, g.name) for g in guilds],
-        [guild.id],
-    )
-    role_items = [(r.id, r.name) for r in sorted(guild.roles, key=lambda r: r.position, reverse=True) if not r.is_default()]
+    role_items = _role_items(guild)
     text_items = [(c.id, f"#{c.name}") for c in guild.text_channels]
     cat_items = [(c.id, c.name) for c in guild.categories]
     forum_items = [(c.id, f"#{c.name}") for c in getattr(guild, "forums", [])]
-
-    flash = ""
-    if request.query.get("ok"):
-        flash = f"<div class='tk-flash'>{_esc(request.query.get('ok'))}</div>"
 
     # Einzelnes Panel bearbeiten? (eigene, fokussierte Ansicht)
     pid = request.query.get("panel")
@@ -122,215 +100,219 @@ async def _render(cog, request):
         if panel is not None:
             return {
                 "title": "Tickets · Panel bearbeiten",
-                "content": _FORM_STYLE + flash + _render_panel_editor(
-                    guild, panel, text_items, role_items, cat_items, csrf
-                ),
+                "content": _render_panel_editor(ui, guild, panel, text_items, role_items, cat_items, csrf),
             }
 
-    lang_opts = "".join(
-        f"<option value='{code}'{' selected' if conf['language'] == code else ''}>{_esc(name)}</option>"
-        for code, name in LANGUAGES.items()
+    stats = conf.get("stats") or {}
+    tickets = conf.get("tickets") or {}
+    open_now = sum(1 for r in tickets.values() if r.get("status") == "open")
+    closed = int(stats.get("closed", 0))
+    avg = int(stats.get("duration_sum", 0)) // closed if closed else 0
+    panels = conf.get("panels", [])
+    transcripts = conf.get("transcripts", [])
+
+    head = ui.hero(
+        "bi-life-preserver", "",
+        "Mitglieder öffnen Tickets über <b>Panels</b> (Buttons oder Dropdown). Hier legst du fest, "
+        "wer Tickets sieht und bearbeitet, wo sie entstehen und wie die Panels aussehen.",
+    ) + ui.stats([
+        ("Offen", open_now, "bi-envelope-open", None, "ok" if open_now else None),
+        ("Geöffnet gesamt", int(stats.get("opened", 0)), "bi-inbox", None, None),
+        ("Geschlossen", closed, "bi-archive", None, None),
+        ("Ø Laufzeit", _fmt_duration(avg), "bi-stopwatch", None, None),
+        ("Panels", len(panels), "bi-window-stack", None, None),
+    ])
+
+    body = (
+        ui.tab("uebersicht", "Übersicht", "bi-speedometer2", await _render_overview(ui, cog, guild, conf))
+        + ui.tab("panels", "Panels", "bi-window-stack", _render_panels(ui, guild, conf, text_items, csrf), count=len(panels))
+        + _render_settings(ui, guild, conf, role_items, text_items, cat_items, forum_items, csrf)
+        + ui.tab("transcripts", "Transcripts", "bi-journal-text", _render_transcripts(ui, guild, conf), count=len(transcripts))
     )
-
-    def type_sel(value):
-        return " selected" if conf["ticket_type"] == value else ""
-
-    overrides = conf.get("messages") or {}
-    override_fields = ""
-    for key in OVERRIDABLE_KEYS:
-        current = overrides.get(key, "")
-        default = STRINGS["de"].get(key, "")
-        override_fields += (
-            f"<label>{_esc(key)}</label>"
-            f"<input name='ovr_{key}' value='{_esc(current)}' placeholder='{_esc(default)}'>"
-        )
-
-    settings_form = f"""
-    <div class='card-x'>
-      <div class='tk-section-title'>Einstellungen</div>
-      <form class='tk-form' method='post' action='/cogs/tickets'>
-        <input type='hidden' name='csrf_token' value='{csrf}'>
-        <input type='hidden' name='form' value='settings'>
-        <input type='hidden' name='guild' value='{guild.id}'>
-
-        <div class='row2'>
-          <div>
-            <label>Sprache</label>
-            <select name='language'>{lang_opts}</select>
-          </div>
-          <div>
-            <label>Ticket-Typ</label>
-            <select name='ticket_type'>
-              <option value='category'{type_sel('category')}>Kategorie (eigener Kanal)</option>
-              <option value='thread'{type_sel('thread')}>Privater Thread</option>
-              <option value='forum'{type_sel('forum')}>Forum-Beitrag</option>
-            </select>
-          </div>
-        </div>
-
-        <label>Support-Rollen (mitlesen &amp; übernehmen)</label>
-        <select name='support_roles' multiple>{_options(role_items, conf['support_roles'])}</select>
-
-        <label>Admin-Rollen (volle Rechte)</label>
-        <select name='admin_roles' multiple>{_options(role_items, conf['admin_roles'])}</select>
-
-        <label>View-Rollen (nur lesen, v. a. im Kategorie-Modus)</label>
-        <select name='view_roles' multiple>{_options(role_items, conf['view_roles'])}</select>
-
-        <div class='row2'>
-          <div>
-            <label>Ping-Rollen (Benachrichtigung beim Öffnen)</label>
-            <select name='ping_roles' multiple>{_options(role_items, conf['ping_roles'])}</select>
-          </div>
-          <div>
-            <label>Inhaber-Rolle (automatisch an Ersteller)</label>
-            <select name='owner_role'>{_options(role_items, [conf['owner_role']] if conf['owner_role'] else [], none_label='— keine —')}</select>
-          </div>
-        </div>
-
-        <div class='row2'>
-          <div>
-            <label>Kategorie für offene Tickets</label>
-            <select name='category_open'>{_options(cat_items, [conf['category_open']] if conf['category_open'] else [], none_label='— keine —')}</select>
-          </div>
-          <div>
-            <label>Kategorie für geschlossene Tickets</label>
-            <select name='category_close'>{_options(cat_items, [conf['category_close']] if conf['category_close'] else [], none_label='— keine —')}</select>
-          </div>
-        </div>
-
-        <div class='row2'>
-          <div>
-            <label>Basis-Kanal (Thread-Modus)</label>
-            <select name='thread_base'>{_options(text_items, [conf['thread_base']] if conf['thread_base'] else [], none_label='— keiner —')}</select>
-          </div>
-          <div>
-            <label>Forum-Kanal (Forum-Modus)</label>
-            <select name='forum_channel'>{_options(forum_items, [conf['forum_channel']] if conf['forum_channel'] else [], none_label='— keiner —')}</select>
-          </div>
-        </div>
-
-        <div class='row2'>
-          <div>
-            <label>Log-Kanal</label>
-            <select name='log_channel'>{_options(text_items, [conf['log_channel']] if conf['log_channel'] else [], none_label='— keiner —')}</select>
-          </div>
-          <div>
-            <label>Max. offene Tickets pro Nutzer</label>
-            <input name='max_open' type='number' min='1' value='{int(conf['max_open'])}'>
-          </div>
-        </div>
-
-        <label>Kanalname-Vorlage</label>
-        <input name='name_template' value='{_esc(conf['name_template'])}'>
-        <div class='hint'>Platzhalter: <code>{{num}}</code> (Ticketnummer), <code>{{user}}</code> (Name). Gilt nur für Tickets ohne Grund – mit Grund heißt der Kanal automatisch <code>&lt;grund&gt;-&lt;num&gt;</code>.</div>
-
-        <div class='tk-check'><input type='checkbox' name='close_confirmation' {'checked' if conf['close_confirmation'] else ''}><span>Vor dem Schließen bestätigen</span></div>
-        <div class='tk-check'><input type='checkbox' name='user_can_close' {'checked' if conf['user_can_close'] else ''}><span>Ersteller darf eigenes Ticket schließen</span></div>
-        <div class='tk-check'><input type='checkbox' name='delete_on_close' {'checked' if conf['delete_on_close'] else ''}><span>Beim Schließen direkt löschen (statt archivieren)</span></div>
-
-        <div class='tk-spacer'></div>
-        <div class='tk-section-title'>Eigene Texte (überschreiben die Sprachpakete)</div>
-        {override_fields}
-        <div class='hint'>Leer = Standardtext der gewählten Sprache (im Feld als Platzhalter sichtbar). Platzhalter: <code>{{num}}</code> und <code>{{user}}</code> in <code>opened_title</code>/<code>opened_body</code>.</div>
-
-        <div class='tk-spacer'></div>
-        <button class='btn-accent' type='submit'>Speichern</button>
-      </form>
-    </div>
-    """
-
-    panels_html = _render_panels(guild, conf, role_items, text_items, csrf)
-    transcripts_html = _render_transcripts(guild, conf)
-    stats_html = await _render_stats(cog, guild, conf)
-
-    guild_picker = f"""
-    <div class='card-x' style='margin-bottom:20px'>
-      <form method='get' action='/cogs/tickets' class='tk-form' style='margin:0'>
-        <label style='margin-top:0'>Server</label>
-        <select name='guild' onchange='this.form.submit()'>{guild_opts}</select>
-      </form>
-    </div>
-    """
-    # Globaler Server-Wechsler von WebCore aktiv -> eigenes Dropdown ausblenden.
-    if request.get("wc_switcher"):
-        guild_picker = ""
-
-    content = (
-        _FORM_STYLE
-        + flash
-        + guild_picker
-        + settings_form
-        + "<div class='tk-spacer'></div>"
-        + panels_html
-        + "<div class='tk-spacer'></div>"
-        + stats_html
-        + "<div class='tk-spacer'></div>"
-        + transcripts_html
-    )
-    return {"title": "Tickets", "content": content}
+    return {"title": "Tickets", "content": head + body}
 
 
-def _render_panels(guild, conf, role_items, text_items, csrf) -> str:
+def _setup_checks(guild, conf) -> list[tuple[str, str]]:
+    """Kurze Einrichtungs-Prüfung: [(tone, text)]."""
+    out = []
+    ttype = conf.get("ticket_type", "category")
+    if not conf.get("support_roles") and not conf.get("admin_roles"):
+        out.append(("warn", "Es ist keine <b>Support- oder Admin-Rolle</b> eingetragen – nur Server-Verwalter können Tickets übernehmen."))
+    if ttype == "thread" and not conf.get("thread_base"):
+        out.append(("bad", "Ticket-Typ <b>Privater Thread</b>, aber kein <b>Basis-Kanal</b> gesetzt – Tickets können nicht erstellt werden."))
+    if ttype == "forum" and not conf.get("forum_channel"):
+        out.append(("bad", "Ticket-Typ <b>Forum-Beitrag</b>, aber kein <b>Forum-Kanal</b> gesetzt – Tickets können nicht erstellt werden."))
+    if ttype == "category" and not conf.get("category_open"):
+        out.append(("info", "Keine <b>Kategorie für offene Tickets</b> – neue Ticket-Kanäle erscheinen ganz oben ohne Kategorie."))
+    if not conf.get("panels"):
+        out.append(("info", "Noch kein <b>Panel</b> – lege im Reiter „Panels“ eins an, damit Mitglieder Tickets öffnen können."))
+    if not conf.get("log_channel"):
+        out.append(("info", "Kein <b>Log-Kanal</b> – Öffnen/Schließen und Transcripts werden nirgends protokolliert (optional)."))
+    return out
+
+
+async def _render_overview(ui, cog, guild, conf) -> str:
+    checks = _setup_checks(guild, conf)
+    if checks:
+        check_html = "".join(ui.callout(text, tone=tone) for tone, text in checks)
+    else:
+        check_html = ui.callout("Alles eingerichtet – Tickets können geöffnet werden.", tone="ok")
+    setup = ui.card("Einrichtung", check_html, icon="bi-clipboard-check",
+                    desc=f"Typ: <b>{_esc(_TYPE_LABEL.get(conf.get('ticket_type'), conf.get('ticket_type')))}</b> · "
+                         f"max. {int(conf.get('max_open', 1))} offene(s) Ticket(s) pro Nutzer")
+
+    claims = (conf.get("stats") or {}).get("claims") or {}
+    rows = []
+    for uid, count in sorted(claims.items(), key=lambda kv: kv[1], reverse=True)[:10]:
+        member = guild.get_member(int(uid)) if str(uid).isdigit() else None
+        name = member.display_name if member else f"ID {uid}"
+        rows.append(ui.row(_esc(name), f">{int(count)}"))
+    claim_card = ui.card("Übernahmen je Team-Mitglied", ui.table(["Mitglied", ">Übernahmen"], rows,
+                         empty_text="Noch keine Übernahmen."), icon="bi-person-check")
+
+    recent = list(reversed(conf.get("transcripts", [])))[:5]
+    rrows = []
+    for tr in recent:
+        link = f"/cogs/tickets?guild={guild.id}&transcript={_esc(tr.get('num'))}"
+        btn = ui.button("Öffnen", icon="bi-box-arrow-up-right", kind="ghost", small=True, href=link,
+                        attrs={"target": "_blank"})
+        rrows.append(ui.row(f"<span class='mono'>#{_esc(tr.get('num'))}</span>", _esc(tr.get("owner")),
+                            _esc(tr.get("closed") or "—"), ">" + btn))
+    recent_card = ui.card("Zuletzt geschlossen", ui.table(["#", "Inhaber", "Geschlossen", ">"], rrows,
+                          empty_text="Noch keine geschlossenen Tickets."), icon="bi-clock-history")
+    return setup + ui.columns(claim_card, recent_card)
+
+
+def _render_panels(ui, guild, conf, text_items, csrf) -> str:
     rows = []
     for p in conf.get("panels", []):
         ch = guild.get_channel(p.get("channel_id")) if p.get("channel_id") else None
-        ch_name = f"#{ch.name}" if ch else "—"
         n_reasons = len(p.get("reasons") or [])
         n_q = len(p.get("modal_questions") or [])
-        rows.append(
-            "<tr>"
-            f"<td>{_esc(p.get('title') or '—')}</td>"
-            f"<td>{_esc(ch_name)}</td>"
-            f"<td>{_esc(p.get('mode'))}</td>"
-            f"<td class='mono'>{n_reasons}</td>"
-            f"<td class='mono'>{n_q}</td>"
-            "<td><div style='display:flex;gap:6px;align-items:center'>"
-            f"<a class='btn-accent' style='padding:5px 12px' href='/cogs/tickets?guild={guild.id}&panel={_esc(p.get('id'))}'>Bearbeiten</a>"
-            f"<form method='post' action='/cogs/tickets' style='margin:0' onsubmit=\"return confirm('Panel löschen?')\">"
-            f"<input type='hidden' name='csrf_token' value='{_esc(csrf)}'>"
-            f"<input type='hidden' name='form' value='panel_delete'>"
-            f"<input type='hidden' name='guild' value='{guild.id}'>"
-            f"<input type='hidden' name='panel_id' value='{_esc(p.get('id'))}'>"
-            "<button class='btn-accent' style='padding:5px 12px'>Löschen</button>"
-            "</form></div></td>"
-            "</tr>"
+        mode = "Dropdown" if p.get("mode") == "dropdown" else "Buttons"
+        posted = ui.badge("gepostet", "ok") if p.get("message_id") else ui.badge("nicht gepostet", "warn")
+        edit = ui.button("Bearbeiten", icon="bi-pencil", kind="ghost", small=True,
+                         href=f"/cogs/tickets?guild={guild.id}&panel={_esc(p.get('id'))}")
+        delete = ui.form(
+            "/cogs/tickets",
+            ui.button("", icon="bi-trash", kind="danger", small=True, attrs={"title": "Panel löschen"}),
+            csrf=csrf, hidden={"form": "panel_delete", "guild": guild.id, "panel_id": p.get("id")},
+            confirm="Das Panel und seine Nachricht werden gelöscht. Offene Tickets bleiben bestehen.",
         )
-    table = (
-        "<table class='table'><thead><tr>"
-        "<th>Titel</th><th>Kanal</th><th>Modus</th><th>Gründe</th><th>Fragen</th><th></th>"
-        "</tr></thead><tbody>"
-        + ("".join(rows) or "<tr><td colspan='6' style='color:var(--muted)'>Noch keine Panels.</td></tr>")
-        + "</tbody></table>"
+        rows.append(ui.row(
+            f"<div class='wc-cell-title'>{_esc(p.get('title') or '—')}</div>"
+            f"<div class='wc-cell-sub'>{_esc('#' + ch.name if ch else 'Kanal fehlt')}</div>",
+            mode, f"<span class='mono'>{n_reasons}</span>", f"<span class='mono'>{n_q}</span>", posted,
+            f"><div class='wc-row-actions'>{edit}{delete}</div>",
+        ))
+    table = ui.card("Deine Panels", ui.table(["Panel", "Art", "Gründe", "Fragen", "Status", ">"], rows,
+                    empty_text="Noch keine Panels."), icon="bi-window-stack",
+                    desc="Ein Panel ist die Nachricht mit den Buttons bzw. dem Dropdown, über die Tickets geöffnet werden.")
+
+    create = ui.card(
+        "Neues Panel", ui.form(
+            "/cogs/tickets",
+            ui.grid(
+                ui.field("Kanal", ui.select("channel_id", text_items), help="Hier wird das Panel gepostet."),
+                ui.field("Darstellung", ui.select("mode", [("button", "Buttons"), ("dropdown", "Dropdown-Menü")])),
+                ui.field("Titel", ui.text_input("title", "Support-Ticket")),
+                ui.field("Beschreibung", ui.textarea("description", "Klicke unten, um ein Ticket zu öffnen.", rows=2)),
+                ui.field("Gründe (optional, eine Zeile je Grund)",
+                         ui.textarea("reasons", "", rows=4, mono=True,
+                                     placeholder="Allgemein | 🎫 | Allgemeine Fragen\nBug melden | 🐞 |"),
+                         help="Format: <code>Label | Emoji | Beschreibung</code>. Leer = ein einzelner „Ticket öffnen“-Button. "
+                              "Jeder Grund bekommt später eine eigene Team-Zuordnung.", wide=True),
+                ui.field("Fragen beim Öffnen (optional, max. 5)",
+                         ui.textarea("questions", "", rows=3, mono=True,
+                                     placeholder="Worum geht es? | Kurz beschreiben | ja | lang"),
+                         help="Format: <code>Frage | Platzhalter | Pflicht (ja/nein) | lang (ja/nein)</code>.", wide=True),
+            ) + ui.actions(ui.button("Panel erstellen & posten", icon="bi-send")),
+            csrf=csrf, hidden={"form": "panel_create", "guild": guild.id},
+        ), icon="bi-plus-square",
     )
+    return table + create
 
-    create = f"""
-      <div class='tk-spacer'></div>
-      <div class='tk-section-title' style='font-size:1rem'>Neues Panel</div>
-      <form class='tk-form' method='post' action='/cogs/tickets'>
-        <input type='hidden' name='csrf_token' value='{csrf}'>
-        <input type='hidden' name='form' value='panel_create'>
-        <input type='hidden' name='guild' value='{guild.id}'>
-        <div class='row2'>
-          <div><label>Kanal (wo das Panel gepostet wird)</label>
-            <select name='channel_id'>{_options(text_items, [])}</select></div>
-          <div><label>Modus</label>
-            <select name='mode'><option value='button'>Buttons</option><option value='dropdown'>Dropdown</option></select></div>
-        </div>
-        <label>Titel</label><input name='title' value='Support-Ticket'>
-        <label>Beschreibung</label><textarea name='description'>Klicke unten, um ein Ticket zu öffnen.</textarea>
-        <label>Gründe (eine Zeile je Grund)</label>
-        <textarea name='reasons' placeholder='Allgemein | 🎫 | Allgemeine Fragen&#10;Bug melden | 🐞 |'></textarea>
-        <div class='hint'>Format: <code>Label | Emoji | Beschreibung</code> (Emoji/Beschreibung optional). Leer lassen = ein einzelner „Ticket öffnen“-Button.</div>
-        <label>Modal-Fragen (max. 5, eine je Zeile)</label>
-        <textarea name='questions' placeholder='Worum geht es? | Kurz beschreiben | ja | lang'></textarea>
-        <div class='hint'>Format: <code>Label | Platzhalter | pflicht(ja/nein) | lang(ja/nein)</code>.</div>
-        <div class='tk-spacer'></div>
-        <button class='btn-accent' type='submit'>Panel erstellen &amp; posten</button>
-      </form>
-    """
 
-    return f"<div class='card-x'><div class='tk-section-title'>Panels</div>{table}{create}</div>"
+def _render_settings(ui, guild, conf, role_items, text_items, cat_items, forum_items, csrf) -> str:
+    lang_items = list(LANGUAGES.items())
+    ttype = conf.get("ticket_type", "category")
+
+    general = ui.card("Allgemein", ui.grid(
+        ui.field("Sprache", ui.select("language", lang_items, conf["language"])),
+        ui.field("Ticket-Typ", ui.select("ticket_type", [
+            ("category", "Eigener Kanal (in einer Kategorie)"),
+            ("thread", "Privater Thread"),
+            ("forum", "Forum-Beitrag"),
+        ], ttype), help="Wo ein neues Ticket entsteht."),
+        ui.field("Max. offene Tickets pro Nutzer", ui.number("max_open", int(conf["max_open"]), min=1, max=25)),
+        ui.field("Kanalname-Vorlage", ui.text_input("name_template", conf["name_template"]),
+                 help="Platzhalter <code>{num}</code> und <code>{user}</code>. Tickets mit Grund heißen automatisch <code>&lt;grund&gt;-&lt;num&gt;</code>."),
+    ), icon="bi-gear", desc="Grundverhalten des Ticketsystems.")
+
+    team = ui.card("Team & Rollen", ui.grid(
+        ui.field("Support-Rollen", ui.select("support_roles", role_items, conf["support_roles"], multiple=True,
+                 placeholder="Rollen suchen …"), help="Sehen alle Tickets, dürfen übernehmen, sperren und schließen."),
+        ui.field("Admin-Rollen", ui.select("admin_roles", role_items, conf["admin_roles"], multiple=True,
+                 placeholder="Rollen suchen …"), help="Wie Support, zusätzlich Tickets endgültig löschen. Sehen auch Tickets mit eigenem Team."),
+        ui.field("Nur-Lesen-Rollen", ui.select("view_roles", role_items, conf["view_roles"], multiple=True,
+                 placeholder="Rollen suchen …"), help="Dürfen mitlesen, aber nicht schreiben (vor allem im Typ „Eigener Kanal“)."),
+        ui.field("Ping-Rollen", ui.select("ping_roles", role_items, conf["ping_roles"], multiple=True,
+                 placeholder="Rollen suchen …"), help="Werden beim Öffnen eines Tickets erwähnt."),
+        ui.field("Inhaber-Rolle", ui.select("owner_role", [(i, n) for i, n, _c in role_items],
+                 conf["owner_role"], none_label="— keine —"),
+                 help="Bekommt der Ersteller, solange sein Ticket offen ist.", wide=True),
+    ), icon="bi-people", desc="Pro Grund kannst du im Panel-Editor zusätzlich ein eigenes Team festlegen.")
+
+    place = ui.card("Speicherort & Protokoll", ui.grid(
+        ui.field("Kategorie für offene Tickets", ui.select("category_open", cat_items, conf["category_open"], none_label="— keine —"),
+                 help="Nur für Typ „Eigener Kanal“."),
+        ui.field("Kategorie für geschlossene Tickets", ui.select("category_close", cat_items, conf["category_close"], none_label="— keine —"),
+                 help="Geschlossene Tickets werden hierhin verschoben (Archiv)."),
+        ui.field("Basis-Kanal", ui.select("thread_base", text_items, conf["thread_base"], none_label="— keiner —"),
+                 help="Nur für Typ „Privater Thread“: in diesem Kanal entstehen die Threads."),
+        ui.field("Forum-Kanal", ui.select("forum_channel", forum_items, conf["forum_channel"], none_label="— keiner —"),
+                 help="Nur für Typ „Forum-Beitrag“."),
+        ui.field("Log-Kanal", ui.select("log_channel", text_items, conf["log_channel"], none_label="— keiner —"),
+                 help="Öffnen, Übernehmen, Schließen und das Transcript als Datei.", wide=True),
+    ), icon="bi-folder2-open")
+
+    behaviour = ui.card("Verhalten", "<div class='wc-switches'>"
+        + ui.switch("close_confirmation", "Vor dem Schließen bestätigen", conf["close_confirmation"],
+                    desc="Fragt nach, bevor ein Ticket geschlossen wird.")
+        + ui.switch("user_can_close", "Ersteller darf schließen", conf["user_can_close"],
+                    desc="Der Ersteller kann sein eigenes Ticket schließen.")
+        + ui.switch("delete_on_close", "Beim Schließen löschen", conf["delete_on_close"],
+                    desc="Kanal wird gelöscht statt archiviert (Transcript bleibt erhalten).")
+        + "</div>", icon="bi-toggles")
+
+    overrides = conf.get("messages") or {}
+    override_fields = []
+    labels = {
+        "panel_default_title": ("Panel-Titel (Standard)", "Wenn ein Panel keinen eigenen Titel hat."),
+        "panel_default_description": ("Panel-Text (Standard)", "Wenn ein Panel keine eigene Beschreibung hat."),
+        "btn_open": ("Button „Ticket öffnen“", "Beschriftung des Einzel-Buttons."),
+        "opened_title": ("Titel im neuen Ticket", "Platzhalter: <code>{num}</code>, <code>{user}</code>."),
+        "opened_body": ("Begrüßung im neuen Ticket", "Platzhalter: <code>{num}</code>, <code>{user}</code> (Erwähnung)."),
+    }
+    for key in OVERRIDABLE_KEYS:
+        label, hint = labels.get(key, (key, None))
+        default = STRINGS["de"].get(key, "")
+        ctrl = (ui.textarea(f"ovr_{key}", overrides.get(key, ""), rows=3, placeholder=default)
+                if key in ("opened_body", "panel_default_description")
+                else ui.text_input(f"ovr_{key}", overrides.get(key, ""), placeholder=default))
+        override_fields.append(ui.field(label, ctrl, help=hint, wide=key in ("opened_body", "panel_default_description")))
+    texts = ui.card("Eigene Texte", ui.grid(*override_fields),
+                    icon="bi-chat-left-text",
+                    desc="Leer lassen = Standardtext der gewählten Sprache (als grauer Platzhalter sichtbar).")
+
+    save = ui.save_row("Einstellungen speichern")
+    # Ein Formular über zwei Reiter (Einstellungen + Texte) – beide speichern alles.
+    return ui.form(
+        "/cogs/tickets",
+        ui.tab("einstellungen", "Einstellungen", "bi-sliders", general + team + place + behaviour + save)
+        + ui.tab("texte", "Texte", "bi-chat-left-text", texts + save),
+        csrf=csrf, hidden={"form": "settings", "guild": guild.id}, savebar=True,
+    )
 
 
 def _reasons_to_text(reasons) -> str:
@@ -354,151 +336,86 @@ def _questions_to_text(questions) -> str:
     return "\n".join(lines)
 
 
-def _render_panel_editor(guild, panel, text_items, role_items, cat_items, csrf) -> str:
-    """Editor für ein bestehendes Panel (Titel, Text, Modus, Kanal, Gründe, Fragen)."""
+def _render_panel_editor(ui, guild, panel, text_items, role_items, cat_items, csrf) -> str:
+    """Editor für ein bestehendes Panel (Titel, Text, Modus, Kanal, Gründe, Fragen) + Team-Zuordnung."""
     pid = panel.get("id")
-    mode = panel.get("mode", "button")
-    ch_opts = _options(text_items, [panel.get("channel_id")] if panel.get("channel_id") else [])
-    reasons_text = _reasons_to_text(panel.get("reasons") or [])
-    questions_text = _questions_to_text(panel.get("modal_questions") or [])
+    back = ui.button("Zurück zu den Panels", icon="bi-arrow-left", kind="ghost",
+                     href=f"/cogs/tickets?guild={guild.id}#panels")
+    head = ui.hero("bi-window-stack", panel.get("title") or "Panel",
+                   "Änderungen aktualisieren die bereits gepostete Panel-Nachricht direkt.", actions=back)
 
-    def msel(value):
-        return " selected" if mode == value else ""
-
-    editor = f"""
-    <div class='card-x'>
-      <div class='tk-section-title'>Panel bearbeiten</div>
-      <form class='tk-form' method='post' action='/cogs/tickets'>
-        <input type='hidden' name='csrf_token' value='{csrf}'>
-        <input type='hidden' name='form' value='panel_save'>
-        <input type='hidden' name='guild' value='{guild.id}'>
-        <input type='hidden' name='panel_id' value='{_esc(pid)}'>
-        <div class='row2'>
-          <div><label>Kanal (wo das Panel steht)</label>
-            <select name='channel_id'>{ch_opts}</select></div>
-          <div><label>Modus</label>
-            <select name='mode'>
-              <option value='button'{msel('button')}>Buttons</option>
-              <option value='dropdown'{msel('dropdown')}>Dropdown</option>
-            </select></div>
-        </div>
-        <label>Titel</label><input name='title' value='{_esc(panel.get('title') or '')}'>
-        <label>Beschreibung</label><textarea name='description'>{_esc(panel.get('description') or '')}</textarea>
-        <label>Gründe (eine Zeile je Grund)</label>
-        <textarea name='reasons'>{_esc(reasons_text)}</textarea>
-        <div class='hint'>Format: <code>Label | Emoji | Beschreibung</code> (Emoji/Beschreibung optional). Leer = ein einzelner „Ticket öffnen“-Button. Der Grund wird auch zum Kanalnamen (z. B. <code>bewerbung-12</code>).</div>
-        <label>Modal-Fragen (max. 5, eine je Zeile)</label>
-        <textarea name='questions'>{_esc(questions_text)}</textarea>
-        <div class='hint'>Format: <code>Label | Platzhalter | pflicht(ja/nein) | lang(ja/nein)</code>.</div>
-        <div class='tk-spacer'></div>
-        <button class='btn-accent' type='submit'>Speichern &amp; Nachricht aktualisieren</button>
-        <a href='/cogs/tickets?guild={guild.id}' style='margin-left:12px;color:var(--muted)'>Abbrechen</a>
-      </form>
-    </div>
-    """
-    return editor + _render_reason_routing(guild, panel, role_items, cat_items, csrf)
+    edit = ui.form(
+        "/cogs/tickets",
+        ui.card("Inhalt & Darstellung", ui.grid(
+            ui.field("Kanal", ui.select("channel_id", text_items, panel.get("channel_id")),
+                     help="Bei einem Wechsel wird die alte Nachricht gelöscht und neu gepostet."),
+            ui.field("Darstellung", ui.select("mode", [("button", "Buttons"), ("dropdown", "Dropdown-Menü")],
+                                               panel.get("mode", "button"))),
+            ui.field("Titel", ui.text_input("title", panel.get("title") or "")),
+            ui.field("Beschreibung", ui.textarea("description", panel.get("description") or "", rows=2)),
+        ), icon="bi-card-heading")
+        + ui.card("Gründe & Fragen", ui.grid(
+            ui.field("Gründe (eine Zeile je Grund)", ui.textarea("reasons", _reasons_to_text(panel.get("reasons") or []), rows=5, mono=True),
+                     help="Format: <code>Label | Emoji | Beschreibung</code>. Leer = ein einzelner „Ticket öffnen“-Button. "
+                          "Der Grund wird auch zum Kanalnamen (z. B. <code>bewerbung-12</code>).", wide=True),
+            ui.field("Fragen beim Öffnen (max. 5)", ui.textarea("questions", _questions_to_text(panel.get("modal_questions") or []), rows=4, mono=True),
+                     help="Format: <code>Frage | Platzhalter | Pflicht (ja/nein) | lang (ja/nein)</code>.", wide=True),
+        ), icon="bi-list-ul")
+        + ui.save_row("Speichern & Nachricht aktualisieren"),
+        csrf=csrf, hidden={"form": "panel_save", "guild": guild.id, "panel_id": pid}, savebar=True,
+    )
+    reasons = panel.get("reasons") or []
+    return (
+        head
+        + ui.tab("inhalt", "Inhalt", "bi-card-heading", edit)
+        + ui.tab("teams", "Team je Grund", "bi-diagram-3",
+                 _render_reason_routing(ui, guild, panel, role_items, cat_items, csrf), count=len(reasons))
+    )
 
 
-def _render_reason_routing(guild, panel, role_items, cat_items, csrf) -> str:
+def _render_reason_routing(ui, guild, panel, role_items, cat_items, csrf) -> str:
     """Team-Zuordnung je Grund: eigene Team-Rollen, Ping-Rollen und Kategorie."""
     reasons = panel.get("reasons") or []
     if not reasons:
-        return (
-            "<div class='tk-spacer'></div><div class='card-x'>"
-            "<div class='tk-section-title'>Team-Zuordnung je Grund</div>"
-            "<div class='hint'>Lege zuerst oben Gründe an (und speichere), dann kannst du "
-            "hier jedem Grund ein eigenes Team, eine Ping-Rolle und eine Kategorie geben.</div></div>"
-        )
+        return ui.card(body=ui.empty(
+            "bi-diagram-3", "Dieses Panel hat noch keine Gründe.",
+            "Lege im Reiter „Inhalt“ Gründe an und speichere – dann kannst du hier jedem Grund ein eigenes Team geben."))
     blocks = []
     for r in reasons:
         rid = r.get("id")
-        head = f"{_esc(r.get('emoji') or '')} {_esc(r.get('label') or '—')}".strip()
-        blocks.append(
-            f"<div style='border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:12px'>"
-            f"<div class='tk-section-title' style='font-size:1rem;margin-bottom:8px'>{head}</div>"
-            "<div class='row2'>"
-            f"<div><label>Team-Rollen (nur diese + Admins sehen den Typ)</label>"
-            f"<select name='r_{_esc(rid)}_support' multiple>{_options(role_items, r.get('support_roles') or [])}</select></div>"
-            f"<div><label>Ping-Rollen (Benachrichtigung beim Öffnen)</label>"
-            f"<select name='r_{_esc(rid)}_ping' multiple>{_options(role_items, r.get('ping_roles') or [])}</select></div>"
-            "</div>"
-            f"<label>Kategorie (optional, sonst die globale)</label>"
-            f"<select name='r_{_esc(rid)}_cat'>{_options(cat_items, [r.get('category_id')] if r.get('category_id') else [], none_label='— globale Kategorie —')}</select>"
-            "</div>"
-        )
+        title = f"{r.get('emoji') or ''} {r.get('label') or '—'}".strip()
+        blocks.append(ui.card(title, ui.grid(
+            ui.field("Team-Rollen", ui.select(f"r_{rid}_support", role_items, r.get("support_roles") or [], multiple=True,
+                     placeholder="leer = globale Support-Rollen"),
+                     help="Nur diese Rollen (plus Admin-Rollen) sehen Tickets dieses Grundes."),
+            ui.field("Ping-Rollen", ui.select(f"r_{rid}_ping", role_items, r.get("ping_roles") or [], multiple=True,
+                     placeholder="leer = globale Ping-Rollen")),
+            ui.field("Kategorie", ui.select(f"r_{rid}_cat", cat_items, r.get("category_id"), none_label="— globale Kategorie —"),
+                     wide=True),
+        ), icon="bi-tag"))
     return (
-        "<div class='tk-spacer'></div>"
-        "<div class='card-x'><div class='tk-section-title'>Team-Zuordnung je Grund</div>"
-        "<div class='hint'>Leerlassen = globale Support-/Ping-Rollen. Mit Team-Rollen sehen nur "
-        "diese Rollen (plus deine Admin-Rollen) Tickets dieses Typs.</div>"
-        "<div class='tk-spacer'></div>"
-        f"<form class='tk-form' method='post' action='/cogs/tickets'>"
-        f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-        f"<input type='hidden' name='form' value='panel_routing'>"
-        f"<input type='hidden' name='guild' value='{guild.id}'>"
-        f"<input type='hidden' name='panel_id' value='{_esc(panel.get('id'))}'>"
-        + "".join(blocks)
-        + "<button class='btn-accent' type='submit'>Team-Zuordnung speichern</button>"
-        "</form></div>"
+        ui.callout("Leer gelassene Felder nutzen die globalen Einstellungen. Mit eigenen Team-Rollen sehen <b>nur</b> diese "
+                   "Rollen (plus die Admin-Rollen) Tickets dieses Grundes – ideal z. B. für Bewerbungen.", tone="info")
+        + ui.form("/cogs/tickets", "".join(blocks) + ui.save_row("Team-Zuordnung speichern"),
+                  csrf=csrf, hidden={"form": "panel_routing", "guild": guild.id, "panel_id": panel.get("id")}, savebar=True)
     )
 
 
-def _render_transcripts(guild, conf) -> str:
-    items = list(reversed(conf.get("transcripts", [])))[:100]
+def _render_transcripts(ui, guild, conf) -> str:
+    items = list(reversed(conf.get("transcripts", [])))[:200]
     rows = []
     for tr in items:
         link = f"/cogs/tickets?guild={guild.id}&transcript={_esc(tr.get('num'))}"
-        rows.append(
-            "<tr>"
-            f"<td class='mono'>#{_esc(tr.get('num'))}</td>"
-            f"<td>{_esc(tr.get('channel_name'))}</td>"
-            f"<td>{_esc(tr.get('owner'))}</td>"
-            f"<td>{_esc(tr.get('reason') or '—')}</td>"
-            f"<td>{_esc(tr.get('closed') or '—')}</td>"
-            f"<td><a class='btn-accent' style='padding:5px 12px' href='{link}' target='_blank'>Öffnen</a></td>"
-            "</tr>"
-        )
-    table = (
-        "<table class='table'><thead><tr>"
-        "<th>#</th><th>Kanal</th><th>Inhaber</th><th>Grund</th><th>Geschlossen</th><th></th>"
-        "</tr></thead><tbody>"
-        + ("".join(rows) or "<tr><td colspan='6' style='color:var(--muted)'>Noch keine Transcripts.</td></tr>")
-        + "</tbody></table>"
-    )
-    return f"<div class='card-x'><div class='tk-section-title'>Transcripts</div>{table}</div>"
-
-
-async def _render_stats(cog, guild, conf) -> str:
-    stats = conf.get("stats") or {}
-    tickets = conf.get("tickets") or {}
-    open_now = sum(1 for r in tickets.values() if r.get("status") == "open")
-    opened = int(stats.get("opened", 0))
-    closed = int(stats.get("closed", 0))
-    dur_sum = int(stats.get("duration_sum", 0))
-    avg = dur_sum // closed if closed else 0
-    avg_str = _fmt_duration(avg)
-
-    claims = stats.get("claims") or {}
-    claim_rows = []
-    for uid, count in sorted(claims.items(), key=lambda kv: kv[1], reverse=True)[:10]:
-        member = guild.get_member(int(uid)) if str(uid).isdigit() else None
-        name = member.display_name if member else f"ID {uid}"
-        claim_rows.append(f"<tr><td>{_esc(name)}</td><td class='mono'>{int(count)}</td></tr>")
-    claim_table = (
-        "<table class='table'><thead><tr><th>Support-Mitglied</th><th>Übernahmen</th></tr></thead><tbody>"
-        + ("".join(claim_rows) or "<tr><td colspan='2' style='color:var(--muted)'>Noch keine.</td></tr>")
-        + "</tbody></table>"
-    )
-
-    cards = (
-        "<div class='tk-grid'>"
-        f"<div><div class='stat-label'>Offen</div><div class='stat'>{open_now}</div></div>"
-        f"<div><div class='stat-label'>Geöffnet gesamt</div><div class='stat'>{opened}</div></div>"
-        f"<div><div class='stat-label'>Geschlossen gesamt</div><div class='stat'>{closed}</div></div>"
-        f"<div><div class='stat-label'>Ø Laufzeit</div><div class='stat'>{avg_str}</div></div>"
-        "</div>"
-    )
-    return f"<div class='card-x'><div class='tk-section-title'>Statistik</div>{cards}<div class='tk-spacer'></div>{claim_table}</div>"
+        rows.append(ui.row(
+            f"<span class='mono'>#{_esc(tr.get('num'))}</span>",
+            _esc(tr.get("channel_name")), _esc(tr.get("owner")), _esc(tr.get("reason") or "—"),
+            f"<span class='mono'>{_esc(tr.get('closed') or '—')}</span>",
+            f">{ui.button('Öffnen', icon='bi-box-arrow-up-right', kind='ghost', small=True, href=link, attrs={'target': '_blank'})}",
+        ))
+    return ui.card("Transcripts", ui.table(["#", "Kanal", "Inhaber", "Grund", "Geschlossen", ">"], rows,
+                   empty_text="Noch keine Transcripts.", search=True, search_placeholder="Nach Nummer, Name oder Grund suchen …",
+                   id="tk-transcripts"),
+                   icon="bi-journal-text", desc="Der komplette Verlauf jedes geschlossenen Tickets als eigene Seite (die letzten 200).")
 
 
 def _fmt_duration(seconds: int) -> str:

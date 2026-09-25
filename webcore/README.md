@@ -9,7 +9,9 @@ Dashboard-Seiten zu registrieren. Neue Cogs erscheinen automatisch in der Naviga
   nur ihre freigegebenen Bereiche.
 - **Globaler Server-Wechsler** in der Kopfzeile (die Auswahl bleibt beim Seitenwechsel erhalten).
 - **Audit-Log:** jede Änderung über das Dashboard mit Nutzer, Server, Seite und Ergebnis.
-- Login-Seite, Nutzer-Menü mit Avatar und Rolle, Toast-Meldungen, mobil bedienbar.
+- Einheitliche, übersichtliche Seiten (Reiter, Kennzahlen, Hilfetexte, Speicherleiste) über das
+  gemeinsame UI-Kit; mobil bedienbar.
+- Login-Seite, Nutzer-Menü mit Avatar und Rolle, Toast-Meldungen.
 
 ## Installation
 
@@ -24,6 +26,7 @@ Dashboard-Seiten zu registrieren. Neue Cogs erscheinen automatisch in der Naviga
 1. **Discord-Developer-Portal** → deine Application → Tab *OAuth2*.
    Unter *Redirects* deine Callback-URL eintragen, exakt so wie unten, z. B.
    `https://dashboard.deinedomain.de/callback` (oder `http://DEINE-IP:42100/callback` zum Testen).
+   Für den Zugriff aus dem Internet siehe „Im Internet erreichbar machen“.
 2. Client-ID und Client-Secret kopieren und im Bot setzen:
    ```
    [p]webcore oauth <client_id> <client_secret> <redirect_uri>
@@ -95,8 +98,60 @@ die letzten 300 Einträge; Suche und Server-Filter sind eingebaut.
   - `allowlist`: zusätzlich die per `[p]webcore allow` freigegebenen User – mit **voller Sicht**.
 - Owner und Allowlist-User haben volle Sicht (alle Server + Infrastruktur).
 - Login-Sitzungen laufen nach 7 Tagen ab. Jede Anfrage prüft die Rechte neu.
-- Empfehlung: den Webserver hinter einen Reverse-Proxy mit HTTPS legen (z. B. Caddy/Nginx),
-  statt den Port direkt offen ins Internet zu stellen.
+- Jede Antwort trägt Sicherheits-Header (kein Einbetten in fremde Seiten, `nosniff`,
+  `Referrer-Policy`, `no-store` für Seiten). HSTS setzt der Reverse-Proxy.
+- Ist die `redirect_uri` eine `https://`-Adresse, wird das Sitzungscookie nur noch über HTTPS
+  gesendet (`Secure`).
+- `GET /healthz` antwortet ohne Login mit `ok` – für Docker-Healthchecks oder Uptime-Monitore.
+- Den Port **nie direkt** ins Internet freigeben, sondern immer über einen Reverse-Proxy mit HTTPS
+  (siehe nächster Abschnitt).
+
+## Im Internet erreichbar machen (Synology NAS mit Docker)
+
+Ziel: `https://<dein-ddns-name>:<port>` → Synology-Reverse-Proxy (HTTPS, Zertifikat) →
+Bot-Container Port 42100 (HTTP, nur im Heimnetz).
+
+```
+Internet ──HTTPS :4445──► Router ──► NAS: DSM-Reverse-Proxy ──HTTP──► localhost:42100 (Red + WebCore)
+```
+
+Beispielwerte unten: DDNS-Name `matters86launcher.synology.me`, freier Port `4445`
+(4443 ist schon für den Launcher belegt).
+
+1. **Container-Port freigeben** – *Container Manager → Container → (Red-Bot) → Bearbeiten →
+   Port-Einstellungen*: lokaler Port `42100` → Container-Port `42100` (TCP). Bei `docker compose`:
+   `ports: ["42100:42100"]`. Läuft der Container im Netzwerkmodus `host`, entfällt das.
+   WebCore muss im Container auf `0.0.0.0` lauschen (Standard, prüfen mit `[p]webcore settings`).
+2. **Im Heimnetz testen:** `http://<NAS-IP>:42100/healthz` muss `ok` zeigen.
+3. **Reverse-Proxy anlegen** – *Systemsteuerung → Anmeldeportal → Erweitert → Reverse Proxy →
+   Erstellen*:
+   - Quelle: Protokoll `HTTPS`, Hostname `matters86launcher.synology.me`, Port `4445`
+     (optional „HSTS aktivieren“ – gilt dann für alle HTTPS-Dienste dieses Hostnamens).
+   - Ziel: Protokoll `HTTP`, Hostname `localhost`, Port `42100`.
+4. **Zertifikat zuweisen** – *Systemsteuerung → Sicherheit → Zertifikat → Einstellungen*: beim
+   neuen Reverse-Proxy-Eintrag das Zertifikat für `matters86launcher.synology.me` auswählen
+   (dasselbe wie für den Launcher).
+5. **Router-Portweiterleitung:** extern TCP `4445` → NAS-IP Port `4445` (genau wie 4443 für den
+   Launcher). Port `42100` **nicht** weiterleiten. Ist die DSM-Firewall aktiv, `4445` erlauben.
+6. **Discord-Developer-Portal** → Application → *OAuth2 → Redirects*:
+   `https://matters86launcher.synology.me:4445/callback` hinzufügen.
+7. **Bot umstellen** (Nachricht mit dem Secret wird automatisch gelöscht):
+   ```
+   [p]webcore oauth <client_id> <client_secret> https://matters86launcher.synology.me:4445/callback
+   [p]reload webcore
+   ```
+8. **Von außen testen** (Handy im Mobilfunknetz, nicht im WLAN):
+   `https://matters86launcher.synology.me:4445` → Login mit Discord.
+9. **Zugriff vergeben:** Grundmodus `owner` lassen und dem Team über *Verwaltung → Zugriff & Rollen*
+   gezielt Seiten freigeben.
+
+Hinweise:
+- Nach Schritt 7 funktioniert der Login nur noch über die HTTPS-Adresse (Cookie `Secure`). Für
+  lokale Tests ohne HTTPS vorübergehend wieder eine `http://…/callback`-Adresse setzen.
+- Statt eines eigenen Ports geht auch eine Subdomain wie `dashboard.matters86launcher.synology.me`
+  auf Port 443, wenn das Zertifikat die Subdomain (Wildcard) abdeckt und 443 weitergeleitet ist.
+- Fehlerbild „Ungültige redirect_uri“ bei Discord: Adresse in Portal und Bot müssen **exakt**
+  gleich sein (inkl. Port und `/callback`).
 
 ## Für Cog-Entwickler: eigene Seite registrieren
 
@@ -132,6 +187,30 @@ class MeinCog(commands.Cog):
 Der `handler` bekommt das aiohttp-`request` und gibt ein Dict mit `title` und `content`
 (HTML-String) zurück. Der Inhalt wird in das gemeinsame Layout eingebettet – nutzbare
 CSS-Klassen u. a.: `card-x`, `table`, `stat`, `stat-label`, `mono`, `btn-accent`.
+
+## UI-Kit für Cog-Seiten (`webcore/ui.py`)
+
+Alle Dashboard-Seiten nutzen dieselben Bausteine – dadurch sehen sie gleich aus und bekommen
+Reiter, Speicherleiste, Chip-Auswahl, Bestätigungsdialoge, Tabellensuche und die Handy-Ansicht
+automatisch. Zugriff im Handler: `ui = request.app["webcore"].ui`.
+
+| Baustein | Zweck |
+|---|---|
+| `ui.hero(icon, "", text)` | Kopfzeile der Seite: Icon + ein Satz, was die Seite macht |
+| `ui.stats([(label, wert, icon, hinweis, ton)])` | Kennzahlen-Kacheln (`ton`: ok/warn/bad/info) |
+| `ui.tab(key, titel, icon, inhalt, count=n)` | Reiter; mehrere hintereinander ergeben die Reiterleiste |
+| `ui.card(titel, inhalt, desc=…, icon=…, actions=…)` | Karte mit Überschrift und Kurzbeschreibung |
+| `ui.callout(text, tone=…)`, `ui.empty(icon, titel, text)` | Hinweisbox, leerer Zustand |
+| `ui.form(action, inhalt, csrf=…, hidden={…}, savebar=True)` | Formular inkl. CSRF; `savebar` zeigt bei Änderungen „Speichern/Verwerfen“; `confirm="…"` fragt vor dem Absenden; `enctype=` für Uploads |
+| `ui.grid(ui.field(label, control, help=…), cols=2)` | Formularraster mit Hilfetexten |
+| `ui.switch`, `ui.switches(...)`, `ui.text_input`, `ui.number(…, unit="Sek.")`, `ui.textarea`, `ui.color_input` | Eingabefelder |
+| `ui.select(name, [(wert, label[, farbe])], selected, multiple=True)` | Auswahl; `multiple` wird zur durchsuchbaren Chip-Auswahl |
+| `ui.button(label, icon=…, kind="danger", confirm="Wirklich?")` | Buttons, optional mit Bestätigungsdialog |
+| `ui.table(köpfe, [ui.row(...)], search=True)` | Tabelle mit Suche; auf dem Handy automatisch als Karten |
+
+Regeln: Titel im Hero leer lassen (die Kopfzeile zeigt den Seitennamen), ein Einstellungsformular
+darf mehrere Reiter umschließen (ein Speichern sendet alles), Werte in eigenem Markup mit
+`html.escape` absichern. Ein kurzes Vorbild ist `example/example.py`, ein großes `tickets/dashboard.py`.
 
 ## Einstellungen über das Dashboard ändern (Formulare, POST + CSRF)
 

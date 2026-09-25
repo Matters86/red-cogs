@@ -1,15 +1,14 @@
 """WebCore-Dashboard für den Poll-Cog.
 
-Aufgaben (gleiches Muster wie raidhelper/dashboard.py):
-* GET                  -> Übersicht: Statistik, Einstellungen, Neue Umfrage, Tabelle
+Aufgaben (gleiches Muster wie tickets/dashboard.py):
+* GET                  -> Seite mit Reitern: Umfragen · Neue Umfrage · Einstellungen · Texte
 * GET ?poll=<id>       -> Ergebnis-Detail einer Umfrage (read-only)
 * POST form=settings   -> Einstellungen speichern (Post/Redirect/Get)
 * POST form=create     -> Neue Umfrage anlegen und posten
 * POST form=action     -> Umfrage schließen/öffnen/löschen
 
-Es werden nur die Theme-Klassen (card-x, table, stat, …) plus die ohnehin
-geladenen Bootstrap-Klassen genutzt – kein eigenes Design. Nutzereingaben werden
-mit ``html.escape`` abgesichert.
+Aufbau mit dem UI-Baukasten von WebCore (``request.app["webcore"].ui``) – kein
+eigenes CSS. Nutzereingaben werden mit ``html.escape`` abgesichert.
 """
 
 from __future__ import annotations
@@ -26,53 +25,14 @@ from .strings import LANGUAGES, OVERRIDABLE_KEYS, STRINGS
 
 HARD_OPTION_LIMIT = 25
 
-_FORM_STYLE = """
-<style>
-  .pl-form label{display:block;color:var(--muted);font-size:.8rem;
-    text-transform:uppercase;letter-spacing:.05em;margin:14px 0 5px}
-  .pl-form input,.pl-form select,.pl-form textarea{width:100%;background:var(--panel-2);
-    color:var(--text);border:1px solid var(--border);border-radius:9px;
-    padding:9px 11px;font-family:inherit;font-size:.92rem}
-  .pl-form textarea{min-height:120px;resize:vertical;line-height:1.5}
-  .pl-form .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  .pl-check{display:flex;align-items:center;gap:8px;margin-top:12px}
-  .pl-check input{width:auto}
-  .pl-flash{background:rgba(61,220,151,.12);border:1px solid var(--accent);
-    color:var(--text);border-radius:10px;padding:11px 14px;margin-bottom:18px}
-  .pl-title{font-family:"Archivo",sans-serif;font-weight:700;font-size:1.15rem;margin:0 0 14px}
-  .pl-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px}
-  .pl-actions{display:flex;gap:6px;flex-wrap:wrap}
-  .pl-actions button,.pl-actions a{font-size:.78rem;padding:5px 9px;border-radius:8px;
-    border:1px solid var(--border);background:var(--panel-2);color:var(--text);
-    text-decoration:none;cursor:pointer}
-  .pl-actions .danger{border-color:var(--danger);color:var(--danger)}
-  .pl-spacer{height:24px}
-  .pl-bar{display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap}
-  .pl-opt{margin:14px 0}
-  .pl-opt-head{display:flex;justify-content:space-between;gap:12px;margin-bottom:5px}
-  .pl-opt-head .name{font-weight:600}
-  .pl-opt-head .num{color:var(--muted);font-size:.85rem}
-  .pl-track{background:var(--panel-2);border:1px solid var(--border);border-radius:8px;
-    height:22px;overflow:hidden}
-  .pl-fill{height:100%;background:var(--accent);border-radius:7px 0 0 7px;min-width:2px}
-  .pl-voters{color:var(--muted);font-size:.82rem;margin-top:5px}
-</style>
-"""
+# Beschriftung + Hilfe der überschreibbaren Texte (Schlüssel aus strings.OVERRIDABLE_KEYS)
+_OVERRIDE_LABELS = {
+    "embed_no_votes": ("Noch keine Stimmen", "Steht in der Umfrage, solange noch niemand abgestimmt hat."),
+}
 
 
 def _esc(value) -> str:
     return html.escape(str(value)) if value is not None else ""
-
-
-def _options(items, selected_ids, *, none_label: str | None = None) -> str:
-    sel = {str(s) for s in (selected_ids or [])}
-    out = []
-    if none_label is not None:
-        out.append(f"<option value=''{'' if sel else ' selected'}>{_esc(none_label)}</option>")
-    for ident, label in items:
-        is_sel = " selected" if str(ident) in sel else ""
-        out.append(f"<option value='{_esc(ident)}'{is_sel}>{_esc(label)}</option>")
-    return "".join(out)
 
 
 def _one_id(value):
@@ -85,6 +45,16 @@ def _status_word(poll: dict) -> str:
     if poll.get("closed"):
         return "geschlossen"
     return "offen"
+
+
+_STATUS_TONE = {"offen": "ok", "geschlossen": "warn", "beendet": "muted"}
+
+
+def _role_items(guild):
+    return [
+        (r.id, r.name, f"#{r.color.value:06x}" if getattr(r, "color", None) and r.color.value else None)
+        for r in sorted(guild.roles, key=lambda r: r.position, reverse=True) if not r.is_default()
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -115,191 +85,192 @@ def _selected_guild(guilds, request):
     return guilds[0] if guilds else None
 
 
+def _guild_bar(ui, guilds, guild, request) -> str:
+    """Cog-eigene Server-Auswahl – nur ohne globalen WebCore-Server-Wechsler."""
+    if request.get("wc_switcher"):
+        return ""
+    return ui.form(
+        "/cogs/poll",
+        ui.field("Server", ui.select("guild", [(g.id, g.name) for g in guilds], guild.id, autosubmit=True)),
+        csrf="", method="get",
+    )
+
+
 # --------------------------------------------------------------------------- #
 #  Rendern (GET)
 # --------------------------------------------------------------------------- #
 async def _render(cog, request):
+    ui = request.app["webcore"].ui
     guilds = await _visible_guilds(cog, request)
     guild = _selected_guild(guilds, request)
     if guild is None:
-        return {"title": "Umfragen", "content": "<div class='card-x'>Der Bot ist auf keinem Server.</div>"}
+        return {"title": "Umfragen",
+                "content": ui.card(body=ui.empty("bi-hdd-network", "Der Bot ist auf keinem Server."))}
 
     conf = await cog.config.guild(guild).all()
     csrf = request.get("webcore_csrf", "")
     polls = conf.get("polls") or {}
-
-    flash = ""
-    if request.query.get("ok"):
-        flash = f"<div class='pl-flash'>{_esc(request.query.get('ok'))}</div>"
-
-    guild_opts = _options([(g.id, g.name) for g in guilds], [guild.id])
-    bar = (
-        "<div class='pl-bar'>"
-        "<form method='get' action='/cogs/poll' class='pl-form' style='margin:0'>"
-        f"<select name='guild' onchange='this.form.submit()'>{guild_opts}</select>"
-        "</form>"
-        f"<span class='mono' style='color:var(--muted)'>{_esc(guild.name)}</span>"
-        "</div>"
-    )
-    # Globaler Server-Wechsler von WebCore aktiv -> eigenes Dropdown ausblenden.
-    if request.get("wc_switcher"):
-        bar = ""
+    bar = _guild_bar(ui, guilds, guild, request)
 
     # Ergebnis-Detailansicht?
     sel = request.query.get("poll")
     if sel and sel in polls:
-        return {"title": "Umfragen", "content": _FORM_STYLE + bar + _render_results(guild, polls[sel])}
+        return {"title": "Umfragen · Ergebnis", "content": bar + _render_results(ui, guild, polls[sel])}
 
     active = sum(1 for p in polls.values() if not (p.get("closed") or p.get("ended")))
     total_votes = sum(vote_counts(p)[1] for p in polls.values())
-    anon_default = "anonym" if conf.get("default_anonymous") else "öffentlich"
-    stats = (
-        "<div class='pl-grid'>"
-        f"<div class='stat'><div class='stat-label'>Aktive Umfragen</div><div>{active}</div></div>"
-        f"<div class='stat'><div class='stat-label'>Stimmen gesamt</div><div>{total_votes}</div></div>"
-        f"<div class='stat'><div class='stat-label'>Standard-Sichtbarkeit</div><div>{anon_default}</div></div>"
-        "</div><div class='pl-spacer'></div>"
+    head = ui.hero(
+        "bi-bar-chart", "",
+        "Mitglieder stimmen per Button direkt in Discord ab. Hier startest du neue Umfragen, siehst die "
+        "Ergebnisse und legst fest, wer Umfragen erstellen darf.",
+    ) + ui.stats([
+        ("Aktive Umfragen", active, "bi-broadcast", None, "ok" if active else None),
+        ("Umfragen gesamt", len(polls), "bi-collection", None, None),
+        ("Stimmen gesamt", total_votes, "bi-check2-square", None, None),
+        ("Stimmabgabe", "anonym" if conf.get("default_anonymous") else "sichtbar", "bi-eye",
+         "Standard für neue Umfragen", None),
+    ])
+
+    body = (
+        ui.tab("umfragen", "Umfragen", "bi-list-check", _render_polls_table(ui, guild, polls, csrf), count=len(polls))
+        + ui.tab("neu", "Neue Umfrage", "bi-plus-square", _render_create_form(ui, guild, conf, csrf))
+        + _render_settings(ui, guild, conf, csrf)
     )
-
-    settings = _render_settings(guild, conf, csrf)
-    create = _render_create_form(guild, conf, csrf)
-    table = _render_polls_table(guild, polls, csrf)
-
-    return {
-        "title": "Umfragen",
-        "content": _FORM_STYLE + bar + flash + stats + settings
-        + "<div class='pl-spacer'></div>" + create
-        + "<div class='pl-spacer'></div>" + table,
-    }
+    return {"title": "Umfragen", "content": bar + head + body}
 
 
-def _render_settings(guild, conf, csrf) -> str:
-    lang_opts = _options(list(LANGUAGES.items()), [conf.get("language", "de")])
-    create_opts = _options([("manager", "Nur Mods/Manager"), ("everyone", "Alle Mitglieder")],
-                           [conf.get("allow_create", "manager")])
-    role_opts = _options([(r.id, r.name) for r in guild.roles if not r.is_default()],
-                         conf.get("manager_roles") or [])
+def _render_settings(ui, guild, conf, csrf) -> str:
+    access = ui.card("Allgemein & Rechte", ui.grid(
+        ui.field("Sprache", ui.select("language", list(LANGUAGES.items()), conf.get("language", "de")),
+                 help="Sprache der Umfrage-Nachrichten und Buttons."),
+        ui.field("Erstellen erlaubt für", ui.select(
+            "allow_create", [("manager", "Nur Mods/Manager"), ("everyone", "Alle Mitglieder")],
+            conf.get("allow_create", "manager")),
+            help="Wer in Discord mit <code>[p]poll create</code> Umfragen starten darf."),
+        ui.field("Manager-Rollen", ui.select("manager_roles", _role_items(guild), conf.get("manager_roles") or [],
+                                             multiple=True, placeholder="Rollen suchen …"),
+                 help="Dürfen Umfragen erstellen und fremde Umfragen schließen/löschen. "
+                      "Server-Verwalter dürfen das immer.", wide=True),
+        ui.field("Max. Optionen", ui.number("max_options", int(conf.get("max_options", 10)), min=2,
+                                            max=HARD_OPTION_LIMIT, unit="Optionen"),
+                 help=f"Obergrenze je Umfrage (2–{HARD_OPTION_LIMIT})."),
+    ), icon="bi-shield-check", desc="Wer Umfragen erstellen und verwalten darf.")
+
+    defaults = ui.card("Standardwerte", "<div class='wc-switches'>"
+        + ui.switch("default_multiple", "Mehrfachauswahl erlauben", conf.get("default_multiple"),
+                    desc="Mitglieder dürfen mehrere Optionen wählen.")
+        + ui.switch("default_anonymous", "Anonym abstimmen", conf.get("default_anonymous"),
+                    desc="Nur Zähler sichtbar, keine Namen.")
+        + "</div>", icon="bi-toggles",
+        desc="Vorbelegung für neue Umfragen – lässt sich pro Umfrage ändern.")
+
     overrides = conf.get("messages") or {}
-    override_fields = ""
+    fields = []
     for key in OVERRIDABLE_KEYS:
-        current = overrides.get(key, "")
-        default = STRINGS["de"].get(key, "")
-        override_fields += (
-            f"<label>{_esc(key)}</label>"
-            f"<input name='ovr_{key}' value='{_esc(current)}' placeholder='{_esc(default)}'>"
-        )
-    mult_checked = "checked" if conf.get("default_multiple") else ""
-    anon_checked = "checked" if conf.get("default_anonymous") else ""
+        label, hint = _OVERRIDE_LABELS.get(key, (key, None))
+        fields.append(ui.field(label, ui.text_input(f"ovr_{key}", overrides.get(key, ""),
+                                                    placeholder=STRINGS["de"].get(key, "")),
+                               help=hint, wide=True))
+    texts = ui.card("Eigene Texte", ui.grid(*fields), icon="bi-chat-left-text",
+                    desc="Leer lassen = Standardtext der gewählten Sprache (als grauer Platzhalter sichtbar).")
 
-    return (
-        "<div class='card-x'><div class='pl-title'>Einstellungen</div>"
-        "<form class='pl-form' method='post' action='/cogs/poll'>"
-        f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-        "<input type='hidden' name='form' value='settings'>"
-        f"<input type='hidden' name='guild' value='{guild.id}'>"
-        "<div class='row2'>"
-        f"<div><label>Sprache</label><select name='language'>{lang_opts}</select></div>"
-        f"<div><label>Erstellen erlaubt für</label><select name='allow_create'>{create_opts}</select></div>"
-        "</div>"
-        "<div class='row2'>"
-        f"<div><label>Max. Optionen (2–{HARD_OPTION_LIMIT})</label>"
-        f"<input type='number' name='max_options' min='2' max='{HARD_OPTION_LIMIT}' value='{int(conf.get('max_options', 10))}'></div>"
-        f"<div><label>Manager-Rollen (Mehrfachauswahl)</label>"
-        f"<select name='manager_roles' multiple size='4'>{role_opts}</select></div>"
-        "</div>"
-        f"<div class='pl-check'><input type='checkbox' name='default_multiple' {mult_checked}><span>Standard: Mehrfachauswahl erlauben</span></div>"
-        f"<div class='pl-check'><input type='checkbox' name='default_anonymous' {anon_checked}><span>Standard: anonym (nur Zähler, keine Namen)</span></div>"
-        "<div class='pl-spacer'></div>"
-        "<div class='pl-title' style='font-size:1rem'>Texte überschreiben</div>"
-        f"{override_fields}"
-        "<div class='pl-spacer'></div>"
-        "<button class='btn-accent' type='submit'>Speichern</button>"
-        "</form></div>"
+    save = ui.save_row("Einstellungen speichern")
+    # Ein Formular über zwei Reiter (Einstellungen + Texte) – beide speichern alles.
+    return ui.form(
+        "/cogs/poll",
+        ui.tab("einstellungen", "Einstellungen", "bi-sliders", access + defaults + save)
+        + ui.tab("texte", "Texte", "bi-chat-left-text", texts + save),
+        csrf=csrf, hidden={"form": "settings", "guild": guild.id}, savebar=True,
     )
 
 
-def _render_create_form(guild, conf, csrf) -> str:
-    channel_opts = _options([(c.id, f"#{c.name}") for c in guild.text_channels], [])
-    mult_checked = "checked" if conf.get("default_multiple") else ""
-    anon_checked = "checked" if conf.get("default_anonymous") else ""
+def _render_create_form(ui, guild, conf, csrf) -> str:
     max_opts = int(conf.get("max_options", 10))
-    return (
-        "<div class='card-x'><div class='pl-title'>Neue Umfrage</div>"
-        "<form class='pl-form' method='post' action='/cogs/poll'>"
-        f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-        "<input type='hidden' name='form' value='create'>"
-        f"<input type='hidden' name='guild' value='{guild.id}'>"
-        "<label>Frage</label><input name='question' maxlength='256' placeholder='Beste Pizza?'>"
-        f"<label>Optionen (eine pro Zeile, 2–{max_opts})</label>"
-        "<textarea name='options' placeholder='Margherita&#10;Salami&#10;Hawaii'></textarea>"
-        "<div class='row2'>"
-        f"<div><label>Kanal</label><select name='channel'>{channel_opts}</select></div>"
-        "<div><label>Laufzeit (optional)</label><input name='duration' placeholder='z. B. 2h, 30m, 1d – leer = kein Limit'></div>"
-        "</div>"
-        f"<div class='pl-check'><input type='checkbox' name='multiple' {mult_checked}><span>Mehrfachauswahl erlauben</span></div>"
-        f"<div class='pl-check'><input type='checkbox' name='anonymous' {anon_checked}><span>Anonym abstimmen</span></div>"
-        "<div class='pl-spacer'></div>"
-        "<button class='btn-accent' type='submit'>Umfrage posten</button>"
-        "</form></div>"
+    text_items = [(c.id, f"#{c.name}") for c in guild.text_channels]
+    form = ui.form(
+        "/cogs/poll",
+        ui.grid(
+            ui.field("Frage", ui.text_input("question", "", placeholder="Beste Pizza?", attrs={"maxlength": 256}),
+                     wide=True),
+            ui.field(f"Optionen (eine pro Zeile, 2–{max_opts})",
+                     ui.textarea("options", "", rows=5, placeholder="Margherita\nSalami\nHawaii"),
+                     help="Jede Zeile wird ein Button. Die Obergrenze stellst du unter „Einstellungen“ ein.", wide=True),
+            ui.field("Kanal", ui.select("channel", text_items), help="Hier wird die Umfrage gepostet."),
+            ui.field("Laufzeit (optional)", ui.text_input("duration", "", placeholder="z. B. 2h, 30m, 1d"),
+                     help="Leer = läuft, bis sie geschlossen wird."),
+        )
+        + "<div class='wc-switches'>"
+        + ui.switch("multiple", "Mehrfachauswahl erlauben", conf.get("default_multiple"),
+                    desc="Mitglieder dürfen mehrere Optionen wählen.")
+        + ui.switch("anonymous", "Anonym abstimmen", conf.get("default_anonymous"),
+                    desc="Nur Zähler sichtbar, keine Namen.")
+        + "</div>"
+        + ui.actions(ui.button("Umfrage posten", icon="bi-send")),
+        csrf=csrf, hidden={"form": "create", "guild": guild.id},
     )
+    return ui.card("Neue Umfrage", form, icon="bi-plus-square",
+                   desc="Die Umfrage wird sofort im gewählten Kanal gepostet (als Bot).")
 
 
-def _render_polls_table(guild, polls, csrf) -> str:
+def _render_polls_table(ui, guild, polls, csrf) -> str:
     if not polls:
-        return "<div class='card-x'>Für diesen Server sind keine Umfragen gespeichert.</div>"
-    rows = ""
+        return ui.card(body=ui.empty(
+            "bi-bar-chart", "Für diesen Server sind keine Umfragen gespeichert.",
+            "Starte eine im Reiter „Neue Umfrage“ oder in Discord mit <code>[p]poll create</code>."))
+    rows = []
     for p in sorted(polls.values(), key=lambda x: x.get("created_ts", 0), reverse=True):
         _, total, voters = vote_counts(p)
         status = _status_word(p)
-        pid = _esc(p["id"])
+        pid = p["id"]
         channel = guild.get_channel(p.get("channel_id")) if p.get("channel_id") else None
         ch_name = f"#{channel.name}" if channel is not None else "—"
-        toggle = "reopen" if (p.get("closed") or p.get("ended")) else "close"
-        toggle_label = "Öffnen" if (p.get("closed") or p.get("ended")) else "Schließen"
-        action_form = (
-            "<form method='post' action='/cogs/poll' style='display:inline'>"
-            f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-            "<input type='hidden' name='form' value='action'>"
-            f"<input type='hidden' name='guild' value='{guild.id}'>"
-            f"<input type='hidden' name='poll_id' value='{pid}'>"
-            f"<button name='action' value='{toggle}'>{toggle_label}</button>"
-            "</form>"
+        is_closed = bool(p.get("closed") or p.get("ended"))
+        hidden = {"form": "action", "guild": guild.id, "poll_id": pid}
+        results = ui.button("Ergebnis", icon="bi-bar-chart", kind="ghost", small=True,
+                            href=f"/cogs/poll?guild={guild.id}&poll={quote(str(pid))}")
+        toggle = ui.form(
+            "/cogs/poll",
+            ui.button("Öffnen" if is_closed else "Schließen", icon="bi-unlock" if is_closed else "bi-lock",
+                      kind="ghost", small=True,
+                      attrs={"title": "Abstimmung wieder öffnen" if is_closed else "Abstimmung beenden"}),
+            csrf=csrf, hidden={**hidden, "action": "reopen" if is_closed else "close"},
         )
-        delete_form = (
-            "<form method='post' action='/cogs/poll' style='display:inline' "
-            f"onsubmit=\"return confirm('Umfrage {pid} wirklich löschen?')\">"
-            f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-            "<input type='hidden' name='form' value='action'>"
-            f"<input type='hidden' name='guild' value='{guild.id}'>"
-            f"<input type='hidden' name='poll_id' value='{pid}'>"
-            f"<button class='danger' name='action' value='delete'>Löschen</button>"
-            "</form>"
+        delete = ui.form(
+            "/cogs/poll",
+            ui.button("", icon="bi-trash", kind="danger", small=True, attrs={"title": "Umfrage löschen"}),
+            csrf=csrf, hidden={**hidden, "action": "delete"},
+            confirm="Die Umfrage, alle Stimmen und ihre Discord-Nachricht werden gelöscht.",
         )
-        results_link = f"<a href='/cogs/poll?guild={guild.id}&poll={pid}'>Ergebnis</a>"
-        rows += (
-            f"<tr><td class='mono'>{pid}</td><td>{_esc((p.get('question') or '')[:70])}</td>"
-            f"<td>{_esc(ch_name)}</td><td>{total} ({voters})</td><td>{status}</td>"
-            f"<td><div class='pl-actions'>{results_link}{action_form}{delete_form}</div></td></tr>"
-        )
-    return (
-        "<div class='card-x'><div class='pl-title'>Umfragen</div>"
-        "<table class='table'><thead><tr><th>ID</th><th>Frage</th><th>Kanal</th>"
-        "<th>Stimmen (Teiln.)</th><th>Status</th><th>Aktionen</th></tr></thead>"
-        f"<tbody>{rows}</tbody></table></div>"
+        tags = ["Mehrfachauswahl" if p.get("multiple") else "eine Stimme", "anonym" if p.get("anonymous") else "öffentlich"]
+        rows.append(ui.row(
+            f"<div class='wc-cell-title'>{_esc((p.get('question') or '')[:70])}</div>"
+            f"<div class='wc-cell-sub'><span class='mono'>{_esc(pid)}</span> · {_esc(' · '.join(tags))}</div>",
+            _esc(ch_name),
+            f"<span class='mono'>{total}</span>"
+            f"<div class='wc-cell-sub'>{voters} Teilnehmer</div>",
+            ui.badge(status, _STATUS_TONE.get(status, "muted")),
+            f"><div class='wc-row-actions'>{results}{toggle}{delete}</div>",
+        ))
+    return ui.card(
+        "Umfragen", ui.table(["Frage", "Kanal", "Stimmen", "Status", ">"], rows,
+                             search=True, search_placeholder="Nach Frage, ID oder Kanal suchen …", id="pl-polls"),
+        icon="bi-list-check",
+        desc="Neueste zuerst. „Öffnen“ setzt auch eine abgelaufene Laufzeit zurück.",
     )
 
 
-def _render_results(guild, poll: dict) -> str:
+def _render_results(ui, guild, poll: dict) -> str:
     counts, total, voters = vote_counts(poll)
     options = poll.get("options") or []
     anonymous = bool(poll.get("anonymous"))
     winning = max(counts) if counts else 0
+    finished = bool(poll.get("closed") or poll.get("ended"))
 
-    blocks = ""
+    blocks = []
     for idx, opt in enumerate(options):
         c = counts[idx] if idx < len(counts) else 0
         pct = int(round((c / total) * 100)) if total else 0
-        trophy = " 🏆" if (poll.get("closed") or poll.get("ended")) and c == winning and c > 0 else ""
+        trophy = " 🏆" if finished and c == winning and c > 0 else ""
         voters_line = ""
         if not anonymous:
             names = [
@@ -308,28 +279,35 @@ def _render_results(guild, poll: dict) -> str:
                 if idx in (v.get("choices") or [])
             ]
             if names:
-                voters_line = f"<div class='pl-voters'>{', '.join(names)}</div>"
-        blocks += (
-            "<div class='pl-opt'>"
-            f"<div class='pl-opt-head'><span class='name'>{idx + 1}. {_esc(opt)}{trophy}</span>"
-            f"<span class='num'>{c} · {pct}%</span></div>"
-            f"<div class='pl-track'><div class='pl-fill' style='width:{pct}%'></div></div>"
+                voters_line = f"<div class='wc-help'>{', '.join(names)}</div>"
+        blocks.append(
+            "<div class='meter'>"
+            f"<div class='mlabel'><span>{idx + 1}. {_esc(opt)}{trophy}</span>"
+            f"<span class='v'>{c} · {pct}%</span></div>"
+            f"<div class='bar'><span style='width:{pct}%'></span></div>"
             f"{voters_line}</div>"
         )
 
-    meta = []
-    meta.append("Mehrfachauswahl" if poll.get("multiple") else "Eine Stimme")
-    meta.append("anonym" if anonymous else "öffentlich")
-    meta.append(_status_word(poll))
-    back = f"<a href='/cogs/poll?guild={guild.id}' style='color:var(--accent)'>&larr; Zurück</a>"
-    return (
-        "<div class='card-x'>"
-        f"<div class='pl-title'>{_esc(poll.get('question'))} "
-        f"<span class='mono' style='color:var(--muted);font-size:.8rem'>{_esc(poll.get('id'))}</span></div>"
-        f"<div style='color:var(--muted);margin-bottom:14px'>{' · '.join(meta)} · {total} Stimmen · {voters} Teilnehmer</div>"
-        f"{blocks}"
-        f"<div class='pl-spacer'></div>{back}</div>"
-    )
+    status = _status_word(poll)
+    back = ui.button("Zurück zu den Umfragen", icon="bi-arrow-left", kind="ghost", small=True,
+                     href=f"/cogs/poll?guild={guild.id}#umfragen")
+    meta = [
+        f"<span class='mono'>{_esc(poll.get('id'))}</span>",
+        "Mehrfachauswahl" if poll.get("multiple") else "Eine Stimme",
+        "anonym" if anonymous else "öffentlich",
+        ui.badge(status, _STATUS_TONE.get(status, "muted")),
+    ]
+    # Zurück-Button im Kopftext (ui.hero(actions=…) bricht auf dem Handy nicht um).
+    head = ui.hero("bi-bar-chart", poll.get("question") or "Umfrage",
+                   " · ".join(meta) + f"<br><br>{back}") + ui.stats([
+        ("Stimmen", total, "bi-check2-square", None, None),
+        ("Teilnehmer", voters, "bi-people", None, None),
+    ])
+    body = (f"<div class='kv'>{''.join(blocks)}</div>" if blocks
+            else ui.empty("bi-bar-chart", "Diese Umfrage hat keine Optionen."))
+    note = "" if not anonymous else ui.callout("Anonyme Umfrage – es werden nur Zähler angezeigt, keine Namen.")
+    return head + ui.card("Ergebnis", note + body, icon="bi-bar-chart",
+                          desc="Anteil an allen abgegebenen Stimmen." + (" 🏆 = meiste Stimmen." if finished else ""))
 
 
 # --------------------------------------------------------------------------- #

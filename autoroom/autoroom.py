@@ -758,32 +758,14 @@ class AutoRoom(commands.Cog):
 
     # ----------------------------------------------------------------- #
     #  Dashboard-Seite (Anzeige + Einstellungen per Formular)
+    #  Aufbau mit dem WebCore-UI-Kit: Reiter Quellen · Aktive Räume · Zugriff
     # ----------------------------------------------------------------- #
-    def _voice_select(self, guild, field, selected=None, exclude=None, blank=None):
-        opts = []
-        if blank is not None:
-            sel = " selected" if not selected else ""
-            opts.append(f"<option value=''{sel}>{html.escape(blank)}</option>")
-        for ch in guild.voice_channels:
-            if exclude and str(ch.id) in exclude:
-                continue
-            sel = " selected" if selected and ch.id == selected else ""
-            opts.append(f"<option value='{ch.id}'{sel}>{html.escape(ch.name)}</option>")
-        return f"<select name='{field}' class='form-select form-select-sm'>{''.join(opts)}</select>"
-
-    def _category_select(self, guild, field, selected=None):
-        opts = [f"<option value=''>{'wie Quelle'}</option>"]
-        for cat in guild.categories:
-            sel = " selected" if selected and cat.id == selected else ""
-            opts.append(f"<option value='{cat.id}'{sel}>{html.escape(cat.name)}</option>")
-        return f"<select name='{field}' class='form-select form-select-sm'>{''.join(opts)}</select>"
-
-    def _vis_select(self, field, selected="public"):
-        opts = []
-        for key in VIS_CHOICES:
-            sel = " selected" if selected == key else ""
-            opts.append(f"<option value='{key}'{sel}>{VIS_LABELS[key]}</option>")
-        return f"<select name='{field}' class='form-select form-select-sm'>{''.join(opts)}</select>"
+    _SOURCE_HELP = (
+        "<b>Platzhalter</b> in Namensvorlagen: <code>{user}</code> Name des Erstellers, "
+        "<code>{game}</code> aktuelles Spiel, <code>{num}</code> fortlaufende Nummer.<br>"
+        "<b>Sichtbarkeit</b>: <b>Öffentlich</b> = alle sehen und betreten den Raum · "
+        "<b>Gesperrt</b> = sichtbar, betreten nur mit Freigabe · <b>Privat</b> = unsichtbar ohne Freigabe."
+    )
 
     async def _visible_guilds(self, request):
         webcore = request.app.get("webcore")
@@ -793,158 +775,198 @@ class AutoRoom(commands.Cog):
             guilds = list(self.bot.guilds)
         return sorted(guilds, key=lambda g: g.name.lower())
 
-    async def _render_dashboard(self, request) -> dict:
-        csrf = request.get("webcore_csrf", "")
+    def _source_fields(self, ui, guild, cfg, *, bitrate: bool, lead: str = "") -> str:
+        """Gemeinsame Felder für „Quelle bearbeiten“ und „Neue Quelle“ (gleiche Feldnamen wie bisher)."""
+        cat_items = [(c.id, c.name) for c in guild.categories]
+        vis_items = [(k, VIS_LABELS[k]) for k in VIS_CHOICES]
+        fields = [lead] if lead else []
+        fields += [
+            ui.field("Ziel-Kategorie", ui.select("category_id", cat_items, cfg.get("dest_category"),
+                                                 none_label="wie Quell-Channel"),
+                     help="Hier entstehen die neuen Räume."),
+            ui.field("Sichtbarkeit", ui.select("visibility", vis_items, cfg.get("default_visibility", "public")),
+                     help="Standard für neue Räume – der Besitzer kann sie per Befehl ändern."),
+            ui.field("Namensvorlage", ui.text_input("template", cfg.get("name_template", ""), placeholder="{user}"),
+                     help="z. B. <code>🔊 {user}</code> oder <code>{game} #{num}</code>."),
+            ui.field("Personenlimit", ui.number("limit", int(cfg.get("user_limit") or 0), min=0, max=99, unit="Personen"),
+                     help="0 = unbegrenzt."),
+        ]
+        if bitrate:
+            fields.append(ui.field(
+                "Bitrate", ui.number("bitrate", cfg.get("bitrate_kbps") or "", min=8, unit="kbps"),
+                help=f"Leer = Server-Standard (max. {int(guild.bitrate_limit) // 1000} kbps auf diesem Server).",
+            ))
+        return ui.grid(*fields, cols=3 if bitrate else 2) + "<div class='wc-switches'>" + ui.switch(
+            "textchannel", "Textkanal pro Raum", cfg.get("text_channel"),
+            desc="Legt zu jedem Raum einen Textkanal an, den nur die Personen im Raum sehen.",
+        ) + "</div>"
 
-        guilds = await self._visible_guilds(request)
-        if not guilds:
-            return {"title": "Autovoiceroom", "content": "<div class='card-x'>Der Bot ist auf keinem Server.</div>"}
-
-        gid = request.query.get("guild")
-        guild = self.bot.get_guild(int(gid)) if (gid and gid.isdigit()) else None
-        if guild is None or guild not in guilds:
-            guild = guilds[0]
-
-        flash = ""
-        if request.query.get("ok"):
-            flash = "<div class='card-x ar-flash' style='border-color:var(--accent);margin-bottom:16px'>Gespeichert.</div>"
-        elif request.query.get("err"):
-            flash = "<div class='card-x ar-flash' style='border-color:var(--danger);margin-bottom:16px'>Eingabe ungültig – bitte prüfen.</div>"
-
-        # Server-Auswahl (nur wenn der Bot auf mehr als einem Server ist)
-        guild_picker = ""
-        # Eigenes Dropdown nur, wenn WebCore (noch) keinen globalen Server-Wechsler hat.
-        if len(guilds) > 1 and not request.get("wc_switcher"):
-            options = "".join(
-                f"<option value='{g.id}'{' selected' if g.id == guild.id else ''}>{html.escape(g.name)}</option>"
-                for g in guilds
-            )
-            guild_picker = (
-                "<form method='get' action='/cogs/autoroom' class='card-x' style='margin-bottom:18px'>"
-                "<label class='stat-label'>Server</label>"
-                f"<select name='guild' class='form-select' onchange='this.form.submit()' "
-                f"style='margin-top:6px;max-width:420px'>{options}</select>"
-                "</form>"
-            )
-
-        data = await self.config.guild(guild).all()
+    def _render_sources(self, ui, guild, data, csrf) -> str:
         sources = data.get("sources", {})
-        source_ids = set(sources.keys())
+        blocks = []
+        for cid, cfg in sources.items():
+            ch = guild.get_channel(int(cid))
+            cat = guild.get_channel(int(cfg["dest_category"])) if cfg.get("dest_category") else None
+            vis = cfg.get("default_visibility", "public")
+            tone = {"public": "ok", "locked": "warn", "private": "info"}.get(vis, "muted")
+            desc = (
+                f"Räume in <b>{html.escape(cat.name) if cat else 'gleicher Kategorie'}</b> · "
+                f"{ui.badge(VIS_LABELS.get(vis, '?'), tone)}"
+                + (f" {ui.badge('Textkanal', 'info')}" if cfg.get("text_channel") else "")
+            )
+            remove = ui.form(
+                "/cogs/autoroom",
+                ui.button("Entfernen", icon="bi-trash", kind="danger", small=True),
+                csrf=csrf, hidden={"action": "remove", "guild_id": guild.id, "channel_id": cid},
+                confirm=f"Quelle „{ch.name if ch else cid}“ entfernen? Bereits bestehende Räume bleiben erhalten.",
+            )
+            warn = "" if ch else ui.callout(
+                f"Der Quell-Channel (ID <span class='mono'>{html.escape(str(cid))}</span>) existiert nicht mehr. "
+                "Entferne die Quelle oder lege sie neu an.", tone="warn")
+            edit = ui.form(
+                "/cogs/autoroom",
+                warn + self._source_fields(ui, guild, cfg, bitrate=True) + ui.save_row("Quelle speichern"),
+                csrf=csrf, hidden={"action": "edit", "guild_id": guild.id, "channel_id": cid}, savebar=True,
+            )
+            title = ch.name if ch else "Gelöschter Channel"
+            blocks.append(ui.card(title, edit, icon="bi-mic", desc=desc, actions=remove,
+                                  tone=None if ch else "warn"))
+        if not blocks:
+            blocks.append(ui.card(body=ui.empty(
+                "bi-mic", "Noch keine Quellen.",
+                "Lege unten einen Quell-Channel an – wer ihn betritt, bekommt sofort einen eigenen Raum.")))
 
-        # Aktive Räume (nur gewählter Server)
-        room_rows = []
+        excluded = set(sources.keys()) | set(data.get("active_rooms", {}).keys())
+        voice_items = [(c.id, c.name) for c in guild.voice_channels if str(c.id) not in excluded]
+        hint = "" if voice_items else ui.callout(
+            "Alle Voicechannels sind bereits Quellen oder aktive AutoRooms. Lege in Discord einen neuen "
+            "Voicechannel an (z. B. „➕ Raum erstellen“).", tone="info")
+        add = ui.card(
+            "Neue Quelle", ui.form(
+                "/cogs/autoroom",
+                hint
+                + self._source_fields(
+                    ui, guild, {"name_template": DEFAULT_TEMPLATE}, bitrate=False,
+                    lead=ui.field("Quell-Channel", ui.select("channel_id", voice_items),
+                                  help="Wer diesen Voicechannel betritt, bekommt einen eigenen Raum.", wide=True),
+                )
+                + ui.actions(ui.button("Quelle hinzufügen", icon="bi-plus-lg")),
+                csrf=csrf, hidden={"action": "add", "guild_id": guild.id},
+            ), icon="bi-plus-square",
+            desc="Die Bitrate kannst du nach dem Anlegen in der Quelle einstellen.",
+        )
+        return ui.callout(self._SOURCE_HELP, tone="info") + "".join(blocks) + add
+
+    def _render_rooms(self, ui, guild, data) -> tuple[str, int, int]:
+        sources = data.get("sources", {})
+        rows, people = [], 0
         for cid, rec in data.get("active_rooms", {}).items():
             ch = guild.get_channel(int(cid))
             if ch is None:
                 continue
             owner = guild.get_member(rec.get("owner_id"))
             count = len([m for m in ch.members if not m.bot])
-            room_rows.append(
-                "<tr>"
-                f"<td>{html.escape(ch.name)}</td>"
-                f"<td>{html.escape(owner.display_name) if owner else '—'}</td>"
-                f"<td class='mono'>{count}</td>"
-                "</tr>"
-            )
-        rooms_body = "".join(room_rows) or "<tr><td colspan='3' style='color:var(--muted)'>Aktuell keine aktiven Räume.</td></tr>"
-        active_card = (
-            "<div class='card-x' style='margin-bottom:18px'>"
-            "<div class='stat-label'>Aktive Räume</div>"
-            "<table class='table' style='margin-top:10px'>"
-            "<thead><tr><th>Raum</th><th>Besitzer</th><th>Drin</th></tr></thead>"
-            f"<tbody>{rooms_body}</tbody></table></div>"
+            people += count
+            src = guild.get_channel(int(rec["source_id"])) if str(rec.get("source_id") or "").isdigit() else None
+            text = (" " + ui.badge("Textkanal", "info")) if rec.get("text_id") else ""
+            rows.append(ui.row(
+                f"<div class='wc-cell-title'>{html.escape(ch.name)}{text}</div>"
+                + (f"<div class='wc-cell-sub'>über {html.escape(src.name)}</div>" if src
+                   else ("<div class='wc-cell-sub'>Quelle entfernt</div>" if str(rec.get("source_id") or "") not in sources else "")),
+                html.escape(owner.display_name) if owner else "—",
+                f"><span class='mono'>{count}</span>",
+            ))
+        if rows:
+            table = ui.table(["Raum", "Besitzer", ">Personen"], rows, search=len(rows) > 5,
+                             search_placeholder="Raum oder Besitzer suchen …", id="ar-rooms")
+        else:
+            table = ui.empty("bi-mic-mute", "Gerade ist kein AutoRoom aktiv.",
+                             "Räume erscheinen hier, sobald jemand einen Quell-Channel betritt.")
+        rooms_card = ui.card("Aktive Räume", table, icon="bi-broadcast",
+                             desc="Leere Räume (und ihr Textkanal) werden automatisch gelöscht.")
+        cmds = [
+            ("public · locked · private", "Sichtbarkeit des eigenen Raums ändern"),
+            ("name &lt;Name&gt;", "Raum umbenennen"),
+            ("limit &lt;Zahl&gt;", "Personenlimit (0 = unbegrenzt)"),
+            ("bitrate &lt;kbps&gt;", "Tonqualität ändern"),
+            ("allow · deny &lt;@Person/Rolle&gt;", "Zutritt erlauben bzw. entziehen"),
+            ("claim", "Raum übernehmen, wenn der Besitzer weg ist"),
+            ("transfer &lt;@Person&gt;", "Raum an jemand anderen übergeben"),
+        ]
+        help_rows = [ui.row(f"<code>autoroom {c}</code>", d) for c, d in cmds]
+        help_card = ui.card("Befehle für Raumbesitzer", ui.table(["Befehl", "Wirkung"], help_rows),
+                            icon="bi-terminal",
+                            desc="Als Slash-Befehl <code>/autoroom …</code> oder mit Präfix – nur im eigenen Raum.")
+        return rooms_card + help_card, len(rows), people
+
+    def _render_access(self, ui, guild, data, csrf) -> str:
+        return ui.form(
+            "/cogs/autoroom",
+            ui.card("Zugriff auf private & gesperrte Räume", "<div class='wc-switches'>"
+                    + ui.switch("admin_access", "Admin-Rollen", data.get("admin_access", True),
+                                desc="Admin-Rollen sehen und betreten private und gesperrte Räume.")
+                    + ui.switch("mod_access", "Mod-Rollen", data.get("mod_access", False),
+                                desc="Mod-Rollen sehen und betreten private und gesperrte Räume.")
+                    + "</div>" + ui.save_row("Übernehmen"),
+                    icon="bi-shield-lock",
+                    desc="Gilt für neu erstellte Räume und deren Textkanal. Bestehende Räume bleiben unverändert."),
+            csrf=csrf, hidden={"action": "access", "guild_id": guild.id}, savebar=True,
         )
 
-        # Quellen + Formulare des gewählten Servers
-        src_rows = []
-        for cid, cfg in sources.items():
-            ch = guild.get_channel(int(cid))
-            ch_name = html.escape(ch.name) if ch else f"(gelöscht: {cid})"
-            edit_form = (
-                "<details><summary style='cursor:pointer;color:var(--accent)'>bearbeiten</summary>"
-                "<form method='post' action='/cogs/autoroom' style='margin-top:10px;display:grid;gap:8px;max-width:520px'>"
-                f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-                "<input type='hidden' name='action' value='edit'>"
-                f"<input type='hidden' name='guild_id' value='{guild.id}'>"
-                f"<input type='hidden' name='channel_id' value='{cid}'>"
-                f"<label class='stat-label'>Kategorie</label>{self._category_select(guild, 'category_id', cfg.get('dest_category'))}"
-                f"<label class='stat-label'>Namensvorlage</label><input name='template' class='form-control form-control-sm' value='{html.escape(cfg.get('name_template', ''))}'>"
-                f"<label class='stat-label'>Limit (0 = unbegrenzt)</label><input name='limit' type='number' min='0' max='99' class='form-control form-control-sm' value='{int(cfg.get('user_limit') or 0)}'>"
-                f"<label class='stat-label'>Bitrate kbps (leer = Standard)</label><input name='bitrate' type='number' min='8' class='form-control form-control-sm' value='{cfg.get('bitrate_kbps') or ''}'>"
-                f"<label class='stat-label'>Sichtbarkeit</label>{self._vis_select('visibility', cfg.get('default_visibility', 'public'))}"
-                f"<label class='form-check'><input class='form-check-input' type='checkbox' name='textchannel'{' checked' if cfg.get('text_channel') else ''}> Textkanal pro Raum</label>"
-                "<button class='btn-accent' type='submit'>Speichern</button>"
-                "</form></details>"
-            )
-            remove_form = (
-                "<form method='post' action='/cogs/autoroom' onsubmit=\"return confirm('Quelle entfernen?')\">"
-                f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-                "<input type='hidden' name='action' value='remove'>"
-                f"<input type='hidden' name='guild_id' value='{guild.id}'>"
-                f"<input type='hidden' name='channel_id' value='{cid}'>"
-                "<button type='submit' style='background:none;border:0;color:var(--danger);cursor:pointer'>entfernen</button>"
-                "</form>"
-            )
-            cat = guild.get_channel(int(cfg["dest_category"])) if cfg.get("dest_category") else None
-            cat_cell = html.escape(cat.name) if cat else "<span style='color:var(--muted)'>wie Quelle</span>"
-            src_rows.append(
-                "<tr>"
-                f"<td>{ch_name}</td>"
-                f"<td>{cat_cell}</td>"
-                f"<td class='mono'>{html.escape(cfg.get('name_template', ''))}</td>"
-                f"<td class='mono'>{int(cfg.get('user_limit') or 0) or '∞'}</td>"
-                f"<td>{VIS_LABELS.get(cfg.get('default_visibility'), '?')}</td>"
-                f"<td>{edit_form}</td>"
-                f"<td>{remove_form}</td>"
-                "</tr>"
-            )
-        src_body = "".join(src_rows) or "<tr><td colspan='7' style='color:var(--muted)'>Noch keine Quellen.</td></tr>"
+    async def _render_dashboard(self, request) -> dict:
+        ui = request.app["webcore"].ui
+        csrf = request.get("webcore_csrf", "")
 
-        add_form = (
-            "<form method='post' action='/cogs/autoroom' style='display:grid;gap:8px;max-width:520px;margin-top:14px'>"
-            f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-            "<input type='hidden' name='action' value='add'>"
-            f"<input type='hidden' name='guild_id' value='{guild.id}'>"
-            f"<label class='stat-label'>Quell-Channel</label>{self._voice_select(guild, 'channel_id', exclude=source_ids | set(data.get('active_rooms', {}).keys()))}"
-            f"<label class='stat-label'>Ziel-Kategorie</label>{self._category_select(guild, 'category_id')}"
-            "<label class='stat-label'>Namensvorlage</label>"
-            f"<input name='template' class='form-control form-control-sm' value='{html.escape(DEFAULT_TEMPLATE)}' placeholder='{{user}}'>"
-            "<label class='stat-label'>Limit (0 = unbegrenzt)</label>"
-            "<input name='limit' type='number' min='0' max='99' class='form-control form-control-sm' value='0'>"
-            "<label class='stat-label'>Sichtbarkeit</label>"
-            f"{self._vis_select('visibility')}"
-            "<label class='form-check'><input class='form-check-input' type='checkbox' name='textchannel'> Textkanal pro Raum</label>"
-            "<button class='btn-accent' type='submit'>Quelle hinzufügen</button>"
-            "</form>"
-        )
+        guilds = await self._visible_guilds(request)
+        if not guilds:
+            return {"title": "Autovoiceroom",
+                    "content": ui.card(body=ui.empty("bi-hdd-network", "Der Bot ist auf keinem Server."))}
 
-        access_form = (
-            "<form method='post' action='/cogs/autoroom' style='display:flex;gap:18px;align-items:center;margin-top:14px;flex-wrap:wrap'>"
-            f"<input type='hidden' name='csrf_token' value='{csrf}'>"
-            "<input type='hidden' name='action' value='access'>"
-            f"<input type='hidden' name='guild_id' value='{guild.id}'>"
-            f"<label class='form-check'><input class='form-check-input' type='checkbox' name='admin_access'{' checked' if data.get('admin_access', True) else ''}> Admin-Rollen sehen private Räume</label>"
-            f"<label class='form-check'><input class='form-check-input' type='checkbox' name='mod_access'{' checked' if data.get('mod_access', False) else ''}> Mod-Rollen sehen private Räume</label>"
-            "<button class='btn-accent' type='submit'>Übernehmen</button>"
-            "</form>"
-        )
+        gid = request.query.get("guild")
+        guild = self.bot.get_guild(int(gid)) if (gid and gid.isdigit()) else None
+        if guild is None or guild not in guilds:
+            guild = guilds[0]
 
-        sources_card = (
-            "<div class='card-x' style='margin-bottom:18px'>"
-            f"<h2 style='font-family:Archivo,sans-serif;font-size:1.1rem;margin:0 0 12px'>{html.escape(guild.name)}</h2>"
-            "<table class='table'>"
-            "<thead><tr><th>Quelle</th><th>Kategorie</th><th>Vorlage</th><th>Limit</th><th>Sicht</th><th></th><th></th></tr></thead>"
-            f"<tbody>{src_body}</tbody></table>"
-            f"{add_form}{access_form}</div>"
-        )
+        # Rückmeldung nach dem Speichern: WebCore zeigt ?ok=1 / ?err=1 als Toast und blendet
+        # „*-flash“-Elemente dann aus – der Hinweis hier ist nur der Fallback ohne JavaScript.
+        flash = ""
+        if request.query.get("ok"):
+            flash = f"<div class='ar-flash'>{ui.callout('Gespeichert.', tone='ok')}</div>"
+        elif request.query.get("err"):
+            flash = f"<div class='ar-flash'>{ui.callout('Eingabe ungültig – bitte prüfen.', tone='bad')}</div>"
 
-        intro = (
-            "<p style='color:var(--muted);margin-top:0'>Lege Quell-Channels fest: Wer einen Quell-Channel "
-            "betritt, bekommt automatisch einen eigenen Voicechannel. Platzhalter in Vorlagen: "
-            "<code>{user}</code>, <code>{game}</code>, <code>{num}</code>.</p>"
+        # Eigenes Dropdown nur, wenn WebCore (noch) keinen globalen Server-Wechsler hat.
+        guild_picker = ""
+        if len(guilds) > 1 and not request.get("wc_switcher"):
+            guild_picker = ui.card(body=ui.form(
+                "/cogs/autoroom",
+                ui.field("Server", ui.select("guild", [(g.id, g.name) for g in guilds], guild.id, autosubmit=True)),
+                csrf="", method="get",
+            ))
+
+        data = await self.config.guild(guild).all()
+        sources = data.get("sources", {})
+        rooms_html, n_rooms, people = self._render_rooms(ui, guild, data)
+        access = [n for n, on in (("Admins", data.get("admin_access", True)),
+                                  ("Mods", data.get("mod_access", False))) if on]
+
+        head = ui.hero(
+            "bi-mic", "",
+            "Wer einen <b>Quell-Channel</b> betritt, bekommt automatisch einen eigenen Voicechannel und wird "
+            "hineinverschoben. Ist der Raum leer, wird er wieder gelöscht.",
+        ) + ui.stats([
+            ("Quellen", len(sources), "bi-mic", None, None if sources else "warn"),
+            ("Aktive Räume", n_rooms, "bi-broadcast", None, "ok" if n_rooms else None),
+            ("Personen in Räumen", people, "bi-people", None, None),
+            ("Privat sichtbar für", " + ".join(access) or "niemand", "bi-shield-lock", None, None),
+        ])
+
+        body = (
+            ui.tab("quellen", "Quellen", "bi-mic", self._render_sources(ui, guild, data, csrf), count=len(sources))
+            + ui.tab("raeume", "Aktive Räume", "bi-broadcast", rooms_html, count=n_rooms)
+            + ui.tab("zugriff", "Zugriff", "bi-shield-lock", self._render_access(ui, guild, data, csrf))
         )
-        content = flash + intro + guild_picker + active_card + sources_card
-        return {"title": "Autovoiceroom", "content": content}
+        return {"title": "Autovoiceroom", "content": flash + guild_picker + head + body}
 
     async def _handle_dashboard_post(self, request) -> dict:
         form = await request.post()

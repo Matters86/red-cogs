@@ -2,18 +2,17 @@
 
 Eine Seite unter ``/cogs/commands``:
 
-* **GET**  – Befehlsliste aller geladenen Cogs mit Stufen-Spalten
-  (Jeder/Mod/Admin/Owner), Detail-Metadaten, Suche/Filter (clientseitig).
+* **GET**  – Befehlsliste aller geladenen Cogs mit Mindeststufe (Jeder/Mod/Admin/Owner),
+  Rechte-/Status-Badges, Suche und Filter (clientseitig).
   - ``?guild=<id>&member=<id|name>`` blendet eine exakte Mitglieds-Prüfung als
     zusätzliche Spalte ein.
-  - ``?hidden=1`` zeigt zusätzlich die ausgeblendeten Einträge.
+  - ``?hidden=1`` zeigt zusätzlich die ausgeblendeten Einträge (nur Bot-Owner).
   - ``?export=md`` liefert die (gefilterte) Liste als Markdown-Datei.
-* **POST** – schaltet die Sichtbarkeit einzelner Cogs/Befehle um (CSRF-geschützt),
-  danach Redirect (Post/Redirect/Get).
+* **POST** – schaltet die Sichtbarkeit einzelner Cogs/Befehle um (CSRF-geschützt,
+  nur Bot-Owner/volle Sicht), danach Redirect (Post/Redirect/Get).
 
-Es werden nur Theme-Klassen (card-x, table, stat, btn-accent …) plus die ohnehin
-geladenen Bootstrap-Klassen genutzt – kein eigenes Grunddesign, nur ein kleiner,
-auf die Theme-Variablen abgestimmter Style für Tabelle/Badges/Formularfelder.
+Aufbau mit dem UI-Baukasten von WebCore (``request.app["webcore"].ui``): Reiter
+Befehle · Sichtbarkeit (nur Bot-Owner) – kein eigenes Grunddesign.
 """
 
 from __future__ import annotations
@@ -34,92 +33,46 @@ from .inspector import (
 )
 
 # --------------------------------------------------------------------------- #
-#  Style + clientseitige Filterung
+#  Clientseitige Filter (Cog/Stufe) – ergänzt die Textsuche von ui.table
 # --------------------------------------------------------------------------- #
-_STYLE = """
-<style>
-  .cx-bar{display:flex;flex-wrap:wrap;gap:18px;margin-bottom:18px}
-  .cx-stat{padding:14px 18px;min-width:120px}
-  .cx-controls{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:14px}
-  .cx-controls .grp{display:flex;flex-direction:column;gap:4px}
-  .cx-controls label{color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.05em}
-  .cx-controls input,.cx-controls select{background:var(--panel-2);color:var(--text);
-    border:1px solid var(--border);border-radius:9px;padding:8px 11px;font-family:inherit;font-size:.9rem}
-  .cx-controls input[type=text]{min-width:230px}
-  .cx-links{display:flex;gap:14px;flex-wrap:wrap;margin-left:auto;align-items:center}
-  .cx-links a{color:var(--accent);text-decoration:none;font-size:.88rem}
-  .cx-links a:hover{text-decoration:underline}
-  .cx-flash{background:rgba(61,220,151,.12);border:1px solid var(--accent);color:var(--text);
-    border-radius:10px;padding:10px 14px;margin-bottom:16px}
-  .cx-err{background:rgba(255,107,107,.12);border:1px solid #ff6b6b;color:var(--text);
-    border-radius:10px;padding:10px 14px;margin-bottom:16px}
-  .cx-legend{color:var(--muted);font-size:.8rem;margin:6px 0 16px;line-height:1.5}
-  table.cx-tbl{width:100%;border-collapse:collapse;font-size:.9rem}
-  table.cx-tbl th,table.cx-tbl td{border-bottom:1px solid var(--border);padding:7px 9px;text-align:left;vertical-align:top}
-  table.cx-tbl th{color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
-  table.cx-tbl th.cx-c,table.cx-tbl td.cx-yes,table.cx-tbl td.cx-no{text-align:center;width:64px}
-  tr.cx-grp td{background:var(--panel-2);border-top:2px solid var(--border)}
-  .cx-grp-name{font-family:"Archivo",sans-serif;font-weight:700;font-size:1rem}
-  .cx-grp-count{color:var(--muted);margin-left:8px;font-size:.8rem}
-  code.cx-cmd{color:var(--text);font-family:"IBM Plex Mono",monospace}
-  .cx-sig{color:var(--muted);font-family:"IBM Plex Mono",monospace;font-size:.82rem}
-  .cx-alias{color:var(--muted);font-size:.8rem}
-  .cx-tag{background:rgba(61,220,151,.14);color:var(--accent);border-radius:6px;padding:1px 6px;font-size:.7rem;margin-left:4px}
-  .cx-cogcell{color:var(--muted);white-space:nowrap}
-  .cx-yes{color:var(--accent);font-weight:700}
-  .cx-no{color:var(--border)}
-  .cx-desc{color:var(--muted)}
-  .cx-muted{color:var(--muted)}
-  .cx-chip{display:inline-block;background:var(--panel-2);border:1px solid var(--border);
-    border-radius:6px;padding:1px 7px;font-size:.74rem;margin:0 4px 4px 0;white-space:nowrap}
-  .cx-chip-perm{border-color:var(--accent);color:var(--accent)}
-  .cx-chip-off{border-color:#ff6b6b;color:#ff8585}
-  .cx-verdict-ok{color:var(--accent);font-weight:700;white-space:nowrap}
-  .cx-verdict-no{color:#ff8585;font-weight:700;white-space:nowrap}
-  .cx-note{color:var(--muted);font-weight:400;font-size:.72rem}
-  form.cx-inline{display:inline;margin:0}
-  .cx-mini{background:transparent;border:1px solid var(--border);color:var(--muted);
-    border-radius:7px;padding:2px 9px;font-size:.74rem;cursor:pointer}
-  .cx-mini:hover{border-color:var(--accent);color:var(--accent)}
-  .cx-mini-off:hover{border-color:#ff6b6b;color:#ff8585}
-  .cx-check{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;
-    background:var(--panel-2);border:1px solid var(--border);border-radius:11px;padding:12px 14px;margin-bottom:16px}
-  .cx-check .grp{display:flex;flex-direction:column;gap:4px}
-  .cx-check label{color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.05em}
-  .cx-check input,.cx-check select{background:var(--bg,#0c0f14);color:var(--text);
-    border:1px solid var(--border);border-radius:9px;padding:8px 11px;font-family:inherit;font-size:.9rem}
-  .cx-check .who{color:var(--text);font-size:.9rem;margin-right:6px}
-</style>
+# Läuft nach dem Tabellenfilter von webcore.js (DOMContentLoaded) und bündelt
+# Suche + Cog + Stufe, damit sich die Filter nicht gegenseitig überschreiben und
+# die Cog-Zwischenzeilen nur erscheinen, wenn darunter noch Treffer stehen.
+_FILTER = """
+<style>tr.cx-grp td{background:var(--panel-2)}</style>
 <script>
-  function cxFilter(){
-    var qEl=document.getElementById('cx-q');
-    var cogEl=document.getElementById('cx-cog');
-    var tierEl=document.getElementById('cx-tier');
-    var q=(qEl?qEl.value:'').toLowerCase();
-    var cog=cogEl?cogEl.value:'';
-    var tier=tierEl?tierEl.value:'';
-    var counts={};
-    document.querySelectorAll('tr.cx-row').forEach(function(r){
-      var okText=!q||(r.getAttribute('data-text')||'').indexOf(q)!==-1;
-      var okCog=!cog||r.getAttribute('data-cog')===cog;
-      var okTier=(tier==='')||(parseInt(r.getAttribute('data-tier'),10)<=parseInt(tier,10));
-      var show=okText&&okCog&&okTier;
-      r.style.display=show?'':'none';
-      if(show){var c=r.getAttribute('data-cog');counts[c]=(counts[c]||0)+1;}
+(function(){
+  function run(){
+    var t=document.getElementById('cx-table'); if(!t) return;
+    var s=document.querySelector("input[data-wc-filter='#cx-table']");
+    var q=(s?s.value:'').trim().toLowerCase();
+    var cogEl=document.getElementById('cx-cog'), tierEl=document.getElementById('cx-tier');
+    var cog=cogEl?cogEl.value:'', tier=tierEl?tierEl.value:'';
+    var groups={}, shown=0;
+    t.querySelectorAll('tbody tr.cx-row').forEach(function(r){
+      var ok=(!q||r.textContent.toLowerCase().indexOf(q)>-1)
+        &&(!cog||r.getAttribute('data-cog')===cog)
+        &&(tier===''||parseInt(r.getAttribute('data-tier'),10)<=parseInt(tier,10));
+      r.style.display=ok?'':'none';
+      if(ok){groups[r.getAttribute('data-cog')]=1;shown++;}
     });
-    document.querySelectorAll('tr.cx-grp').forEach(function(h){
-      var c=h.getAttribute('data-cog');
-      h.style.display=counts[c]?'':'none';
+    t.querySelectorAll('tbody tr.cx-grp').forEach(function(h){
+      h.style.display=groups[h.getAttribute('data-cog')]?'':'none';
     });
+    var n=document.getElementById('cx-count'); if(n) n.textContent=shown;
   }
   document.addEventListener('DOMContentLoaded',function(){
-    ['cx-q','cx-cog','cx-tier'].forEach(function(id){
-      var el=document.getElementById(id);
-      if(el){el.addEventListener('input',cxFilter);el.addEventListener('change',cxFilter);}
+    ['cx-cog','cx-tier'].forEach(function(id){
+      var el=document.getElementById(id); if(el) el.addEventListener('change',run);
     });
+    var s=document.querySelector("input[data-wc-filter='#cx-table']");
+    if(s) s.addEventListener('input',run);
   });
+})();
 </script>
 """
+
+_TIER_TONE = ["ok", "info", "warn", "bad"]
 
 
 def _esc(value) -> str:
@@ -168,99 +121,85 @@ def _group(infos) -> dict:
 # --------------------------------------------------------------------------- #
 #  HTML-Bausteine
 # --------------------------------------------------------------------------- #
-def _status_badges(info) -> str:
-    chips = []
-    for label in info.perm_labels:
-        chips.append(f"<span class='cx-chip cx-chip-perm'>oder: {_esc(label)}</span>")
+def _tier_badge(ui, info) -> str:
     if info.guild_owner_only:
-        chips.append("<span class='cx-chip'>Server-Owner</span>")
+        return ui.badge("Server-Owner", "bad")
+    return ui.badge(TIER_LABELS[info.required_tier], _TIER_TONE[info.required_tier])
+
+
+def _status_badges(ui, info) -> str:
+    chips = [ui.badge(f"oder: {label}", "info") for label in info.perm_labels]
     if info.custom_checks:
-        chips.append("<span class='cx-chip'>Extra-Pr&#252;fung</span>")
+        chips.append(ui.badge("Extra-Prüfung"))
     if not info.enabled:
-        chips.append("<span class='cx-chip cx-chip-off'>deaktiviert</span>")
+        chips.append(ui.badge("deaktiviert", "bad"))
     if info.hidden:
-        chips.append("<span class='cx-chip'>versteckt</span>")
+        chips.append(ui.badge("versteckt"))
     if info.is_hidden_cfg:
-        chips.append("<span class='cx-chip cx-chip-off'>ausgeblendet</span>")
-    return "".join(chips) or "<span class='cx-muted'>&mdash;</span>"
+        chips.append(ui.badge("ausgeblendet", "warn"))
+    if not chips:
+        return "<span class='wc-muted'>—</span>"
+    return " ".join(chips)
 
 
-def _tier_cells(info) -> str:
-    cells = []
-    for ok in info.allowed_tiers:
-        cells.append("<td class='cx-yes'>&#10003;</td>" if ok else "<td class='cx-no'>&middot;</td>")
-    return "".join(cells)
-
-
-def _verdict_cell(info) -> str:
+def _verdict_cell(ui, info) -> str:
     if info.verdict is None:
-        return "<td class='cx-no'>&middot;</td>"
-    note = f"<div class='cx-note'>{_esc(info.verdict_note)}</div>" if info.verdict_note else ""
+        return "<span class='wc-muted'>—</span>"
+    note = f"<div class='wc-cell-sub'>{_esc(info.verdict_note)}</div>" if info.verdict_note else ""
     if info.verdict:
-        return f"<td class='cx-verdict-ok'>&#10003; darf{note}</td>"
-    return f"<td class='cx-verdict-no'>&#10007; gesperrt{note}</td>"
+        return ui.badge("✓ darf", "ok") + note
+    return ui.badge("✗ gesperrt", "bad") + note
 
 
-def _toggle_button(action: str, kind: str, value: str, label: str, csrf: str) -> str:
-    return (
-        "<form method='post' action='/cogs/commands' class='cx-inline'>"
-        f"<input type='hidden' name='csrf_token' value='{_esc(csrf)}'>"
-        f"<input type='hidden' name='action' value='{action}'>"
-        f"<input type='hidden' name='kind' value='{kind}'>"
-        f"<input type='hidden' name='value' value='{_esc(value)}'>"
-        f"<button class='cx-mini cx-mini-off'>{_esc(label)}</button>"
-        "</form>"
-    )
+def _toggle_form(ui, action: str, kind: str, value: str, csrf: str, *, label: str = "", title: str = "") -> str:
+    """POST-Formular zum Ein-/Ausblenden (Felder: action, kind, value)."""
+    hide = action == "hide"
+    btn = ui.button(label, icon="bi-eye-slash" if hide else "bi-eye", kind="ghost", small=True,
+                    attrs={"title": title} if title else None)
+    return ui.form("/cogs/commands", btn, csrf=csrf, hidden={"action": action, "kind": kind, "value": value})
 
 
-def _command_cell(info, csrf: str) -> str:
-    pad = 9 + info.depth * 18
-    grp = " <span class='cx-tag'>Gruppe</span>" if info.is_group else ""
-    sig = f" <span class='cx-sig'>{_esc(info.signature)}</span>" if info.signature else ""
-    alias = ""
+def _command_cell(info) -> str:
+    sig = f" <span class='wc-muted mono'>{_esc(info.signature)}</span>" if info.signature else ""
+    grp = " <span class='wc-pill'>Gruppe</span>" if info.is_group else ""
+    sub = []
+    if info.short:
+        sub.append(_esc(info.short))
     if info.aliases:
-        alias = " <span class='cx-alias'>(" + _esc(", ".join(info.aliases)) + ")</span>"
-    if info.is_hidden_cfg:
-        btn = _toggle_button("show", "command", info.qualified_name, "einblenden", csrf)
-    else:
-        btn = _toggle_button("hide", "command", info.qualified_name, "ausblenden", csrf)
+        sub.append("Aliase: " + _esc(", ".join(info.aliases)))
+    pad = f" style='padding-left:{info.depth * 18}px'" if info.depth else ""
     return (
-        f"<td style='padding-left:{pad}px'>"
-        f"<code class='cx-cmd'>{_esc(info.qualified_name)}</code>{sig}{grp}{alias} {btn}"
-        "</td>"
+        f"<div{pad}><div class='wc-cell-title'><span class='mono'>{_esc(info.qualified_name)}</span>{sig}{grp}</div>"
+        + (f"<div class='wc-cell-sub'>{' · '.join(sub)}</div>" if sub else "")
+        + "</div>"
     )
 
 
-def _row(info, csrf: str, show_member: bool) -> str:
-    joined = (info.qualified_name + " " + " ".join(info.aliases) + " " + info.short).lower()
-    cog_cell = _esc(info.cog) if info.cog else "<span class='cx-muted'>&mdash;</span>"
-    extra = _verdict_cell(info) if show_member else ""
-    return (
-        f"<tr class='cx-row' data-cog='{_esc(info.cog.lower())}' "
-        f"data-text='{_esc(joined)}' data-tier='{info.required_tier}'>"
-        + _command_cell(info, csrf)
-        + f"<td class='cx-cogcell'>{cog_cell}</td>"
-        + _tier_cells(info)
-        + f"<td>{_status_badges(info)}</td>"
-        + extra
-        + f"<td class='cx-desc'>{_esc(info.short)}</td>"
-        + "</tr>"
-    )
+def _row(ui, info, csrf: str, show_member: bool, full: bool) -> str:
+    cells = [
+        _command_cell(info),
+        _tier_badge(ui, info),
+        _status_badges(ui, info),
+    ]
+    if show_member:
+        cells.append(_verdict_cell(ui, info))
+    if full:
+        if info.is_hidden_cfg:
+            cells.append(">" + _toggle_form(ui, "show", "command", info.qualified_name, csrf, title="Befehl einblenden"))
+        else:
+            cells.append(">" + _toggle_form(ui, "hide", "command", info.qualified_name, csrf, title="Befehl ausblenden"))
+    return ui.row(*cells, attrs={
+        "class": "cx-row", "data-cog": info.cog.lower(), "data-tier": info.required_tier,
+    })
 
 
-def _group_header(cog_name: str, count: int, hidden_cog: bool, csrf: str, colspan: int) -> str:
+def _group_header(ui, cog_name: str, count: int, hidden_cog: bool, colspan: int) -> str:
     title = _esc(cog_name) if cog_name else "Sonstige"
-    if hidden_cog:
-        btn = _toggle_button("show", "cog", cog_name, "Cog einblenden", csrf)
-        badge = " <span class='cx-chip cx-chip-off'>ausgeblendet</span>"
-    else:
-        btn = _toggle_button("hide", "cog", cog_name, "Cog ausblenden", csrf)
-        badge = ""
+    badge = " " + ui.badge("ausgeblendet", "warn") if hidden_cog else ""
     return (
-        f"<tr class='cx-grp' data-cog='{_esc(cog_name.lower())}'>"
-        f"<td colspan='{colspan}'>"
-        f"<span class='cx-grp-name'>{title}</span>"
-        f"<span class='cx-grp-count'>{count} Befehle</span>{badge} {btn}"
+        f"<tr class='cx-grp' data-cog='{_esc(cog_name.lower())}'><td colspan='{colspan}'>"
+        f"<div class='wc-cell-title'><i class='bi bi-box'></i> {title} "
+        f"<span class='wc-muted'>· {count} Befehle</span>{badge}</div>"
         "</td></tr>"
     )
 
@@ -272,28 +211,6 @@ async def _visible_guilds(cog, request):
     else:  # Fallback (sollte im Normalbetrieb nicht eintreten)
         guilds = list(cog.bot.guilds)
     return sorted(guilds, key=lambda g: g.name.lower())
-
-
-def _guild_options(guilds, selected) -> str:
-    opts = ["<option value=''>Server w&#228;hlen &hellip;</option>"]
-    for guild in guilds:
-        sel = " selected" if str(guild.id) == str(selected) else ""
-        opts.append(f"<option value='{guild.id}'{sel}>{_esc(guild.name)}</option>")
-    return "".join(opts)
-
-
-def _cog_filter_options(names) -> str:
-    opts = ["<option value=''>Alle Cogs</option>"]
-    for name in names:
-        opts.append(f"<option value='{_esc(name.lower())}'>{_esc(name)}</option>")
-    return "".join(opts)
-
-
-def _tier_filter_options() -> str:
-    opts = ["<option value=''>Alle Stufen</option>"]
-    for idx, label in enumerate(TIER_LABELS):
-        opts.append(f"<option value='{idx}'>{_esc(label)}</option>")
-    return "".join(opts)
 
 
 # --------------------------------------------------------------------------- #
@@ -309,7 +226,7 @@ def _build_markdown(infos, guild, member) -> str:
     groups = _group(infos)
     lines = ["# Befehle", "", f"_Stand: {now}_"]
     if show_member:
-        lines.append(f"_Gepr\u00fcft f\u00fcr: {member.display_name} auf {guild.name}_")
+        lines.append(f"_Geprüft für: {member.display_name} auf {guild.name}_")
     lines.append("")
     lines.append(f"Insgesamt **{len(infos)}** Befehle in **{len(groups)}** Cogs.")
     lines.append("")
@@ -342,6 +259,146 @@ def _build_markdown(infos, guild, member) -> str:
 
 
 # --------------------------------------------------------------------------- #
+#  Seitenteile
+# --------------------------------------------------------------------------- #
+def _member_check_card(ui, guilds, gid, member_query, member, member_error, show_hidden, switcher,
+                       usable, n_shown) -> str:
+    fields = [ui.field("Mitglied", ui.text_input("member", member_query, placeholder="ID oder Name, z. B. Lena"),
+                       help="Zeigt in der Liste eine zusätzliche Spalte „Prüfung“: darf die Person den Befehl ausführen?")]
+    hidden = ""
+    if switcher:
+        # Globaler Server-Wechsler aktiv -> geprüft wird auf dem dort gewählten Server.
+        hidden = f"<input type='hidden' name='guild' value='{_esc(gid)}'>"
+    else:
+        fields.append(ui.field("Server", ui.select("guild", [(g.id, g.name) for g in guilds], gid,
+                                                   none_label="Server wählen …")))
+    if show_hidden:
+        hidden += "<input type='hidden' name='hidden' value='1'>"
+    buttons = [ui.button("Prüfen", icon="bi-person-check")]
+    if member is not None:
+        buttons.append(ui.button("Zurücksetzen", icon="bi-x-lg", kind="ghost",
+                                 href="/cogs/commands" + _qs(hidden="1" if show_hidden else None, guild=gid)))
+    form = (
+        "<form class='wc-form' method='get' action='/cogs/commands'>"
+        + hidden + ui.grid(*fields, cols=1 if switcher else 2) + ui.actions(*buttons)
+        + "</form>"
+    )
+    result = ""
+    if member_error:
+        result = ui.callout(_esc(member_error), tone="bad")
+    elif member is not None:
+        result = ui.callout(
+            f"<b>{_esc(member.display_name)}</b> darf <b>{usable}</b> von {n_shown} Befehlen ausführen – "
+            "siehe Spalte „Prüfung“ in der Liste.", tone="ok")
+    return ui.card("Mitglied prüfen", result + form, icon="bi-person-check",
+                   desc="Exakte Antwort für eine bestimmte Person auf einem Server.")
+
+
+def _legend_card(ui) -> str:
+    rows = "".join(
+        f"<dt>{ui.badge(label, _TIER_TONE[idx])}</dt><dd>{text}</dd>"
+        for idx, (label, text) in enumerate(zip(TIER_LABELS, [
+            "Jedes Mitglied darf den Befehl nutzen.",
+            "Ab Mod-Rolle (und alle Stufen darüber).",
+            "Ab Admin-Rolle (und Bot-Owner).",
+            "Nur der Bot-Owner (bzw. Server-Owner, falls so markiert).",
+        ]))
+    )
+    rows += (
+        f"<dt>{ui.badge('oder: …', 'info')}</dt><dd>Wer dieses Discord-Recht hat, darf den Befehl auch ohne die Stufe.</dd>"
+        f"<dt>{ui.badge('Extra-Prüfung')}</dt><dd>Der Befehl hat eigene Bedingungen, die hier nicht ausgewertet werden.</dd>"
+    )
+    return ui.card("So liest du die Liste", f"<dl class='wc-kv'>{rows}</dl>", icon="bi-question-circle",
+                   desc="Die <b>Mindeststufe</b> ist die Red-Stufe, ab der ein Befehl freigegeben ist.")
+
+
+def _list_card(ui, visible, names, hidden_cogs, csrf, show_member, full, member, card_actions) -> str:
+    groups = _group(visible)
+    headers = ["Befehl", "Mindeststufe", "Rechte / Status"]
+    if show_member:
+        headers.append("Prüfung")
+    if full:
+        headers.append(">Sichtbar")
+    colspan = len(headers)
+
+    if not groups:
+        return ui.card("Befehlsliste", ui.empty("bi-list-check", "Keine Befehle gefunden.",
+                                                "Sobald Cogs mit Befehlen geladen sind, erscheinen sie hier."),
+                       icon="bi-list-check", actions=card_actions)
+
+    rows = []
+    for cog_name in sorted(groups, key=lambda c: (c or "").lower()):
+        items = sorted(groups[cog_name], key=lambda i: i.qualified_name.lower())
+        rows.append(_group_header(ui, cog_name, len(items), cog_name in hidden_cogs, colspan))
+        for info in items:
+            rows.append(_row(ui, info, csrf, show_member, full))
+
+    cog_opts = "".join(f"<option value='{_esc(n.lower())}'>{_esc(n)}</option>" for n in names)
+    tier_opts = "".join(f"<option value='{i}'>Nutzbar für: {_esc(label)}</option>" for i, label in enumerate(TIER_LABELS))
+    filters = (
+        "<div class='wc-toolbar'>"
+        f"<select id='cx-cog' aria-label='Cog filtern'><option value=''>Alle Cogs</option>{cog_opts}</select>"
+        f"<select id='cx-tier' aria-label='Stufe filtern'><option value=''>Alle Stufen</option>{tier_opts}</select>"
+        f"<span class='wc-muted'><b id='cx-count'>{len(visible)}</b> Befehle</span>"
+        "</div>"
+    )
+    table = ui.table(headers, rows, search=True, id="cx-table",
+                     search_placeholder="Befehl, Alias oder Beschreibung suchen …")
+    desc = "Gruppiert nach Cog. Filter und Suche wirken sofort."
+    if member is not None:
+        desc += f" Geprüft für <b>{_esc(member.display_name)}</b>."
+    return ui.card("Befehlsliste", filters + table, icon="bi-list-check", desc=desc, actions=card_actions)
+
+
+def _visibility_tab(ui, infos, names, hidden_cogs, hidden_cmds, csrf, toggle_link) -> str:
+    counts: dict = {}
+    for info in infos:
+        counts[info.cog] = counts.get(info.cog, 0) + 1
+
+    intro = ui.callout(
+        "<b>Nur Bot-Owner.</b> Diese Einstellung gilt <b>botweit auf allen Servern</b>: Ausgeblendete Cogs und Befehle "
+        "erscheinen nicht mehr in <code>[p]meinebefehle</code> und nicht in der Befehlsliste. Die Befehle selbst "
+        "funktionieren weiter. Einzelne Befehle blendest du in der Befehlsliste über das Augen-Symbol aus.",
+        tone="warn", icon="bi-shield-lock")
+
+    cog_rows = []
+    for name in sorted(set(names) | set(hidden_cogs), key=str.lower):
+        is_hidden = name in hidden_cogs
+        status = ui.badge("ausgeblendet", "warn") if is_hidden else ui.badge("sichtbar", "ok")
+        if is_hidden:
+            btn = ui.form("/cogs/commands", ui.button("Einblenden", icon="bi-eye", kind="ghost", small=True),
+                          csrf=csrf, hidden={"action": "show", "kind": "cog", "value": name})
+        else:
+            btn = ui.form("/cogs/commands", ui.button("Ausblenden", icon="bi-eye-slash", kind="ghost", small=True),
+                          csrf=csrf, hidden={"action": "hide", "kind": "cog", "value": name})
+        cog_rows.append(ui.row(
+            f"<div class='wc-cell-title'>{_esc(name)}</div><div class='wc-cell-sub'>{counts.get(name, 0)} Befehle</div>",
+            status, ">" + btn,
+        ))
+    cogs_card = ui.card(
+        "Cogs", ui.table(["Cog", "Status", ">"], cog_rows, empty_text="Keine Cogs mit Befehlen geladen.",
+                         search=len(cog_rows) > 8, search_placeholder="Cog suchen …", id="cx-cogs"),
+        icon="bi-boxes", desc="Blendet alle Befehle eines Cogs auf einmal aus bzw. ein.",
+        actions=ui.badge("nur Bot-Owner", "warn"))
+
+    cmd_rows = []
+    for qn in sorted(hidden_cmds, key=str.lower):
+        btn = ui.form("/cogs/commands", ui.button("Einblenden", icon="bi-eye", kind="ghost", small=True),
+                      csrf=csrf, hidden={"action": "show", "kind": "command", "value": qn})
+        cmd_rows.append(ui.row(f"<span class='mono'>{_esc(qn)}</span>", ">" + btn))
+    if cmd_rows:
+        cmds_body = ui.table(["Befehl", ">"], cmd_rows, search=len(cmd_rows) > 8,
+                             search_placeholder="Befehl suchen …", id="cx-hidden-cmds")
+    else:
+        cmds_body = ui.empty("bi-eye", "Keine einzeln ausgeblendeten Befehle.",
+                             "Über das Augen-Symbol in der Befehlsliste kannst du einzelne Befehle ausblenden.")
+    cmds_card = ui.card("Einzeln ausgeblendete Befehle", cmds_body, icon="bi-eye-slash",
+                        desc="Befehle, die unabhängig von ihrem Cog ausgeblendet sind.",
+                        actions=toggle_link)
+    return intro + cogs_card + cmds_card
+
+
+# --------------------------------------------------------------------------- #
 #  Haupteinstieg
 # --------------------------------------------------------------------------- #
 async def render(cog, request):
@@ -367,6 +424,7 @@ async def render(cog, request):
             await cog.set_visibility(kind, value, hide=(action == "hide"))
         return {"redirect": "/cogs/commands?ok=1"}
 
+    ui = request.app["webcore"].ui
     query = request.query
     show_hidden = query.get("hidden") == "1" and full
     gid = query.get("guild") or ""
@@ -418,107 +476,52 @@ async def render(cog, request):
     n_total = len(infos)
     n_hidden = sum(1 for i in infos if i.is_hidden_cfg)
     n_shown = len(visible)
+    usable = sum(1 for i in visible if i.verdict) if show_member else 0
 
     # --- Links (Filter beim Wechsel beibehalten) ---
     hidden_now = "1" if show_hidden else None
     toggle_href = "/cogs/commands" + _qs(
         hidden=(None if show_hidden else "1"), guild=gid, member=member_query
     )
-    toggle_label = "ausgeblendete verbergen" if show_hidden else "ausgeblendete anzeigen"
     export_href = "/cogs/commands" + _qs(
         export="md", hidden=hidden_now, guild=gid, member=member_query
     )
-
-    colspan = 9 if show_member else 8
-
-    # --- Tabelle ---
-    parts = []
-    parts.append(_STYLE)
-
-    if query.get("ok") == "1":
-        parts.append("<div class='cx-flash'>Gespeichert.</div>")
-    if query.get("err"):
-        parts.append(f"<div class='cx-err'>{_esc(query.get('err'))}</div>")
-    if member_error:
-        parts.append(f"<div class='cx-err'>{_esc(member_error)}</div>")
-
-    # Kennzahlen-Karten
-    parts.append("<div class='cx-bar'>")
-    parts.append(f"<div class='card-x cx-stat'><div class='stat'>{len(names)}</div><div class='stat-label'>Cogs</div></div>")
-    parts.append(f"<div class='card-x cx-stat'><div class='stat'>{n_total}</div><div class='stat-label'>Befehle gesamt</div></div>")
-    parts.append(f"<div class='card-x cx-stat'><div class='stat'>{n_shown}</div><div class='stat-label'>angezeigt</div></div>")
-    parts.append(f"<div class='card-x cx-stat'><div class='stat'>{n_hidden}</div><div class='stat-label'>ausgeblendet</div></div>")
-    if show_member:
-        usable = sum(1 for i in visible if i.verdict)
-        parts.append(
-            "<div class='card-x cx-stat'>"
-            f"<div class='stat'>{usable}/{n_shown}</div>"
-            f"<div class='stat-label'>{_esc(member.display_name)} darf</div></div>"
+    toggle_link = ""
+    if full:
+        toggle_link = ui.button(
+            "Ausgeblendete verbergen" if show_hidden else "Ausgeblendete anzeigen",
+            icon="bi-eye-slash" if show_hidden else "bi-eye", kind="ghost", small=True, href=toggle_href,
         )
-    parts.append("</div>")
 
-    # Mitglieds-Prüfung (GET-Formular)
-    reset = ""
+    head = ui.hero(
+        "bi-list-check", "",
+        "Alle Befehle der geladenen Cogs – mit der <b>Stufe</b>, ab der sie nutzbar sind, und zusätzlichen "
+        "Discord-Rechten. Prüfe gezielt, was ein bestimmtes Mitglied darf, oder exportiere die Liste.",
+    )
+    export_btn = ui.button("Markdown-Export", icon="bi-download", kind="ghost", small=True, href=export_href)
+    stat_items = [
+        ("Cogs", len(names), "bi-boxes", None, None),
+        ("Befehle gesamt", n_total, "bi-terminal", None, None),
+        ("Angezeigt", n_shown, "bi-eye", None, None),
+        ("Ausgeblendet", n_hidden, "bi-eye-slash", "botweit, vom Bot-Owner", "warn" if n_hidden else None),
+    ]
     if show_member:
-        reset = " <a class='who' href='/cogs/commands" + _qs(hidden=hidden_now) + "'>zur&#252;cksetzen</a>"
-    hidden_field = "<input type='hidden' name='hidden' value='1'>" if show_hidden else ""
-    parts.append(
-        "<form method='get' action='/cogs/commands' class='cx-check'>"
-        "<div class='grp'><label>Server</label>"
-        f"<select name='guild'>{_guild_options(guilds, gid)}</select></div>"
-        "<div class='grp'><label>Mitglied (ID oder Name)</label>"
-        f"<input type='text' name='member' value='{_esc(member_query)}' placeholder='z. B. 123456789012345678'></div>"
-        f"{hidden_field}"
-        "<button class='btn-accent'>Pr&#252;fen</button>"
-        f"{reset}"
-        "</form>"
+        stat_items.append((f"{member.display_name} darf", f"{usable}/{n_shown}", "bi-person-check", None, "ok"))
+    head += ui.stats(stat_items)
+
+    switcher = bool(request.get("wc_switcher"))
+    top = ui.columns(
+        _member_check_card(ui, guilds, gid, member_query, member, member_error, show_hidden, switcher,
+                           usable, n_shown),
+        _legend_card(ui),
     )
+    body = ui.tab("befehle", "Befehle", "bi-list-check",
+                  top + _list_card(ui, visible, names, hidden_cogs, csrf, show_member, full, member,
+                                   export_btn + toggle_link),
+                  count=n_shown)
+    if full:
+        body += ui.tab("sichtbarkeit", "Sichtbarkeit (Bot-Owner)", "bi-shield-lock",
+                       _visibility_tab(ui, infos, names, hidden_cogs, hidden_cmds, csrf, toggle_link),
+                       count=n_hidden or None)
 
-    # Filterleiste + Links
-    parts.append("<div class='cx-controls'>")
-    parts.append("<div class='grp'><label>Suche</label><input type='text' id='cx-q' placeholder='Befehl, Alias oder Text&hellip;'></div>")
-    parts.append(f"<div class='grp'><label>Cog</label><select id='cx-cog'>{_cog_filter_options(names)}</select></div>")
-    parts.append(f"<div class='grp'><label>Nutzbar f&#252;r</label><select id='cx-tier'>{_tier_filter_options()}</select></div>")
-    parts.append("<div class='cx-links'>")
-    parts.append(f"<a href='{_esc(toggle_href)}'>{toggle_label}</a>")
-    parts.append(f"<a href='{_esc(export_href)}'>&#8681; Markdown-Export</a>")
-    parts.append("</div></div>")
-
-    # Legende
-    parts.append(
-        "<div class='cx-legend'>"
-        "Die Spalten <b>Jeder/Mod/Admin/Owner</b> zeigen, ab welcher Red-Stufe ein Befehl "
-        "freigegeben ist (&#10003; = gen&#252;gt). <b>Owner</b> = Bot-Owner. Zus&#228;tzliche "
-        "Discord-Rechte stehen als Badge 'oder: &hellip;' &ndash; wer sie hat, darf den Befehl "
-        "auch ohne die Stufe. Die exakte Antwort pro Person liefert die Mitglieds-Pr&#252;fung oben."
-        "</div>"
-    )
-
-    # Tabelle aufbauen (gruppiert nach Cog)
-    parts.append("<div class='card-x'><table class='cx-tbl'>")
-    head_member = "<th class='cx-c'>Pr&#252;fung</th>" if show_member else ""
-    parts.append(
-        "<thead><tr>"
-        "<th>Befehl</th><th>Cog</th>"
-        "<th class='cx-c'>Jeder</th><th class='cx-c'>Mod</th>"
-        "<th class='cx-c'>Admin</th><th class='cx-c'>Owner</th>"
-        "<th>Rechte / Status</th>"
-        f"{head_member}"
-        "<th>Beschreibung</th>"
-        "</tr></thead><tbody>"
-    )
-
-    groups = _group(visible)
-    if not groups:
-        parts.append(f"<tr><td colspan='{colspan}' class='cx-muted'>Keine Befehle gefunden.</td></tr>")
-    else:
-        for cog_name in sorted(groups, key=lambda c: (c or "").lower()):
-            rows = sorted(groups[cog_name], key=lambda i: i.qualified_name.lower())
-            cog_hidden = cog_name in hidden_cogs
-            parts.append(_group_header(cog_name, len(rows), cog_hidden, csrf, colspan))
-            for info in rows:
-                parts.append(_row(info, csrf, show_member))
-
-    parts.append("</tbody></table></div>")
-
-    return {"title": "Befehle", "content": "".join(parts)}
+    return {"title": "Befehle", "content": _FILTER + head + body}

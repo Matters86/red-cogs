@@ -1,11 +1,11 @@
 """WebCore-Dashboard für den Sticky-Cog.
 
 Aufgaben:
-* GET  -> Seite rendern (Einstellungen, Sticky-Liste, Editor)
+* GET  -> Seite rendern (Sticky-Liste, Editor, Einstellungen)
 * POST -> Formular speichern, danach Redirect (Post/Redirect/Get)
 
-Es werden nur die Theme-Klassen (card-x, table, stat, btn-accent …) plus die
-ohnehin geladenen Bootstrap-Formularklassen genutzt – kein eigenes Design.
+Aufbau mit dem UI-Baukasten von WebCore (``request.app["webcore"].ui``): Reiter
+Stickies · Editor · Einstellungen – kein eigenes CSS.
 """
 
 from __future__ import annotations
@@ -19,41 +19,26 @@ from aiohttp import web
 from .strings import LANGUAGES
 from .validate import validate_sticky
 
-# Kleiner, auf die Theme-Variablen abgestimmter Style nur für Formularfelder.
-_FORM_STYLE = """
-<style>
-  .st-form label{display:block;color:var(--muted);font-size:.8rem;
-    text-transform:uppercase;letter-spacing:.05em;margin:14px 0 5px}
-  .st-form input,.st-form select,.st-form textarea{width:100%;
-    background:var(--panel-2);color:var(--text);border:1px solid var(--border);
-    border-radius:9px;padding:9px 11px;font-family:inherit;font-size:.92rem}
-  .st-form textarea{min-height:90px;resize:vertical;font-family:"IBM Plex Mono",monospace}
-  .st-form input[type=color]{height:42px;padding:4px;cursor:pointer}
-  .st-form .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  .st-form .hint{color:var(--muted);font-size:.78rem;margin-top:4px}
-  .st-check{display:flex;align-items:center;gap:8px;margin-top:12px}
-  .st-check input{width:auto}
-  .st-flash{background:rgba(61,220,151,.12);border:1px solid var(--accent);
-    color:var(--text);border-radius:10px;padding:11px 14px;margin-bottom:18px}
-  .st-section-title{font-family:"Archivo",sans-serif;font-weight:700;
-    font-size:1.15rem;margin:0 0 14px}
-  .st-spacer{height:26px}
-  .st-actions{display:flex;gap:8px;flex-wrap:wrap}
-  .st-actions form{margin:0}
-  .st-btn-sm{padding:5px 12px}
-</style>
+# Blendet Embed-/Webhook-Felder im Editor passend zu Modus/Schalter ein.
+_EDITOR_JS = """
 <script>
-  function stSyncEditor(){
-    var mode = document.getElementById('st-mode');
-    var hook = document.getElementById('st-webhook');
-    var embedBox = document.getElementById('st-embed-fields');
-    var hookBox = document.getElementById('st-webhook-fields');
-    if(embedBox && mode){ embedBox.style.display = (mode.value === 'embed') ? 'block' : 'none'; }
-    if(hookBox && hook){ hookBox.style.display = hook.checked ? 'block' : 'none'; }
+(function(){
+  var f=document.getElementById('st-editor'); if(!f) return;
+  var mode=f.querySelector("select[name='mode']"), hook=f.querySelector("input[name='webhook']");
+  var embedBox=document.getElementById('st-embed-fields'), hookBox=document.getElementById('st-webhook-fields');
+  function sync(){
+    if(embedBox&&mode) embedBox.style.display=(mode.value==='embed')?'':'none';
+    if(hookBox&&hook) hookBox.style.display=hook.checked?'':'none';
   }
-  document.addEventListener('DOMContentLoaded', stSyncEditor);
+  if(mode) mode.addEventListener('change',sync);
+  if(hook) hook.addEventListener('change',sync);
+  sync();
+})();
 </script>
 """
+
+# Erfolgsmeldungen der Redirects – alles andere wird im Editor zusätzlich als Hinweis gezeigt.
+_OK_MESSAGES = {"Einstellungen gespeichert", "Sticky gespeichert", "Status geändert", "Sticky gelöscht"}
 
 
 def _esc(value) -> str:
@@ -104,136 +89,108 @@ def _pick_guild(guilds, request):
 #  Rendern (GET)
 # --------------------------------------------------------------------------- #
 async def _render(cog, request):
+    ui = request.app["webcore"].ui
     guilds = await _visible_guilds(cog, request)
     guild = _pick_guild(guilds, request)
     if guild is None:
-        return {"title": "Sticky", "content": "<div class='card-x'>Der Bot ist auf keinem Server.</div>"}
+        return {"title": "Sticky", "content": ui.card(body=ui.empty("bi-hdd-network", "Der Bot ist auf keinem Server."))}
 
     conf = await cog.config.guild(guild).all()
     csrf = request.get("webcore_csrf", "")
     stickies = conf.get("stickies", {})
-
     text_items = [(c.id, f"#{c.name}") for c in guild.text_channels]
 
-    flash = ""
-    if request.query.get("ok"):
-        flash = f"<div class='st-flash'>{_esc(request.query.get('ok'))}</div>"
-
-    guild_opts = _options(
-        [(g.id, g.name) for g in guilds],
-        [guild.id],
-    )
-    guild_picker = f"""
-    <div class='card-x' style='margin-bottom:20px'>
-      <form method='get' action='/cogs/sticky' class='st-form' style='margin:0'>
-        <label style='margin-top:0'>Server</label>
-        <select name='guild' onchange='this.form.submit()'>{guild_opts}</select>
-      </form>
-    </div>
-    """
+    guild_picker = ui.card(body=ui.form(
+        "/cogs/sticky",
+        ui.field("Server", ui.select("guild", [(g.id, g.name) for g in guilds], guild.id, autosubmit=True)),
+        csrf="", method="get",
+    ))
     # Globaler Server-Wechsler von WebCore aktiv -> eigenes Dropdown ausblenden.
     if request.get("wc_switcher"):
         guild_picker = ""
 
-    settings_form = _render_settings(guild, conf, csrf)
-    table_html = _render_table(guild, stickies, csrf)
-    editor_html = _render_editor(guild, stickies, text_items, csrf, request)
+    n_active = sum(1 for s in stickies.values() if s.get("enabled"))
+    head = ui.hero(
+        "bi-pin-angle", "",
+        "Eine Sticky-Nachricht bleibt immer die <b>letzte Nachricht im Kanal</b>: Schreibt jemand etwas, löscht der "
+        "Bot die alte Sticky und postet sie unten neu – ideal für Regeln, Hinweise oder Links.",
+    ) + ui.stats([
+        ("Stickies", len(stickies), "bi-pin-angle", None, None),
+        ("Aktiv", n_active, "bi-play-circle", None, "ok" if n_active else None),
+        ("Pausiert", len(stickies) - n_active, "bi-pause-circle", None, None),
+        ("Cooldown", f"{int(conf['cooldown'])} s", "bi-stopwatch", "Mindestabstand beim Neu-Posten", None),
+    ])
 
-    content = (
-        _FORM_STYLE
-        + flash
-        + guild_picker
-        + settings_form
-        + "<div class='st-spacer'></div>"
-        + table_html
-        + "<div class='st-spacer'></div>"
-        + editor_html
+    is_edit = bool(request.query.get("channel") and stickies.get(str(request.query.get("channel"))))
+    body = (
+        ui.tab("stickies", "Stickies", "bi-pin-angle", _render_table(ui, guild, stickies, csrf), count=len(stickies))
+        + ui.tab("editor", "Bearbeiten" if is_edit else "Neue Sticky", "bi-pencil-square" if is_edit else "bi-plus-square",
+                 _render_editor(ui, guild, stickies, text_items, csrf, request))
+        + ui.tab("einstellungen", "Einstellungen", "bi-sliders", _render_settings(ui, guild, conf, csrf))
     )
-    return {"title": "Sticky", "content": content}
+    return {"title": "Sticky", "content": head + guild_picker + body}
 
 
-def _render_settings(guild, conf, csrf) -> str:
-    lang_opts = "".join(
-        f"<option value='{code}'{' selected' if conf['language'] == code else ''}>{_esc(name)}</option>"
-        for code, name in LANGUAGES.items()
+def _render_settings(ui, guild, conf, csrf) -> str:
+    general = ui.card("Verhalten", ui.grid(
+        ui.field("Sprache der Bot-Antworten", ui.select("language", list(LANGUAGES.items()), conf["language"]),
+                 help="Gilt für Rückmeldungen der Befehle – der Sticky-Inhalt selbst wird nicht übersetzt."),
+        ui.field("Cooldown", ui.number("cooldown", int(conf["cooldown"]), min=0, max=3600, unit="Sekunden"),
+                 help="Frühestens so oft wird in aktiven Kanälen neu gepostet (0 = sofort)."),
+    ) + "<div class='wc-switches'>" + ui.switch(
+        "ignore_bots", "Nachrichten anderer Bots ignorieren", conf["ignore_bots"],
+        desc="Nachrichten von Bots lösen kein Neu-Posten der Sticky aus.",
+    ) + "</div>", icon="bi-gear", desc="Gilt für alle Stickies auf diesem Server.")
+    return ui.form(
+        "/cogs/sticky", general + ui.save_row("Einstellungen speichern"),
+        csrf=csrf, hidden={"form": "settings", "guild": guild.id}, savebar=True,
     )
-    return f"""
-    <div class='card-x'>
-      <div class='st-section-title'>Einstellungen</div>
-      <form class='st-form' method='post' action='/cogs/sticky'>
-        <input type='hidden' name='csrf_token' value='{_esc(csrf)}'>
-        <input type='hidden' name='form' value='settings'>
-        <input type='hidden' name='guild' value='{guild.id}'>
-        <div class='row2'>
-          <div>
-            <label>Sprache der Bot-Antworten</label>
-            <select name='language'>{lang_opts}</select>
-          </div>
-          <div>
-            <label>Cooldown (Sekunden)</label>
-            <input name='cooldown' type='number' min='0' max='3600' value='{int(conf['cooldown'])}'>
-            <div class='hint'>Frühestens so oft wird in aktiven Kanälen neu gepostet (0 = sofort).</div>
-          </div>
-        </div>
-        <div class='st-check'>
-          <input type='checkbox' name='ignore_bots' {'checked' if conf['ignore_bots'] else ''}>
-          <span>Nachrichten anderer Bots ignorieren (lösen kein Neu-Posten aus)</span>
-        </div>
-        <div class='st-spacer'></div>
-        <button class='btn-accent' type='submit'>Speichern</button>
-      </form>
-    </div>
-    """
 
 
-def _render_table(guild, stickies, csrf) -> str:
+def _render_table(ui, guild, stickies, csrf) -> str:
     rows = []
     for cid, s in stickies.items():
         ch = guild.get_channel(int(cid)) if str(cid).isdigit() else None
         ch_name = f"#{ch.name}" if ch else f"{cid} (gelöscht)"
-        mode = "Embed" if s.get("mode") == "embed" else "Text"
-        state = "aktiv" if s.get("enabled") else "aus"
-        via = "Webhook" if s.get("webhook") else "Bot"
-        preview = (s.get("text") or "").replace("\n", " ")
-        if len(preview) > 60:
-            preview = preview[:60] + "…"
-        toggle_label = "Deaktivieren" if s.get("enabled") else "Aktivieren"
-        edit_link = f"/cogs/sticky?guild={guild.id}&channel={_esc(cid)}"
-        rows.append(
-            "<tr>"
-            f"<td>{_esc(ch_name)}</td>"
-            f"<td>{_esc(mode)}</td>"
-            f"<td>{_esc(state)}</td>"
-            f"<td>{_esc(via)}</td>"
-            f"<td style='color:var(--muted)'>{_esc(preview) or '—'}</td>"
-            "<td><div class='st-actions'>"
-            f"<a class='btn-accent st-btn-sm' href='{edit_link}'>Bearbeiten</a>"
-            f"<form method='post' action='/cogs/sticky'>"
-            f"<input type='hidden' name='csrf_token' value='{_esc(csrf)}'>"
-            f"<input type='hidden' name='form' value='toggle'>"
-            f"<input type='hidden' name='guild' value='{guild.id}'>"
-            f"<input type='hidden' name='channel' value='{_esc(cid)}'>"
-            f"<button class='btn-accent st-btn-sm'>{_esc(toggle_label)}</button></form>"
-            f"<form method='post' action='/cogs/sticky' onsubmit=\"return confirm('Sticky löschen?')\">"
-            f"<input type='hidden' name='csrf_token' value='{_esc(csrf)}'>"
-            f"<input type='hidden' name='form' value='delete'>"
-            f"<input type='hidden' name='guild' value='{guild.id}'>"
-            f"<input type='hidden' name='channel' value='{_esc(cid)}'>"
-            "<button class='btn-accent st-btn-sm'>Löschen</button></form>"
-            "</div></td>"
-            "</tr>"
+        preview = (s.get("text") or s.get("embed_title") or "").replace("\n", " ")
+        if len(preview) > 80:
+            preview = preview[:80] + "…"
+        enabled = s.get("enabled")
+        hidden = {"guild": guild.id, "channel": cid}
+        edit = ui.button("", icon="bi-pencil", kind="ghost", small=True, attrs={"title": "Bearbeiten"},
+                         href=f"/cogs/sticky?guild={guild.id}&channel={cid}#editor")
+        toggle = ui.form(
+            "/cogs/sticky",
+            ui.button("", icon="bi-pause-fill" if enabled else "bi-play-fill", kind="ghost", small=True,
+                      attrs={"title": "Deaktivieren (Nachricht wird entfernt)" if enabled else "Aktivieren (wird sofort gepostet)"}),
+            csrf=csrf, hidden={"form": "toggle", **hidden},
         )
-    table = (
-        "<table class='table'><thead><tr>"
-        "<th>Kanal</th><th>Modus</th><th>Status</th><th>Posten via</th><th>Vorschau</th><th></th>"
-        "</tr></thead><tbody>"
-        + ("".join(rows) or "<tr><td colspan='6' style='color:var(--muted)'>Noch keine Stickies.</td></tr>")
-        + "</tbody></table>"
-    )
-    return f"<div class='card-x'><div class='st-section-title'>Stickies</div>{table}</div>"
+        delete = ui.form(
+            "/cogs/sticky",
+            ui.button("", icon="bi-trash", kind="danger", small=True, attrs={"title": "Sticky löschen"}),
+            csrf=csrf, hidden={"form": "delete", **hidden},
+            confirm=f"Die Sticky in {ch_name} wird gelöscht und ihre Nachricht entfernt.",
+        )
+        tags = (ui.badge("Embed", "info") if s.get("mode") == "embed" else ui.badge("Text")) + (
+            " " + ui.badge("Webhook") if s.get("webhook") else "")
+        rows.append(ui.row(
+            f"<div class='wc-cell-title'>{_esc(ch_name)} {tags}</div>"
+            f"<div class='wc-cell-sub'>{_esc(preview) or '—'}</div>",
+            ui.badge("aktiv", "ok") if enabled else ui.badge("pausiert", "warn"),
+            f"><div class='wc-row-actions'>{edit}{toggle}{delete}</div>",
+        ))
+    if not rows:
+        return ui.card(body=ui.empty(
+            "bi-pin-angle", "Noch keine Stickies.", "Lege im Reiter „Neue Sticky“ die erste an.",
+            action=ui.button("Neue Sticky anlegen", icon="bi-plus-lg", href=f"/cogs/sticky?guild={guild.id}#editor"),
+        ))
+    table = ui.table(["Kanal / Vorschau", "Status", ">"], rows,
+                     search=len(rows) > 5, search_placeholder="Kanal oder Text suchen …", id="st-list")
+    return ui.card("Deine Stickies", table, icon="bi-pin-angle",
+                   desc="Pausieren entfernt die Nachricht aus dem Kanal, Aktivieren postet sie sofort neu.")
 
 
-def _render_editor(guild, stickies, text_items, csrf, request) -> str:
+def _render_editor(ui, guild, stickies, text_items, csrf, request) -> str:
     # Vorbefüllung, wenn ein Kanal über ?channel= ausgewählt ist.
     sel_cid = request.query.get("channel")
     s = stickies.get(str(sel_cid)) if sel_cid else None
@@ -245,78 +202,61 @@ def _render_editor(guild, stickies, text_items, csrf, request) -> str:
     if not color.startswith("#"):
         color = "#" + color
 
-    channel_select = _options(text_items, [sel_cid] if sel_cid else [], none_label="— Kanal wählen —")
-    text_sel_de = " selected" if mode == "text" else ""
-    embed_sel_de = " selected" if mode == "embed" else ""
+    # Kanäle mit vorhandener Sticky kennzeichnen (Wert bleibt die Kanal-ID).
+    items = [(cid, f"{label}  · hat Sticky" if str(cid) in stickies else label) for cid, label in text_items]
+    channel_select = (
+        f"<select class='wc-input' name='channel' required>"
+        f"{_options(items, [sel_cid] if sel_cid else [], none_label='— Kanal wählen —')}</select>"
+    )
 
-    title = "Sticky bearbeiten" if is_edit else "Neue Sticky"
+    notice = ""
+    msg = request.query.get("ok")
+    if msg and msg not in _OK_MESSAGES:
+        notice = ui.callout(_esc(msg), tone="warn")
 
-    return f"""
-    <div class='card-x'>
-      <div class='st-section-title'>{_esc(title)}</div>
-      <form class='st-form' method='post' action='/cogs/sticky'>
-        <input type='hidden' name='csrf_token' value='{_esc(csrf)}'>
-        <input type='hidden' name='form' value='save'>
-        <input type='hidden' name='guild' value='{guild.id}'>
+    actions = ""
+    title = "Neue Sticky"
+    if is_edit:
+        ch = guild.get_channel(int(sel_cid)) if str(sel_cid).isdigit() else None
+        title = f"Sticky bearbeiten: #{ch.name}" if ch else "Sticky bearbeiten"
+        actions = ui.button("Neue Sticky", icon="bi-plus-lg", kind="ghost", small=True,
+                            href=f"/cogs/sticky?guild={guild.id}#editor")
+    content = ui.card(title, ui.grid(
+        ui.field("Kanal", channel_select,
+                 help="Pro Kanal gibt es eine Sticky – eine vorhandene wird beim Speichern ersetzt."),
+        ui.field("Modus", ui.select("mode", [("text", "Text"), ("embed", "Embed")], mode),
+                 help="Embed = Kasten mit Titel, Farbe, Bild und Footer."),
+        ui.field("Text / Embed-Beschreibung", ui.textarea("text", s.get("text", ""), rows=5,
+                                                          placeholder="Deine Sticky-Nachricht …"),
+                 help="Platzhalter: <code>{membercount}</code>, <code>{servername}</code>, "
+                      "<code>{channel}</code>, <code>{channelname}</code>.", wide=True),
+    ), icon="bi-pencil-square" if is_edit else "bi-plus-square", actions=actions,
+        desc="Beim Speichern wird die Sticky sofort (neu) im Kanal gepostet.")
 
-        <div class='row2'>
-          <div>
-            <label>Kanal</label>
-            <select name='channel' required>{channel_select}</select>
-          </div>
-          <div>
-            <label>Modus</label>
-            <select name='mode' id='st-mode' onchange='stSyncEditor()'>
-              <option value='text'{text_sel_de}>Text</option>
-              <option value='embed'{embed_sel_de}>Embed</option>
-            </select>
-          </div>
-        </div>
+    embed = ui.card("Embed", ui.grid(
+        ui.field("Titel (optional)", ui.text_input("embed_title", s.get("embed_title", ""))),
+        ui.field("Farbe", ui.text_input("embed_color", color, type="color",
+                                                attrs={"style": "height:42px;padding:4px 6px;cursor:pointer"})),
+        ui.field("Bild-URL (optional)", ui.text_input("embed_image", s.get("embed_image", ""), placeholder="https://…")),
+        ui.field("Footer (optional)", ui.text_input("embed_footer", s.get("embed_footer", ""))),
+    ), icon="bi-palette", desc="Nur im Modus „Embed“.")
 
-        <label>Text / Embed-Beschreibung</label>
-        <textarea name='text' placeholder='Deine Sticky-Nachricht …'>{_esc(s.get('text', ''))}</textarea>
-        <div class='hint'>Platzhalter: <code>{{membercount}}</code>, <code>{{servername}}</code>, <code>{{channel}}</code>, <code>{{channelname}}</code>.</div>
+    webhook = ui.card("Absender", "<div class='wc-switches'>" + ui.switch(
+        "webhook", "Webhook-Modus", s.get("webhook"),
+        desc="Postet mit eigenem Namen &amp; Avatar statt als Bot – benötigt das Recht „Webhooks verwalten“.",
+    ) + "</div><div id='st-webhook-fields'>" + ui.grid(
+        ui.field("Webhook-Name (optional)", ui.text_input("webhook_name", s.get("webhook_name", ""))),
+        ui.field("Webhook-Avatar-URL (optional)", ui.text_input("webhook_avatar", s.get("webhook_avatar", ""),
+                                                                placeholder="https://…")),
+    ) + "</div>", icon="bi-person-badge")
 
-        <div id='st-embed-fields'>
-          <div class='row2'>
-            <div>
-              <label>Embed-Titel (optional)</label>
-              <input name='embed_title' value='{_esc(s.get('embed_title', ''))}'>
-            </div>
-            <div>
-              <label>Embed-Farbe</label>
-              <input type='color' name='embed_color' value='{_esc(color)}'>
-            </div>
-          </div>
-          <label>Embed-Bild-URL (optional)</label>
-          <input name='embed_image' value='{_esc(s.get('embed_image', ''))}' placeholder='https://…'>
-          <label>Embed-Footer (optional)</label>
-          <input name='embed_footer' value='{_esc(s.get('embed_footer', ''))}'>
-        </div>
-
-        <div class='st-check'>
-          <input type='checkbox' name='webhook' id='st-webhook' onchange='stSyncEditor()' {'checked' if s.get('webhook') else ''}>
-          <span>Webhook-Modus (eigener Name &amp; Avatar) – benötigt „Webhooks verwalten"</span>
-        </div>
-        <div id='st-webhook-fields'>
-          <div class='row2'>
-            <div>
-              <label>Webhook-Name (optional)</label>
-              <input name='webhook_name' value='{_esc(s.get('webhook_name', ''))}'>
-            </div>
-            <div>
-              <label>Webhook-Avatar-URL (optional)</label>
-              <input name='webhook_avatar' value='{_esc(s.get('webhook_avatar', ''))}' placeholder='https://…'>
-            </div>
-          </div>
-        </div>
-
-        <div class='st-spacer'></div>
-        <button class='btn-accent' type='submit'>Speichern &amp; posten</button>
-      </form>
-      <script>stSyncEditor();</script>
-    </div>
-    """
+    form = ui.form(
+        "/cogs/sticky",
+        content + f"<div id='st-embed-fields'>{embed}</div>" + webhook
+        + ui.save_row("Speichern & posten"),
+        csrf=csrf, hidden={"form": "save", "guild": guild.id}, savebar=True, id="st-editor",
+    )
+    return notice + form + _EDITOR_JS
 
 
 # --------------------------------------------------------------------------- #
