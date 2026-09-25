@@ -64,8 +64,13 @@ def build_changelog_embed(
 ) -> discord.Embed:
     """Baut das fertige Changelog-Embed."""
     when = when or datetime.now(tz=timezone.utc)
+    # Discord-Limit 256 gilt für den FERTIGEN Titel – eine eigene Titel-Vorlage plus
+    # langer Titel ergab sonst HTTP 400 und der Changelog wurde nicht gepostet.
+    full_title = apply_text(messages, lang, "embed_title", title=title.strip()[:230])
+    if len(full_title) > 256:
+        full_title = full_title[:255].rstrip() + "…"
     embed = discord.Embed(
-        title=apply_text(messages, lang, "embed_title", title=title.strip()[:230]),
+        title=full_title,
         color=discord.Color(color),
         timestamp=when,
     )

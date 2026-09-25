@@ -81,7 +81,7 @@ Diese Befehle gibt es auch als **Slash-Befehle** (`/autoroom …`).
 Ist `webcore` geladen, erscheint automatisch der Tab **Autovoiceroom**. Dort lassen sich
 
 - alle aktiven Räume serverübergreifend einsehen,
-- Quellen pro Server anlegen, bearbeiten und entfernen,
+- Quellen pro Server anlegen, bearbeiten und entfernen – beim Anlegen und Bearbeiten mit Ziel-Kategorie, Sichtbarkeit, Namensvorlage, Personenlimit, **Bitrate** (leer = Server-Standard, wird auf das Server-Maximum begrenzt) und Textkanal,
 - und der Zugriff von Admin-/Mod-Rollen auf private Räume steuern –
 
 alles über Formulare (POST + CSRF), die direkt in die Bot-Konfiguration schreiben.

@@ -283,7 +283,9 @@ def _render_settings(ui, guild, conf, csrf) -> str:
 
     overrides = conf.get("messages") or {}
     text_labels = {"hp_warning": ("Warntext im Honeypot-Kanal",
-                                  "Wird beim Anlegen per <code>[p]guardset honeypot create</code> als Kanalthema und erste Nachricht gesetzt.")}
+                                  "Steht als Nachricht im Honeypot-Kanal. Beim Speichern wird die vorhandene Warnnachricht "
+                                  "des Bots dort bearbeitet (fehlt sie, wird sie neu gepostet); ein Kanalthema mit dem "
+                                  "alten Text wird mit angepasst. Per Befehl: <code>[p]guardset honeypot warning &lt;Text&gt;</code>.")}
     text_fields = []
     for key in OVERRIDABLE_KEYS:
         label, hint = text_labels.get(key, (key, None))
@@ -452,7 +454,7 @@ async def _handle_post(cog, request):
                 guild = g
                 break
     if guild is None:
-        raise web.HTTPFound("/cogs/guard?ok=" + quote("Server nicht gefunden"))
+        raise web.HTTPFound("/cogs/guard?err=" + quote("Server nicht gefunden"))
 
     gconf = cog.config.guild(guild)
 
@@ -467,6 +469,9 @@ async def _handle_post(cog, request):
         raise web.HTTPFound(f"/cogs/guard?guild={guild.id}")
 
     if form == "settings":
+        # Effektiver Warntext vorher – ändert er sich (Text oder Sprache), wird die
+        # bestehende Warnnachricht im Honeypot-Kanal nachgezogen.
+        old_warning = await cog._text(guild, "hp_warning")
         # Booleans (Checkbox-Anwesenheit)
         for field in BOOL_FIELDS:
             await gconf.set_raw(field, value=(field in data))
@@ -528,6 +533,19 @@ async def _handle_post(cog, request):
             if val:
                 overrides[key] = val
         await gconf.messages.set(overrides)
+
+        if await gconf.hp_channel() and await cog._text(guild, "hp_warning") != old_warning:
+            status, _channel = await cog.sync_hp_warning(guild, old_text=old_warning)
+            if status in ("edited", "posted"):
+                raise web.HTTPFound(f"/cogs/guard?guild={guild.id}&ok=" + quote(
+                    "Gespeichert – Warnnachricht im Honeypot-Kanal "
+                    + ("aktualisiert" if status == "edited" else "neu gepostet")))
+            reason = {
+                "no_channel": "der Honeypot-Kanal existiert nicht mehr",
+                "forbidden": "dem Bot fehlen dort Rechte (Nachrichten senden / Verlauf lesen)",
+            }.get(status, "Discord hat die Änderung abgelehnt")
+            raise web.HTTPFound(f"/cogs/guard?guild={guild.id}&err=" + quote(
+                f"Gespeichert, aber die Warnnachricht im Honeypot-Kanal wurde nicht aktualisiert: {reason}"))
 
         raise web.HTTPFound(f"/cogs/guard?guild={guild.id}&ok=" + quote("Gespeichert"))
 

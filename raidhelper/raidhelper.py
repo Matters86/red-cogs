@@ -36,6 +36,8 @@ RECURRENCE_DELTA = {
     "weekly": timedelta(days=7),
     "biweekly": timedelta(days=14),
 }
+# Aufräumen alter Events: höchstens so oft je Server (Sekunden).
+CLEANUP_INTERVAL = 3600
 
 
 class RaidHelper(commands.Cog):
@@ -56,11 +58,14 @@ class RaidHelper(commands.Cog):
             events={},              # event_id -> Event-Datensatz
             counter=0,
             stats={"events": 0, "attended": {}},
+            cleanup_days=30,        # abgeschlossene Events nach N Tagen löschen (0 = aus)
         )
         # Gemerkte Spec je Nutzer und Spiel/Klasse (serverübergreifend).
         self.config.register_user(remember={})
         # Spec-Icons gelten botweit (Application Emojis): "<class>:<spec>" -> "<:rh_x:id>".
         self.config.register_global(spec_emojis={})
+        # Aufräumen alter Events höchstens stündlich je Server (nur im RAM).
+        self._last_cleanup: dict[int, float] = {}
 
     # ----------------------------------------------------------------- #
     #  Dashboard-Anbindung (1:1-Muster aus example/tickets)
@@ -275,7 +280,7 @@ class RaidHelper(commands.Cog):
 
     async def create_event(self, guild, *, game, title, description, leader_id,
                            channel_id, start_ts, deadline_ts=None, color=None,
-                           max_signups=None, role_limits=None, recurrence=None) -> dict:
+                           max_signups=None, role_limits=None, recurrence=None, series=None) -> dict:
         eid = await self._next_id(guild)
         event = {
             "id": eid,
@@ -291,6 +296,7 @@ class RaidHelper(commands.Cog):
             "max_signups": max_signups,
             "role_limits": role_limits or {},
             "recurrence": recurrence,
+            "series": series,
             "closed": False,
             "completed": False,
             "reminders_sent": [],
@@ -511,6 +517,68 @@ class RaidHelper(commands.Cog):
                     await self._tick_event(guild, conf, eid, event, now)
                 except Exception:  # noqa: BLE001
                     log.exception("Raid-Tick für Event %s (Guild %s) fehlgeschlagen", eid, guild.id)
+            # Aufräumen alter Events – eigener Fehlerabfang pro Server, höchstens stündlich.
+            if now - self._last_cleanup.get(guild.id, 0) >= CLEANUP_INTERVAL:
+                self._last_cleanup[guild.id] = now
+                try:
+                    removed = await self.cleanup_old_events(guild, now=now)
+                    if removed:
+                        log.info("Raid-Aufräumen: %s alte Events gelöscht (Guild %s)", len(removed), guild.id)
+                except Exception:  # noqa: BLE001
+                    log.exception("Raid-Aufräumen fehlgeschlagen (Guild %s)", guild.id)
+
+    @staticmethod
+    def _same_series(a_id: str, a: dict, b_id: str, b: dict) -> bool:
+        """Gehören zwei Events zur selben Wiederholungsserie?
+
+        Neue Folgetermine tragen ``series`` (= ID des ersten Termins). Altbestand ohne
+        dieses Feld wird über Titel, Spiel und Kanal zugeordnet.
+        """
+        if a.get("series") or b.get("series"):
+            return (a.get("series") or a_id) == (b.get("series") or b_id)
+        return all(a.get(k) == b.get(k) for k in ("title", "game", "channel_id"))
+
+    def _cleanup_candidates(self, events: dict, days: int, now: int) -> list[str]:
+        """IDs der Events, die gelöscht werden dürfen.
+
+        Nur abgeschlossene Events, deren Termin länger als ``days`` Tage vorbei ist.
+        Ein Event mit Wiederholung wird nur gelöscht, wenn es in seiner Serie bereits
+        einen späteren Termin gibt – so bleibt das jeweils letzte Glied einer Serie
+        immer erhalten (auch wenn das Anlegen des Folgetermins einmal fehlschlug).
+        """
+        if days <= 0:
+            return []
+        cutoff = now - days * 86400
+        valid = {eid: e for eid, e in events.items() if isinstance(e, dict)}
+        out = []
+        for eid, ev in valid.items():
+            start = ev.get("start_ts") or 0
+            if not ev.get("completed") or not start or start >= cutoff:
+                continue
+            if ev.get("recurrence") in RECURRENCE_DELTA:
+                has_later = any(
+                    oid != eid and (o.get("start_ts") or 0) > start and self._same_series(eid, ev, oid, o)
+                    for oid, o in valid.items()
+                )
+                if not has_later:
+                    continue
+            out.append(eid)
+        return out
+
+    async def cleanup_old_events(self, guild, *, now: int | None = None, days: int | None = None) -> list[str]:
+        """Löscht alte, abgeschlossene Events (nur Daten, keine Discord-Nachrichten)."""
+        if now is None:
+            now = int(datetime.now(tz=timezone.utc).timestamp())
+        gconf = self.config.guild(guild)
+        if days is None:
+            days = int(await gconf.cleanup_days() or 0)
+        if days <= 0:
+            return []
+        async with gconf.events() as events:
+            victims = self._cleanup_candidates(events, days, now)
+            for eid in victims:
+                events.pop(eid, None)
+        return victims
 
     async def _tick_event(self, guild, conf, eid, event, now):
         if not isinstance(event, dict):
@@ -627,6 +695,7 @@ class RaidHelper(commands.Cog):
             max_signups=event.get("max_signups"),
             role_limits=event.get("role_limits"),
             recurrence=event.get("recurrence"),
+            series=event.get("series") or event.get("id"),
         )
 
     # ----------------------------------------------------------------- #
@@ -1008,6 +1077,22 @@ class RaidHelper(commands.Cog):
         await self.config.guild(ctx.guild).reminders.set(on_off)
         await ctx.send("✅")
 
+    @raidset.command(name="cleanup")
+    async def raidset_cleanup(self, ctx, days: int):
+        """Abgeschlossene Events nach N Tagen löschen (0 = aus, Standard 30).
+
+        Gelöscht werden nur gespeicherte Daten – Discord-Nachrichten bleiben stehen.
+        Wiederholungsserien bleiben erhalten.
+        """
+        lang = await self._lang(ctx.guild)
+        if not 0 <= days <= 3650:
+            return await ctx.send(t(lang, "cleanup_bad"))
+        await self.config.guild(ctx.guild).cleanup_days.set(days)
+        if days == 0:
+            return await ctx.send(t(lang, "cleanup_off"))
+        removed = await self.cleanup_old_events(ctx.guild)
+        await ctx.send(t(lang, "cleanup_set", days=days, removed=len(removed)))
+
     @raidset.command(name="settings")
     async def raidset_settings(self, ctx):
         """Aktuelle Einstellungen anzeigen."""
@@ -1021,6 +1106,7 @@ class RaidHelper(commands.Cog):
             f"Manager-Rollen: {roles}\n"
             f"Zeitzone: {d['timezone']}\n"
             f"Erinnerungen: {'an' if d['reminders'] else 'aus'}\n"
+            f"Alte Events löschen nach: {str(d['cleanup_days']) + ' Tagen' if d['cleanup_days'] else 'aus'}\n"
             f"Events gespeichert: {len(d['events'])}"
         )
         await ctx.send(text)

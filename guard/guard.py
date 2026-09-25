@@ -85,6 +85,7 @@ class Guard(commands.Cog):
             hp_action="softban",       # ban | softban | kick | timeout
             hp_delete_seconds=86400,   # Nachrichten-Löschfenster bei ban/softban (0..604800)
             hp_timeout_minutes=60,
+            hp_message_id=None,        # eigene Warnnachricht im Honeypot-Kanal (zum Editieren)
             # Spamschutz – Schalter & Schwellen
             spam_enabled=False,
             s_rate=True, s_rate_count=6, s_rate_seconds=5,
@@ -714,8 +715,9 @@ class Guard(commands.Cog):
             channel = await ctx.guild.create_text_channel(
                 name=name[:90], topic=warning[:1024], reason="Guard: Honeypot"
             )
+            msg_id = None
             try:
-                await channel.send(warning)
+                msg_id = (await channel.send(warning[:2000])).id
             except Exception:  # noqa: BLE001
                 pass
         except discord.Forbidden:
@@ -723,8 +725,84 @@ class Guard(commands.Cog):
         except discord.HTTPException:
             return await self._say(ctx, "hp_create_failed")
         await self.config.guild(ctx.guild).hp_channel.set(channel.id)
+        await self.config.guild(ctx.guild).hp_message_id.set(msg_id)
         await self.config.guild(ctx.guild).hp_enabled.set(True)
         await self._say(ctx, "hp_created", channel=channel.mention)
+
+    @guardset_honeypot.command(name="warning")
+    async def hp_warning(self, ctx: commands.Context, *, text: str = None):
+        """Warntext im Honeypot-Kanal ändern und die Warnnachricht dort aktualisieren.
+
+        Ohne Text: bestehende Warnnachricht mit dem aktuellen Text abgleichen.
+        `reset`: wieder den Standardtext der Sprache verwenden.
+        """
+        old_warning = await self._text(ctx.guild, "hp_warning")
+        if text is not None:
+            text = text.strip()
+            async with self.config.guild(ctx.guild).messages() as overrides:
+                if text.lower() in ("reset", "-", ""):
+                    overrides.pop("hp_warning", None)
+                else:
+                    overrides["hp_warning"] = text[:2000]
+        conf = await self.config.guild(ctx.guild).all()
+        if not conf.get("hp_channel"):
+            return await self._say(ctx, "hp_warn_saved" if text is not None else "hp_warn_no_channel")
+        status, channel = await self.sync_hp_warning(ctx.guild, old_text=old_warning)
+        mention = channel.mention if channel is not None else "—"
+        await self._say(ctx, f"hp_warn_{status}", channel=mention)
+
+    async def sync_hp_warning(self, guild, *, old_text: str | None = None):
+        """Bringt die Warnnachricht im Honeypot-Kanal auf den aktuellen Text.
+
+        Reihenfolge: gemerkte Nachricht editieren → sonst letzte eigene Bot-Nachricht
+        im Kanal (die letzten 20) editieren → sonst neu posten. Die Nachrichten-ID wird
+        gemerkt. Das Kanalthema wird mit angepasst, wenn es noch dem alten Warntext
+        entspricht (so bleibt ein eigenes Thema unangetastet).
+
+        Rückgabe ``(status, channel)`` mit status ``edited`` | ``posted`` |
+        ``no_channel`` | ``forbidden`` | ``failed`` – wirft nie.
+        """
+        gconf = self.config.guild(guild)
+        chan_id = await gconf.hp_channel()
+        channel = guild.get_channel(int(chan_id)) if chan_id else None
+        if channel is None or not hasattr(channel, "send"):
+            return "no_channel", None
+        text = (await self._text(guild, "hp_warning"))[:2000]
+        me_id = getattr(self.bot.user, "id", None)
+        try:
+            msg = None
+            stored = await gconf.hp_message_id()
+            if stored:
+                try:
+                    msg = await channel.fetch_message(int(stored))
+                except discord.NotFound:
+                    msg = None
+            if msg is None and me_id is not None:
+                async for m in channel.history(limit=20):
+                    if getattr(m.author, "id", None) == me_id:
+                        msg = m
+                        break
+            if msg is not None:
+                if msg.content != text:
+                    await msg.edit(content=text)
+                status = "edited"
+            else:
+                msg = await channel.send(text)
+                status = "posted"
+            await gconf.hp_message_id.set(msg.id)
+        except discord.Forbidden:
+            return "forbidden", channel
+        except discord.HTTPException:
+            log.warning("Honeypot-Warnnachricht nicht aktualisierbar (Guild %s)", guild.id, exc_info=True)
+            return "failed", channel
+        # Kanalthema nur nachziehen, wenn es noch der (alte) Warntext ist – Fehler hier sind unkritisch.
+        topic = getattr(channel, "topic", None)
+        if old_text is not None and topic and topic.strip() == old_text[:1024].strip() and topic != text[:1024]:
+            try:
+                await channel.edit(topic=text[:1024], reason="Guard: Honeypot-Warntext geändert")
+            except discord.HTTPException:
+                pass
+        return status, channel
 
     @guardset_honeypot.command(name="set")
     async def hp_set(self, ctx: commands.Context, channel: discord.TextChannel):
@@ -800,8 +878,14 @@ class Guard(commands.Cog):
         if code not in LANGUAGES:
             langs = ", ".join(f"`{c}`" for c in LANGUAGES)
             return await self._say(ctx, "lang_unknown", code=code, langs=langs)
+        old_warning = await self._text(ctx.guild, "hp_warning")
         await self.config.guild(ctx.guild).language.set(code)
         await self._say(ctx, "lang_set", lang=LANGUAGES[code])
+        # Standard-Warntext hängt an der Sprache -> bestehende Warnnachricht mitziehen.
+        if await self.config.guild(ctx.guild).hp_channel() and await self._text(ctx.guild, "hp_warning") != old_warning:
+            status, channel = await self.sync_hp_warning(ctx.guild, old_text=old_warning)
+            if status not in ("edited", "posted"):
+                await self._say(ctx, f"hp_warn_{status}", channel=channel.mention if channel else "—")
 
     @guardset.command(name="settings")
     async def guardset_settings(self, ctx: commands.Context):

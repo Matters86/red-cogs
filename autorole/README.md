@@ -147,5 +147,10 @@ alles über Formulare (POST + CSRF), die direkt in die Bot-Konfiguration schreib
   Wieder-Beitritt – ein paar Sekunden genügen meist.
 - **Sticky-Rollen** bewusst sparsam einsetzen: gespeichert wird nur, was ausdrücklich als Sticky
   markiert ist. So kommt eine entfernte Straf-/Mute-Rolle nicht durch einen Rejoin zurück.
+- **Emojis in Panels:** Unicode-Emoji (z. B. ⭐) oder Server-Emoji im Format `<:name:id>`.
+  Lehnt Discord ein Emoji ab (z. B. Text statt Emoji), wird das Panel ohne Emojis gepostet und
+  das Dashboard bzw. der Befehl weist darauf hin.
+- Wird der **Kanal eines geposteten Panels geändert**, entfernt das Dashboard die alte
+  Nachricht und postet das Panel im neuen Kanal.
 - Slash-Befehle ggf. mit `[p]slash sync` aktivieren.
 - Voraussetzung für das Dashboard: der Cog `webcore` ist geladen und eingerichtet.

@@ -40,6 +40,7 @@ Punkte je Treffer: Einladung 5, Erwähnungen 4, Rate/Wiederholung 3, Link/Wall/n
 | `[p]guardset honeypot set <kanal>` | Bestehenden Kanal als Honeypot markieren. | Admin / Manage Server |
 | `[p]guardset honeypot disable` | Honeypot deaktivieren. | Admin / Manage Server |
 | `[p]guardset honeypot action <ban\|softban\|kick\|timeout>` | Aktion bei Auslösung. | Admin / Manage Server |
+| `[p]guardset honeypot warning [text\|reset]` | Warntext ändern und die Warnnachricht im Honeypot-Kanal aktualisieren. | Admin / Manage Server |
 | `[p]guardset logchannel [kanal]` | Log-Kanal setzen (ohne Angabe: entfernen). | Admin / Manage Server |
 | `[p]guardset whitelistrole <rolle>` | Rolle ausnehmen (Umschalter). | Admin / Manage Server |
 | `[p]guardset whitelistuser <nutzer>` | Nutzer ausnehmen (Umschalter). | Admin / Manage Server |

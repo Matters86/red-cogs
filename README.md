@@ -24,7 +24,7 @@ Danach `webcore` einrichten (siehe [`webcore/README.md`](webcore/README.md)).
 | [`autorole`](autorole/) | Automatische Rollenvergabe bei Beitritt + Self-Service-Rollen-Panels (Buttons/Dropdown). |
 | [`changelog`](changelog/) | Server-Updates (Changelogs) per Modal als einheitliches Embed posten – mit Kategorien, optionalem Rollen-Ping und Dashboard-Historie. |
 | [`commands`](commands/) | Listet alle geladenen Cogs und Befehle im Dashboard – mit Stufen und Mitglieds-Prüfung. |
-| [`fivemadmin`](fivemadmin/) | FiveM-Adminpanel (QBox): Support-, Moderations- und Admin-Aktionen per Discord-Befehl und eigenem Webpanel (Login per Discord), gemeinsame Action-Queue, Audit-Log und Not-Aus. |
+| [`fivemadmin`](fivemadmin/) | FiveM-Adminpanel (QBox): Support-, Moderations- und Admin-Aktionen per Discord-Befehl und eigenem Live-Webpanel (Login per Discord), gemeinsame Action-Queue, Audit-Log und Not-Aus. Dazu die Dashboard-Seite „FiveM-Admin“ für die Verwaltung (Not-Aus, Sperren, Panel-Rechte, Einstellungen, Ein-Klick-Anmeldung im Live-Panel). |
 | [`guard`](guard/) | Spamschutz, Honeypot und Raid-Notmodus – mehrsprachig und per Dashboard steuerbar. |
 | [`onlyimagevideo`](onlyimagevideo/) | Macht Kanäle zu Nur-Medien-Kanälen: löscht Nachrichten ohne Bild/Video/GIF (auch Tenor-/Giphy-Links, Sticker), Threads erben die Regel, mit Dashboard. |
 | [`organigram`](organigram/) | Postet Server-Organigramme als Bild (5 Muster), Embed oder Text – mit Live-Vorschau im Dashboard. |

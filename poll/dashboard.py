@@ -364,19 +364,19 @@ async def _handle_post(cog, request):
         options = [o.strip() for o in (data.get("options") or "").splitlines() if o.strip()]
         max_opts = await gconf.max_options()
         if not question or len(options) < 2:
-            raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&ok=" + quote("Bitte Frage und mind. 2 Optionen angeben"))
+            raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&err=" + quote("Bitte Frage und mind. 2 Optionen angeben"))
         if len(options) > max_opts:
-            raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&ok=" + quote(f"Zu viele Optionen (max. {max_opts})"))
+            raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&err=" + quote(f"Zu viele Optionen (max. {max_opts})"))
         channel = guild.get_channel(_one_id(data.get("channel")) or 0)
         if not isinstance(channel, (discord.TextChannel, discord.Thread)):
             # Nur Text-/Thread-Kanäle: sonst entstünde eine Umfrage ohne Nachricht (Leiche).
-            raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&ok=" + quote("Bitte einen Textkanal wählen"))
+            raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&err=" + quote("Bitte einen Textkanal wählen"))
         end_ts = None
         dur = (data.get("duration") or "").strip()
         if dur:
             secs = parse_duration(dur)
             if secs is None:
-                raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&ok=" + quote("Dauer nicht erkannt (z. B. 2h, 30m, 1d)"))
+                raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&err=" + quote("Dauer nicht erkannt (z. B. 2h, 30m, 1d)"))
             end_ts = int(datetime.now(tz=timezone.utc).timestamp()) + secs
         poll = await cog.create_poll(
             guild, question=question, options=options, channel_id=channel.id,
@@ -384,7 +384,7 @@ async def _handle_post(cog, request):
             multiple="multiple" in data, anonymous="anonymous" in data,
         )
         if not poll.get("message_id"):
-            raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&ok=" + quote(
+            raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&err=" + quote(
                 "Umfrage gespeichert, aber das Posten ist fehlgeschlagen (Rechte im Kanal prüfen)"))
         raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&ok=" + quote("Umfrage erstellt"))
 

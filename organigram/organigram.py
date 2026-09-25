@@ -21,6 +21,7 @@ from redbot.core.bot import Red
 
 from .render import (
     MAX_PEOPLE,
+    ChartTooLarge,
     PATTERNS,
     RChart,
     RNode,
@@ -28,6 +29,9 @@ from .render import (
     build_text_tree,
     render_chart_png,
 )
+
+TOO_LARGE_HINT = ("Das Organigramm ist zu groß für ein Bild ({w}×{h} px). Nutze den Modus "
+                  "„Embed“ oder „Text“, ein kompakteres Muster (z. B. „Abteilungen“) oder weniger Positionen.")
 
 log = logging.getLogger("red.red-cogs.organigram")
 
@@ -264,11 +268,13 @@ class Organigram(commands.Cog):
 
     async def _render_png(self, guild: discord.Guild, chart: dict) -> bytes:
         rchart = await self._resolve(guild, chart)
-        return await self.bot.loop.run_in_executor(None, render_chart_png, rchart)
+        return await asyncio.get_running_loop().run_in_executor(None, render_chart_png, rchart)
 
     def _build_embed(self, guild: discord.Guild, chart: dict, rchart: RChart) -> discord.Embed:
         emb = discord.Embed(
-            title=rchart.title,
+            # Discord-Limit 256 – ein langer Titel aus dem Dashboard ließ das Posten
+            # im Embed-Modus sonst mit HTTP 400 scheitern.
+            title=(rchart.title or "")[:256] or None,
             color=discord.Color(_color_int(chart.get("accent"))),
         )
         # Discord-Limit: max. 25 Felder UND max. 6000 Zeichen je Embed.
@@ -278,7 +284,7 @@ class Organigram(commands.Cog):
         count = 0
         omitted = 0
         stop = False
-        total = len(rchart.title or "") + len(guild.name or "")
+        total = len((rchart.title or "")[:256]) + len(guild.name or "")
 
         def walk(node: RNode, depth: int):
             nonlocal count, omitted, stop, total
@@ -363,6 +369,8 @@ class Organigram(commands.Cog):
                 msg = await self._send_or_edit(channel, existing, content=self._text_block(rchart))
         except discord.Forbidden:
             return False, "Mir fehlen Rechte, in diesem Kanal zu posten/zu bearbeiten."
+        except ChartTooLarge as exc:
+            return False, TOO_LARGE_HINT.format(w=exc.width, h=exc.height)
         except Exception as exc:
             log.exception("Posten fehlgeschlagen")
             return False, f"Unerwarteter Fehler: {exc}"
@@ -507,6 +515,8 @@ class Organigram(commands.Cog):
                     await ctx.send(self._text_block(rchart))
             except discord.Forbidden:
                 await ctx.send("Mir fehlen Rechte, hier zu posten.")
+            except ChartTooLarge as exc:
+                await ctx.send(TOO_LARGE_HINT.format(w=exc.width, h=exc.height))
             except discord.HTTPException as exc:
                 log.exception("Anzeigen fehlgeschlagen")
                 await ctx.send(f"Konnte das Organigramm nicht senden: {exc}")

@@ -445,6 +445,7 @@ def _panel_redirect(guild_id, pid=None, ok=""):
 
 _POST_MSG = {
     "panel_posted": "Panel gepostet bzw. aktualisiert",
+    "panel_posted_noemoji": "Panel gepostet – Discord hat ein Emoji abgelehnt, daher ohne Emojis. Bitte Emojis prüfen",
     "panel_post_no_channel": "Kein gültiger Kanal gesetzt",
     "panel_post_no_roles": "Das Panel hat noch keine Rollen",
     "panel_post_no_send": "Mir fehlen Senderechte im Zielkanal",
@@ -544,10 +545,17 @@ async def _handle_post(cog, request):
         style = data.get("style")
         mode = data.get("mode")
         ch = data.get("channel_id")
+        moved = None
         async with gconf.panels() as panels:
             p = panels[pid]
             p["name"] = (data.get("name") or p["name"]).strip()[:100] or "Panel"
-            p["channel_id"] = int(ch) if ch and ch.isdigit() else None
+            new_ch = int(ch) if ch and ch.isdigit() else None
+            if p.get("message_id") and p.get("channel_id") and p.get("channel_id") != new_ch:
+                # Kanal gewechselt: alte Nachricht entfernen, sonst bliebe ein zweites,
+                # weiter funktionierendes Panel im alten Kanal stehen.
+                moved = {"channel_id": p["channel_id"], "message_id": p["message_id"]}
+                p["message_id"] = None
+            p["channel_id"] = new_ch
             p["style"] = style if style in STYLES else "buttons"
             p["mode"] = mode if mode in MODES else "toggle"
             p["unique"] = "unique" in data
@@ -555,7 +563,15 @@ async def _handle_post(cog, request):
             p["title"] = (data.get("title") or "")[:256]
             p["color"] = (data.get("color") or "").strip()[:7]
             p["text"] = (data.get("text") or "")[:2000]
-        await cog._panel_refresh(guild, pid)
+        if moved:
+            await cog._panel_delete_message(guild, moved)
+            if new_ch:
+                ok, key = await cog._panel_post(guild, await cog._get_panel(guild, pid))
+                if not ok:
+                    raise web.HTTPFound(f"/cogs/autorole?guild={guild.id}&panel={quote_plus(str(pid))}&err="
+                                        + quote_plus("Gespeichert, alte Nachricht entfernt – " + _POST_MSG.get(key, "Posten fehlgeschlagen")))
+        else:
+            await cog._panel_refresh(guild, pid)
         raise _panel_redirect(guild.id, pid, "Eigenschaften gespeichert")
 
     if form == "panel_role_add":
@@ -624,6 +640,9 @@ async def _handle_post(cog, request):
         if panel is None:
             raise _panel_redirect(guild.id, ok="Panel nicht gefunden")
         ok, key = await cog._panel_post(guild, panel)
+        if not ok:
+            raise web.HTTPFound(f"/cogs/autorole?guild={guild.id}&panel={quote_plus(str(pid))}&err="
+                                + quote_plus(_POST_MSG.get(key, "Posten fehlgeschlagen")))
         raise _panel_redirect(guild.id, pid, _POST_MSG.get(key, "OK"))
 
     if form == "panel_delete":

@@ -210,7 +210,7 @@ def _render_editor(ui, guild, stickies, text_items, csrf, request) -> str:
     )
 
     notice = ""
-    msg = request.query.get("ok")
+    msg = request.query.get("err") or request.query.get("ok")
     if msg and msg not in _OK_MESSAGES:
         notice = ui.callout(_esc(msg), tone="warn")
 
@@ -320,7 +320,7 @@ async def _handle_post(cog, request):
         if err:
             # Vorher wurde gespeichert, das Posten scheiterte an Discord-Limits – und die
             # alte Sticky war dann schon gelöscht. Jetzt: gar nicht erst speichern.
-            raise web.HTTPFound(f"/cogs/sticky?guild={guild.id}&channel={cid}&ok=" + quote_plus(err))
+            raise web.HTTPFound(f"/cogs/sticky?guild={guild.id}&channel={cid}&err=" + quote_plus(err))
 
         async with gconf.stickies() as stickies:
             entry = {

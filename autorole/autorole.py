@@ -191,25 +191,43 @@ class Autorole(commands.Cog):
         perms = ch.permissions_for(me) if me is not None else None
         if perms is None or not perms.send_messages or (panel.get("use_embed") and not perms.embed_links):
             return False, "panel_post_no_send"
-        view = build_view(panel)
         kwargs = message_kwargs(panel)
         msg_id = panel.get("message_id")
+        old = None
         if msg_id:
             try:
                 old = await ch.fetch_message(int(msg_id))
-                await old.edit(view=view, **kwargs)
-                return True, "panel_posted"
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                pass  # alte Nachricht weg/gesperrt -> neu posten
+                old = None  # alte Nachricht weg/gesperrt -> neu posten
+
+        async def _deliver(view):
+            if old is not None:
+                await old.edit(view=view, **kwargs)
+                return old
+            return await ch.send(view=view, **kwargs)
+
+        key = "panel_posted"
         try:
-            sent = await ch.send(view=view, **kwargs)
+            try:
+                sent = await _deliver(build_view(panel))
+            except discord.HTTPException as e:
+                # Ein ungültiges Emoji (z. B. Text statt Emoji) lässt Discord die ganze
+                # Nachricht ablehnen (400). Vorher schlug das Posten dann komplett fehl bzw.
+                # beim Bearbeiten entstand ein doppeltes Panel. -> einmal ohne Emojis.
+                if e.status != 400:
+                    raise
+                log.warning("Panel %s: Discord lehnt die Komponenten ab (%s) – ohne Emojis erneut.",
+                            panel.get("id"), e.text)
+                sent = await _deliver(build_view(panel, emojis=False))
+                key = "panel_posted_noemoji"
         except discord.HTTPException:
             return False, "panel_post_failed"
-        async with self.config.guild(guild).panels() as panels:
-            if panel["id"] in panels:
-                panels[panel["id"]]["message_id"] = sent.id
-                panels[panel["id"]]["channel_id"] = ch.id
-        return True, "panel_posted"
+        if old is None:
+            async with self.config.guild(guild).panels() as panels:
+                if panel["id"] in panels:
+                    panels[panel["id"]]["message_id"] = sent.id
+                    panels[panel["id"]]["channel_id"] = ch.id
+        return True, key
 
     async def _panel_refresh(self, guild: discord.Guild, pid: str) -> None:
         """Aktualisiert die Nachricht eines bereits geposteten Panels (sonst nichts)."""
@@ -805,8 +823,10 @@ class Autorole(commands.Cog):
             reloaded = await self._get_panel(ctx.guild, panel_id)
             ch = ctx.guild.get_channel(int(reloaded["channel_id"])) if reloaded.get("channel_id") else None
             chname = ch.mention if isinstance(ch, discord.TextChannel) else "?"
-            await ctx.send(t(lang, "panel_posted", name=panel["name"], channel=chname),
-                           allowed_mentions=discord.AllowedMentions.none())
+            text = t(lang, "panel_posted", name=panel["name"], channel=chname)
+            if key == "panel_posted_noemoji":
+                text += "\n" + t(lang, "panel_emoji_dropped")
+            await ctx.send(text, allowed_mentions=discord.AllowedMentions.none())
         else:
             await ctx.send(t(lang, key, name=panel["name"], id=panel_id, p=ctx.clean_prefix),
                            allowed_mentions=discord.AllowedMentions.none())

@@ -74,3 +74,8 @@ live abgerufen und **nicht** dauerhaft gespeichert.
   Markierung je Position übernimmt im Bild die Rollen-/Eigenfarbe.
 - Je Position werden im Bild bis zu sieben Personen gezeigt, der Rest als
   „+N weitere“.
+- Sehr große Organigramme (Bild über ca. 24 Megapixel bzw. 12 000 px an einer Seite) werden
+  nicht als Bild gerendert – das bräuchte mehrere GB Arbeitsspeicher. Posten meldet dann
+  „zu groß für ein Bild“, die Dashboard-Vorschau zeigt einen Hinweis; nutze **Embed**/**Text**
+  oder ein kompakteres Muster (z. B. „Abteilungen“). Große Bilder werden außerdem ohne
+  Kantenglättung (Supersampling) gerendert, um Speicher zu sparen.

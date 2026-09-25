@@ -69,6 +69,7 @@ Einstellungen (`raidset`) erfordern „Server verwalten" oder Admin.
 | `[p]raidset managerrole <rolle>` | Manager-Rolle hinzufügen/entfernen (Umschalter) |
 | `[p]raidset timezone <zone>` | Anzeige-Zeitzone setzen (z. B. `Europe/Berlin`) |
 | `[p]raidset reminders <true\|false>` | Erinnerungen an-/ausschalten |
+| `[p]raidset cleanup <tage>` | Abgeschlossene Events nach N Tagen löschen (Standard 30, `0` = aus) – nur Daten, Discord-Nachrichten bleiben |
 | `[p]raidset icons` | Zeigt, welche Klasse welches Icon hat |
 | `[p]raidset specicon <klasse> <spec> <emoji>` | Icon einer Spezialisierung manuell auf ein vorhandenes Emoji setzen (nur Bot-Owner, gilt botweit) |
 | `[p]raidset clearspecicon <klasse> <spec>` | Icon einer Spezialisierung entfernen (nur Bot-Owner) |
@@ -83,10 +84,19 @@ Spiel-IDs: `wow_retail`, `wow_classic`, `wow_wotlk`.
 Die Seite **Raidplaner** erscheint nach dem Laden automatisch im WebCore-Dashboard unter `/cogs/raidhelper`. Dort gibt es:
 
 - Statistik-Kacheln (kommende Events, Anmeldungen gesamt, Standard-Spiel),
-- ein Einstellungs-Formular (Sprache, Standard-Spiel, Anmelde-Kanal, Zeitzone, Erinnerungen, Text-Overrides),
+- ein Einstellungs-Formular (Sprache, Standard-Spiel, Anmelde-Kanal, Zeitzone, Erinnerungen, Aufräumen, Text-Overrides),
 - eine Event-Tabelle mit Aktionen (Schließen/Öffnen/Löschen),
 - eine Roster-Ansicht pro Event,
 - eine **Spec-Icon-Verwaltung** mit Datei-Upload und Vorschau der aktuellen Icons.
+
+### Alte Events aufräumen
+
+Im Reiter **Einstellungen → Aufräumen** (oder per `[p]raidset cleanup <tage>`) legst du fest, nach wie vielen Tagen abgeschlossene Events gelöscht werden (Standard **30 Tage**, `0` = nie). Das läuft automatisch etwa stündlich und direkt nach dem Speichern:
+
+- gelöscht werden nur Events, deren Termin länger als N Tage vorbei ist und die bereits abgeschlossen sind;
+- bei Wiederholungen bleibt das jeweils letzte Event der Serie immer erhalten – Serien laufen weiter;
+- nur die gespeicherten Daten werden entfernt, die Nachricht in Discord bleibt stehen. Ein Klick auf ihre Buttons antwortet dann (nur für den Klickenden sichtbar) mit „Dieses Event existiert nicht mehr.“;
+- die Teilnahme-Statistik bleibt erhalten.
 
 ## Spec-Icons
 
@@ -104,4 +114,4 @@ Ein Spiel ist in `games.py` ein reiner Datenblock (Rollen, Klassen, Specs, Farbe
 
 ## Datenspeicherung
 
-Pro Event werden Anmeldungen (Discord-ID, Anzeigename, Klasse/Spec, Rolle, Status, Zeitpunkt) gespeichert, pro Nutzer die zuletzt gewählte Spec je Spiel/Klasse sowie eine Teilnahme-Statistik. Daten werden beim Löschen eines Events, beim Entfernen des Cogs oder beim Verlassen des Servers entfernt.
+Pro Event werden Anmeldungen (Discord-ID, Anzeigename, Klasse/Spec, Rolle, Status, Zeitpunkt) gespeichert, pro Nutzer die zuletzt gewählte Spec je Spiel/Klasse sowie eine Teilnahme-Statistik. Daten werden beim Löschen eines Events (auch durch das automatische Aufräumen), beim Entfernen des Cogs oder beim Verlassen des Servers entfernt.

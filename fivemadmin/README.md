@@ -17,8 +17,9 @@ Bridge-Resource `ap_bridge` per HTTP ab und meldet das Ergebnis zurück.
 - **Sicherheit:** Not-Aus (`lockdown`), Audit-Channel für heikle Aktionen, Missbrauchs-Alerts,
   tägliches automatisches DB-Backup (auch nach Neustarts: fällig, sobald das letzte älter als 24 h ist).
 
-> Dieser Cog bringt einen **eigenen Webserver** mit (nicht WebCore) – er hat deshalb keine
-> Seite im WebCore-Dashboard.
+> Dieser Cog bringt für die Aktionen im Spiel ein **eigenes Live-Panel** mit eigenem Webserver mit
+> (nicht WebCore). Die **Verwaltung** (Not-Aus, Sperren, Panel-Rechte, Einstellungen, Anmelden im
+> Live-Panel) gibt es zusätzlich als Seite **„FiveM-Admin“ im WebCore-Dashboard** – siehe unten.
 
 ## Installation
 
@@ -95,6 +96,47 @@ zusätzlich ein Preset erhalten.
 | `[p]ap logchannel [kanal]` | Kanal für Missbrauchs-Alerts (ohne Angabe: aus). | Discord-Administrator |
 | `[p]ap backup` | Sofort ein DB-Backup erstellen. | Discord-Administrator |
 | `[p]ap lockdown [on\|off]` | **Not-Aus:** sperrt sofort alle Aktionen (Webpanel **und** Discord-Befehle) und verwirft alle noch offenen Aufträge. Lesende Befehle (`find`, `inv`, `cars`, `bans`, `diag`) bleiben nutzbar. | Discord-Administrator |
+
+## Dashboard (WebCore)
+
+Ist [WebCore](../webcore/) geladen, erscheint die Seite **FiveM-Admin** im gemeinsamen Dashboard
+(`/cogs/fivemadmin`). Das Live-Panel bleibt unverändert für alle Aktionen im Spiel (Spielerliste,
+Teleport, Geld, Items …), inklusive App/PWA und Bridge-Endpunkten.
+
+| Reiter | Inhalt |
+|---|---|
+| **Übersicht** | Kennzahlen (Bridge-Status und letzter Sync, Spieler online, offene Aufträge, Lockdown, aktive Sperren), **Live-Panel**-Karte mit „Im Live-Panel anmelden“ (Single Sign-on) und „Live-Panel öffnen“, **Not-Aus** (Lockdown an/aus mit Bestätigung), Einrichtungsprüfung (API-Key, Panel-URL, Bridge, Rollen, Kanäle, OAuth) und die letzten 150 Aufträge als durchsuchbare Tabelle. |
+| **Sperren** | Aktive Bans mit Suche; Entbannen mit Bestätigung. |
+| **Panel-Rechte** | Erklärung der Presets, Zuordnung **Rolle → Preset** und **Einzelpersonen → Preset** (hinzufügen per ID, Erwähnung oder Name). Verwaiste Einträge gelöschter Rollen lassen sich entfernen. |
+| **Einstellungen** | Audit- und Alert-Kanal, Geld-/Item-Limit pro Aktion, Panel-URL. API-Key, OAuth-Daten, Port und Bind-Adresse werden nur angezeigt („gesetzt“/„nicht gesetzt“ bzw. Port/Adresse) – ändern nur per Discord-Befehl. |
+
+**Anmelden im Live-Panel (Single Sign-on):** Der Button erzeugt für den im Dashboard angemeldeten
+Discord-Nutzer einen Einmal-Login (5 Min. gültig) – genau wie `[p]ap login` – und leitet direkt auf
+`<Panel-URL>/?login=…` weiter. Voraussetzungen: Panel-URL gesetzt, Panel-Rechte auf dem gewählten
+Server und auf der Dashboard-Seite das Recht *Bearbeiten* (die Anmeldung ist ein Formular-POST mit
+CSRF-Schutz). Mit nur *Ansehen* erscheint ein Hinweis auf `[p]ap login`.
+
+**Rechte:** Wer die Seite überhaupt sieht bzw. bearbeiten darf, legt der Bot-Owner unter
+*Verwaltung → Zugriff & Rollen* fest (WebCore-Rollen-Rechte, pro Server). **Zusätzlich** prüft jede
+Aktion serverseitig dieselben Rechte wie der passende Befehl bzw. Live-Panel-Endpunkt:
+
+| Aktion | Nötig (neben WebCore-„Bearbeiten“) |
+|---|---|
+| Entbannen | Panel-Recht *Bannen* (Preset `moderator` oder `admin`) – wie `[p]ap unban` |
+| Lockdown an/aus | Discord-Administrator des Servers – wie `[p]ap lockdown` |
+| Panel-Rechte ändern | Discord-Administrator des Servers – wie `[p]ap roles`; zusätzlich kann niemand ein Preset vergeben oder entziehen, das mehr Rechte hat als er selbst |
+| Einstellungen | nur Bot-Owner/Allowlist, weil sie **botweit** gelten |
+| Im Live-Panel anmelden | irgendein Panel-Recht auf dem Server – wie `[p]ap login` |
+
+**Sichtbarkeit wie im Live-Panel:** Die Sperrliste sieht nur, wer das Panel-Recht *Bannen* hat,
+die letzten Aufträge nur, wer *Audit* hat (Preset `admin`), und die Rollen-/Personen-Zuordnungen nur
+Discord-Administratoren – sonst zeigt die Seite dort einen Hinweis statt Daten. Die Kennzahlen
+(z. B. Anzahl aktiver Sperren) sind für alle mit Seitenzugriff sichtbar.
+
+Bot-Owner und Allowlist-Nutzer von WebCore dürfen alle Aktionen (für die Anmeldung im Live-Panel
+zählen aber immer die echten Discord-Rechte). Jede Änderung landet im **WebCore-Audit-Log** und
+zusätzlich im **Audit-Kanal** des Cogs (mit dem Zusatz „(Dashboard)“). Beim Aktivieren des
+Lockdowns werden – wie beim Befehl – alle offenen Aufträge verworfen.
 
 ## Daten
 

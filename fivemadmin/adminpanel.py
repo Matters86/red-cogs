@@ -77,6 +77,9 @@ PRESETS = {
     "editor": {"server_status", "view_stats"},
 }
 
+# Alle Rechte (Discord-Administratoren; im Dashboard auch Owner/Allowlist).
+ALL_PERMS = _ADMIN | PRESETS["editor"]
+
 # Welche Berechtigung braucht welcher Action-Type?
 ACTION_PERMISSION = {
     "teleport": "teleport",
@@ -161,7 +164,36 @@ class AdminPanel(commands.Cog):
             return False
         return hmac.compare_digest(str(provided or ""), self.api_key)
 
+    # --------------------------------------------------------------
+    # WebCore-Dashboard (Verwaltungsseite; das Live-Panel bleibt eigenständig)
+    # --------------------------------------------------------------
+
+    async def cog_load(self):
+        webcore = self.bot.get_cog("WebCore")
+        if webcore is not None:
+            self._register_dashboard(webcore)
+
+    @commands.Cog.listener()
+    async def on_webcore_ready(self, webcore):
+        self._register_dashboard(webcore)
+
+    def _register_dashboard(self, webcore):
+        webcore.register_page(
+            owner=self,
+            slug="fivemadmin",
+            name="FiveM-Admin",
+            icon="bi-controller",
+            handler=self.dashboard_page,
+        )
+
+    async def dashboard_page(self, request):
+        from .dashboard import dashboard_handler
+        return await dashboard_handler(self, request)
+
     async def cog_unload(self):
+        webcore = self.bot.get_cog("WebCore")
+        if webcore is not None:
+            webcore.unregister_owner(self)
         if self._web_task:
             self._web_task.cancel()
         if getattr(self, "_backup_task", None):
@@ -200,7 +232,7 @@ class AdminPanel(commands.Cog):
     async def member_permissions(self, member: discord.Member) -> set:
         perms: set = set()
         if member.guild_permissions.administrator:
-            return _ADMIN | PRESETS["editor"]
+            return set(ALL_PERMS)
         role_map = await self.config.guild(member.guild).role_map()
         for role in member.roles:
             preset = role_map.get(str(role.id))
@@ -870,6 +902,22 @@ class AdminPanel(commands.Cog):
             expires_at=expires_at,
         )
 
+    async def set_lockdown(self, enabled: bool, by: str) -> int:
+        """Not-Aus schalten (gemeinsam für `[p]ap lockdown` und das Dashboard).
+
+        Aktivieren verwirft alle offenen Aufträge – sonst würden sie nach dem Aufheben doch
+        noch ausgeführt (genau die Aufträge, wegen derer man evtl. den Not-Aus zieht).
+        Rückgabe: Anzahl verworfener Aufträge (beim Aufheben 0).
+        """
+        if enabled:
+            await self.config.locked.set(True)
+            dropped = await asyncio.to_thread(db.cancel_pending_actions, f"Verworfen durch Lockdown ({by})")
+            await self._audit(f"🔒 **LOCKDOWN AKTIVIERT** von {by} · {dropped} offene Aufträge verworfen")
+            return dropped
+        await self.config.locked.set(False)
+        await self._audit(f"🔓 Lockdown aufgehoben von {by}")
+        return 0
+
     async def _audit(self, text: str):
         channel_id = await self.config.audit_channel()
         if not channel_id:
@@ -1506,18 +1554,11 @@ class AdminPanel(commands.Cog):
             return await ctx.send(f"Lockdown ist aktuell **{'AN 🔒' if current else 'aus'}**. "
                                   f"Umschalten mit `!ap lockdown on` / `off`.")
         if state.lower() in ("on", "an", "1", "true"):
-            await self.config.locked.set(True)
-            # Offene Aufträge verwerfen – sonst würden sie nach "lockdown off" doch noch
-            # ausgeführt (genau die Aufträge, wegen derer man evtl. den Not-Aus zieht).
-            dropped = await asyncio.to_thread(
-                db.cancel_pending_actions, f"Verworfen durch Lockdown ({ctx.author.display_name})"
-            )
-            await self._audit(f"🔒 **LOCKDOWN AKTIVIERT** von {ctx.author.display_name} · {dropped} offene Aufträge verworfen")
+            dropped = await self.set_lockdown(True, ctx.author.display_name)
             await ctx.send(f"🔒 **Lockdown aktiv.** Alle Panel-Aktionen sind gesperrt, **{dropped}** offene Aufträge wurden verworfen. "
                            "Nur Diagnose läuft noch. Aufheben mit `!ap lockdown off`.")
         elif state.lower() in ("off", "aus", "0", "false"):
-            await self.config.locked.set(False)
-            await self._audit(f"🔓 Lockdown aufgehoben von {ctx.author.display_name}")
+            await self.set_lockdown(False, ctx.author.display_name)
             await ctx.send("🔓 Lockdown aufgehoben – Panel wieder normal nutzbar.")
         else:
             await ctx.send("Nutzung: `!ap lockdown on` / `off`")

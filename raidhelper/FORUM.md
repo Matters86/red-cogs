@@ -42,6 +42,7 @@ Voraussetzung: der Cog `webcore` ist installiert und eingerichtet.
 | `[p]raidset managerrole <rolle>` | Manager-Rolle hinzufügen/entfernen. | Admin / Manage Server |
 | `[p]raidset timezone <zone>` | Anzeige-Zeitzone setzen (z. B. `Europe/Berlin`). | Admin / Manage Server |
 | `[p]raidset reminders <true\|false>` | Erinnerungen an-/ausschalten. | Admin / Manage Server |
+| `[p]raidset cleanup <tage>` | Abgeschlossene Events nach N Tagen löschen (Standard 30, 0 = aus). | Admin / Manage Server |
 | `[p]raidset icons` | Zeigt, welche Klasse welches Icon hat. | Admin / Manage Server |
 | `[p]raidset specicon <klasse> <spec> <emoji>` | Icon einer Spezialisierung manuell setzen (botweit). | Bot-Owner |
 | `[p]raidset clearspecicon <klasse> <spec>` | Icon einer Spezialisierung entfernen (botweit). | Bot-Owner |

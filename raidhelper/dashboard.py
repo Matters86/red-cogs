@@ -198,6 +198,15 @@ def _render_settings(ui, guild, conf, tz_name, csrf) -> str:
                     desc="Zusätzlich eine Direktnachricht an alle im Roster und Verspäteten.")
         + "</div>", icon="bi-bell")
 
+    cleanup = ui.card("Aufräumen", ui.grid(
+        ui.field("Abgeschlossene Events löschen nach",
+                 ui.number("cleanup_days", conf.get("cleanup_days", 30), min=0, max=3650, unit="Tage"),
+                 help="Events, deren Termin länger als so viele Tage vorbei ist, verschwinden aus der Liste. "
+                      "Nur die gespeicherten Daten werden gelöscht – die Nachricht in Discord bleibt stehen, "
+                      "ihre Buttons melden dann „Event existiert nicht mehr“. Wiederholungsserien bleiben "
+                      "erhalten. <b>0</b> = nie löschen."),
+    ), icon="bi-trash3", desc="Hält die Event-Liste schlank. Läuft automatisch etwa stündlich.")
+
     overrides = conf.get("messages") or {}
     fields = []
     for key in OVERRIDABLE_KEYS:
@@ -212,7 +221,7 @@ def _render_settings(ui, guild, conf, tz_name, csrf) -> str:
     # Ein Formular über zwei Reiter (Einstellungen + Texte) – beide speichern alles.
     return ui.form(
         "/cogs/raidhelper",
-        ui.tab("einstellungen", "Einstellungen", "bi-sliders", general + reminders + save)
+        ui.tab("einstellungen", "Einstellungen", "bi-sliders", general + reminders + cleanup + save)
         + ui.tab("texte", "Texte", "bi-chat-left-text", texts + save),
         csrf=csrf, hidden={"form": "settings", "guild": guild.id}, savebar=True,
     )
@@ -398,7 +407,7 @@ async def _handle_post(cog, request):
                 guild = g
                 break
     if guild is None:
-        raise web.HTTPFound("/cogs/raidhelper?ok=Server+nicht+gefunden")
+        raise web.HTTPFound("/cogs/raidhelper?err=Server+nicht+gefunden")
 
     gconf = cog.config.guild(guild)
 
@@ -424,7 +433,18 @@ async def _handle_post(cog, request):
             if val:
                 overrides[key] = val
         await gconf.messages.set(overrides)
-        raise web.HTTPFound(f"/cogs/raidhelper?guild={guild.id}&ok=Gespeichert")
+        raw_days = (data.get("cleanup_days") or "").strip()
+        try:
+            days = int(raw_days) if raw_days else 30
+        except ValueError:
+            days = -1
+        if not 0 <= days <= 3650:
+            raise web.HTTPFound(f"/cogs/raidhelper?guild={guild.id}&err="
+                                + quote("Gespeichert – aber „Löschen nach“ muss zwischen 0 und 3650 Tagen liegen"))
+        await gconf.cleanup_days.set(days)
+        removed = await cog.cleanup_old_events(guild) if days else []
+        msg = "Gespeichert" + (f" – {len(removed)} alte Events gelöscht" if removed else "")
+        raise web.HTTPFound(f"/cogs/raidhelper?guild={guild.id}&ok=" + quote(msg))
 
     if form == "action":
         event_id = data.get("event_id")
@@ -432,7 +452,7 @@ async def _handle_post(cog, request):
         async with gconf.events() as events:
             event = events.get(event_id)
             if event is None:
-                raise web.HTTPFound(f"/cogs/raidhelper?guild={guild.id}&ok=Event+nicht+gefunden")
+                raise web.HTTPFound(f"/cogs/raidhelper?guild={guild.id}&err=Event+nicht+gefunden")
             if action in ("close", "reopen"):
                 event["closed"] = action == "close"
                 events[event_id] = event

@@ -34,6 +34,20 @@ _FONT_DIR = os.path.join(os.path.dirname(__file__), "assets", "fonts")
 
 # Logische Schriftgrößen (werden intern mit SCALE multipliziert).
 SCALE = 2
+# Speicher-/Größenbremse: Ab SUPERSAMPLE_MAX_PX (logische Pixel) wird ohne 2x-Supersampling
+# gerendert (Speicher /4). Über MAX_PX bzw. MAX_SIDE wird gar nicht gerendert – solche Bilder
+# sind in Discord unlesbar und brauchten mehrere GB RAM (Gefahr: OOM-Kill des ganzen Bots).
+SUPERSAMPLE_MAX_PX = 4_000_000
+MAX_PX = 24_000_000
+MAX_SIDE = 12_000
+
+
+class ChartTooLarge(Exception):
+    """Das Organigramm ergäbe ein zu großes Bild."""
+
+    def __init__(self, width: int, height: int):
+        super().__init__(f"Organigramm zu groß für ein Bild ({width}×{height} px)")
+        self.width, self.height = width, height
 
 # Wie viele Personen je Knoten maximal gezeigt werden (Rest -> "+N weitere").
 MAX_PEOPLE = 7
@@ -343,16 +357,26 @@ class _Renderer:
             need = max(need, self.MARGIN + self._measure(self.chart.footer, "mono", 11)[0] + self.MARGIN)
         total_w = max(total_w, need)
         self.W, self.H = total_w, total_h
+        if total_w * total_h > MAX_PX or max(total_w, total_h) > MAX_SIDE:
+            raise ChartTooLarge(total_w, total_h)
+        if total_w * total_h > SUPERSAMPLE_MAX_PX:
+            self.S = 1
 
         self.base = Image.new("RGB", (total_w * self.S, total_h * self.S), BG)
-        # Sanfter radialer Glow oben rechts (wie im Web)
-        glow = Image.new("RGBA", self.base.size, (0, 0, 0, 0))
+        # Sanfter radialer Glow oben rechts (wie im Web). Bei großen Bildern auf einer
+        # verkleinerten Ebene weichzeichnen und hochskalieren (gleiches Ergebnis, ein
+        # Bruchteil an Speicher/Zeit).
+        k = 1 if self.base.size[0] * self.base.size[1] <= 4 * SUPERSAMPLE_MAX_PX else 8
+        gsize = (max(1, self.base.size[0] // k), max(1, self.base.size[1] // k))
+        glow = Image.new("RGBA", gsize, (0, 0, 0, 0))
         gd = ImageDraw.Draw(glow)
-        gr = int(total_w * 0.9) * self.S
-        gx, gy = int(total_w * 1.02) * self.S, int(-total_h * 0.1) * self.S
+        gr = int(total_w * 0.9) * self.S // k
+        gx, gy = int(total_w * 1.02) * self.S // k, int(-total_h * 0.1) * self.S // k
         gd.ellipse([gx - gr, gy - gr, gx + gr, gy + gr],
                    fill=(accent[0], accent[1], accent[2], 26))
-        glow = glow.filter(ImageFilter.GaussianBlur(120 * self.S // 2))
+        glow = glow.filter(ImageFilter.GaussianBlur(max(1, 120 * self.S // 2 // k)))
+        if k != 1:
+            glow = glow.resize(self.base.size, Image.BILINEAR)
         self.base = Image.alpha_composite(self.base.convert("RGBA"), glow).convert("RGB")
         self.d = ImageDraw.Draw(self.base)
 
@@ -368,7 +392,7 @@ class _Renderer:
         return self.MARGIN, self.MARGIN + title_h
 
     def _finish(self) -> bytes:
-        img = self.base.resize((self.W, self.H), Image.LANCZOS)
+        img = self.base if self.S == 1 else self.base.resize((self.W, self.H), Image.LANCZOS)
         buf = io.BytesIO()
         img.save(buf, format="PNG", optimize=True)
         return buf.getvalue()
@@ -723,6 +747,15 @@ class _Renderer:
 # --------------------------------------------------------------------------- #
 #  Öffentliche API
 # --------------------------------------------------------------------------- #
+def render_notice_png(title: str, text: str) -> bytes:
+    """Kleines Hinweisbild (z. B. als Dashboard-Vorschau, wenn das Organigramm zu groß ist)."""
+    r = _Renderer(RChart(title=title, pattern="liste", accent="#f5b94a", show_avatars=False, footer=""))
+    w = r._measure(text, "body", 14)[0]
+    ox, oy = r._canvas(max(w, 280), 30)
+    r._text((ox, oy), text, "body", 14, MUTED)
+    return r._finish()
+
+
 def render_chart_png(chart: RChart) -> bytes:
     """Rendert das Organigramm im in ``chart.pattern`` gewählten Muster zu PNG-Bytes."""
     return _Renderer(chart).render()

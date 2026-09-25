@@ -846,14 +846,14 @@ class AutoRoom(commands.Cog):
                 "/cogs/autoroom",
                 hint
                 + self._source_fields(
-                    ui, guild, {"name_template": DEFAULT_TEMPLATE}, bitrate=False,
+                    ui, guild, {"name_template": DEFAULT_TEMPLATE}, bitrate=True,
                     lead=ui.field("Quell-Channel", ui.select("channel_id", voice_items),
                                   help="Wer diesen Voicechannel betritt, bekommt einen eigenen Raum.", wide=True),
                 )
                 + ui.actions(ui.button("Quelle hinzufügen", icon="bi-plus-lg")),
                 csrf=csrf, hidden={"action": "add", "guild_id": guild.id},
             ), icon="bi-plus-square",
-            desc="Die Bitrate kannst du nach dem Anlegen in der Quelle einstellen.",
+            desc="Alle Werte lassen sich später in der Quelle ändern.",
         )
         return ui.callout(self._SOURCE_HELP, tone="info") + "".join(blocks) + add
 

@@ -49,6 +49,7 @@ Einstellungen (`guardset`) – erfordern „Server verwalten" oder Admin.
 | `[p]guardset honeypot set <kanal>` | Bestehenden Kanal als Honeypot markieren und aktivieren |
 | `[p]guardset honeypot disable` | Honeypot deaktivieren |
 | `[p]guardset honeypot action <ban\|softban\|kick\|timeout>` | Aktion bei Auslösung setzen |
+| `[p]guardset honeypot warning [text\|reset]` | Warntext ändern (`reset` = Standardtext) und die Warnnachricht im Honeypot-Kanal bearbeiten bzw. neu posten; ohne Text nur abgleichen |
 | `[p]guardset logchannel [kanal]` | Log-Kanal setzen (ohne Angabe: Log-Kanal entfernen) |
 | `[p]guardset whitelistrole <rolle>` | Rolle ausnehmen (Umschalter) |
 | `[p]guardset whitelistuser <nutzer>` | Nutzer ausnehmen (Umschalter) |
@@ -87,6 +88,7 @@ Im WebCore-Dashboard unter **Guard** (`/cogs/guard`):
 - **Statistik-Kacheln** – Auslösungen gesamt, letzte 24 h, Status von Honeypot/Spamschutz/Notmodus.
 - **Notmodus-Schalter** – Lockdown mit einem Klick aktivieren oder beenden.
 - **Einstellungen** – Module, Honeypot, alle Heuristiken samt Schwellen, das komplette Punkte-/Eskalationssystem, Raid-/Notmodus-Optionen, Log-Kanal, Sprache und die Whitelist.
+- **Honeypot-Warntext** (Reiter „Honeypot“ → „Eigene Texte“) – beim Speichern eines geänderten Textes (oder einer anderen Sprache ohne eigenen Text) bearbeitet der Bot seine Warnnachricht im Honeypot-Kanal. Die Nachrichten-ID wird ab `honeypot create` gemerkt; bei älteren Kanälen sucht der Bot seine letzte eigene Nachricht unter den letzten 20 und postet sonst neu. Ein Kanalthema, das noch dem alten Text entspricht, wird mit angepasst. Fehlen Rechte oder ist der Kanal weg, erscheint eine Fehlermeldung – die Einstellungen sind trotzdem gespeichert.
 - **Verlauf** – die letzten Aktionen mit Zeit, Auslöser, Nutzer, Regel, Aktion und Punkten.
 
 ## Hinweise

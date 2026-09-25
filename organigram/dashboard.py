@@ -25,7 +25,7 @@ from urllib.parse import quote_plus
 import discord
 from aiohttp import web
 
-from .render import PATTERNS
+from .render import PATTERNS, ChartTooLarge, render_notice_png
 
 log = logging.getLogger("red.red-cogs.organigram")
 
@@ -176,6 +176,11 @@ async def _render(cog, request):
             raise web.HTTPNotFound(text="Organigramm nicht gefunden")
         try:
             png = await cog._render_png(guild, chart)
+        except ChartTooLarge as exc:
+            if request.query.get("download"):
+                raise web.HTTPBadRequest(text=f"Organigramm zu groß für ein Bild ({exc.width}×{exc.height} px)")
+            png = render_notice_png("Zu groß für ein Bild",
+                                    f"{exc.width}×{exc.height} px – bitte Modus „Embed“/„Text“ oder weniger Positionen.")
         except Exception:
             log.exception("Vorschau-Rendering fehlgeschlagen")
             raise web.HTTPInternalServerError(text="Rendering fehlgeschlagen")

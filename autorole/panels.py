@@ -115,8 +115,11 @@ def message_kwargs(panel: dict) -> dict:
     return {"content": text or "\u200b", "embed": None}
 
 
-def build_view(panel: dict) -> discord.ui.View:
-    """Baut eine (nicht ablaufende) View mit Buttons oder einem Select."""
+def build_view(panel: dict, *, emojis: bool = True) -> discord.ui.View:
+    """Baut eine (nicht ablaufende) View mit Buttons oder einem Select.
+
+    ``emojis=False`` lässt alle Emojis weg (Fallback, wenn Discord ein Emoji ablehnt).
+    """
     view = discord.ui.View(timeout=None)
     roles = list(panel.get("roles", []))[:MAX_ROLES]
     pid = panel["id"]
@@ -129,7 +132,7 @@ def build_view(panel: dict) -> discord.ui.View:
                     label=(r.get("label") or "Rolle")[:100],
                     value=str(r["role_id"]),
                     description=((r.get("description") or "").strip()[:100] or None),
-                    emoji=_emoji(r.get("emoji")),
+                    emoji=_emoji(r.get("emoji")) if emojis else None,
                 )
             )
         if not options:
@@ -148,7 +151,7 @@ def build_view(panel: dict) -> discord.ui.View:
 
     # Buttons (max. 5 pro Reihe)
     for i, r in enumerate(roles):
-        emoji = _emoji(r.get("emoji"))
+        emoji = _emoji(r.get("emoji")) if emojis else None
         label = (r.get("label") or "").strip()[:80]
         if not label and emoji is None:
             label = "Rolle"
