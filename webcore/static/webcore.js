@@ -85,6 +85,14 @@
       document.dispatchEvent(new CustomEvent("wc:tab", { detail: name }));
     }
     window.wcActivateTab = activate;
+    // Sprung-Buttons (ui.goto): <button data-wc-goto="reiter">
+    document.addEventListener("click", function (e) {
+      var g = e.target.closest ? e.target.closest("[data-wc-goto]") : null;
+      if (!g) return;
+      e.preventDefault();
+      activate(g.getAttribute("data-wc-goto"), true);
+      var bar = document.querySelector(".wc-tabbar"); if (bar) window.scrollTo({ top: Math.max(0, bar.getBoundingClientRect().top + window.scrollY - 90), behavior: "smooth" });
+    });
     var q = new URLSearchParams(location.search).get("tab");
     var start = (location.hash || "").replace(/^#(tab-)?/, "") || q || store(key) || tabs[0].getAttribute("data-tab");
     activate(start, false);

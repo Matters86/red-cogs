@@ -143,8 +143,8 @@ async def _render(cog, request):
     return {"title": "Autorole", "content": guild_picker + head + body}
 
 
-def _setup_checks(cog, guild, conf) -> list[tuple[str, str]]:
-    """Einrichtungs-Prüfung: [(tone, text)]."""
+def _setup_checks(cog, guild, conf) -> list[tuple]:
+    """Einrichtungs-Prüfung: [(tone, text[, reiter])] – mit Reiter gibt es einen Sprung-Button."""
     out = []
     me = guild.me
     if me is None or not me.guild_permissions.manage_roles:
@@ -167,18 +167,21 @@ def _setup_checks(cog, guild, conf) -> list[tuple[str, str]]:
             "Diese eingetragenen Rollen kann ich aktuell <b>nicht</b> vergeben (in der Auswahl mit ⚠ markiert): "
             + ", ".join(bad)
             + ". Verschiebe meine Bot-Rolle in den Servereinstellungen weiter nach oben oder wähle andere Rollen.",
+            "rollen",
         ))
     if not conf["enabled"]:
-        out.append(("info", "Die automatische Rollenvergabe ist <b>aus</b> – aktiviere sie im Reiter „Einstellungen“."))
+        out.append(("info", "Die automatische Rollenvergabe ist <b>aus</b> – aktiviere sie im Reiter „Einstellungen“.",
+                    "einstellungen"))
     if not conf["join_roles"]:
-        out.append(("info", "Noch keine <b>Mitglieder-Rollen</b> – trage sie im Reiter „Beitrittsrollen“ ein."))
+        out.append(("info", "Noch keine <b>Mitglieder-Rollen</b> – trage sie im Reiter „Beitrittsrollen“ ein.",
+                    "rollen"))
     return out
 
 
 def _render_overview(ui, cog, guild, conf, csrf) -> str:
     checks = _setup_checks(cog, guild, conf)
     if checks:
-        check_html = "".join(ui.callout(text, tone=tone) for tone, text in checks)
+        check_html = "".join(_check_callout(ui, c) for c in checks)
     else:
         check_html = ui.callout("Alles eingerichtet – neue Mitglieder erhalten ihre Rollen automatisch.", tone="ok")
     screening = dict(_SCREENING).get(conf["screening"], conf["screening"])
@@ -190,20 +193,41 @@ def _render_overview(ui, cog, guild, conf, csrf) -> str:
     return setup + _render_apply(ui, guild, conf, csrf, cog.apply_status.get(guild.id), cog.apply_running(guild.id))
 
 
+_TAB_LABEL = {"rollen": "Zu den Beitrittsrollen", "einstellungen": "Zu den Einstellungen"}
+
+
+def _check_callout(ui, check) -> str:
+    tone, text = check[0], check[1]
+    tab = check[2] if len(check) > 2 else None
+    jump = f"<div class='wc-callout-act'>{ui.goto(_TAB_LABEL.get(tab, 'Öffnen'), tab)}</div>" if tab else ""
+    return ui.callout(text + jump, tone=tone)
+
+
 def _render_apply(ui, guild, conf, csrf, status=None, running=False) -> str:
-    configured = bool(conf["enabled"] and conf["join_roles"])
-    ready = configured and not running
-    note = "" if configured else ui.callout(
-        "Aktiviere das System und trage Mitglieder-Rollen ein, um diese Aktion zu nutzen.", tone="info")
     status_html = f"<div class='wc-help'>Letzter Lauf: {_esc(status)}</div>" if status else ""
-    btn = ui.button("Jetzt anwenden", icon="bi-people", attrs={"disabled": not ready})
-    return ui.card(
-        "Auf bestehende Mitglieder anwenden",
-        note + ui.form(
-            "/cogs/autorole", ui.actions(btn, status_html),
+    # Fehlt noch etwas, konkret sagen WAS – statt eines ausgegrauten Buttons (sieht sonst nach
+    # „keine Berechtigung“ aus).
+    missing = []
+    if not conf["join_roles"]:
+        missing.append(("Es sind noch keine <b>Mitglieder-Rollen</b> eingetragen – ohne sie gibt es nichts zu vergeben.",
+                        ui.goto("Mitglieder-Rollen eintragen", "rollen", kind="accent")))
+    if not conf["enabled"]:
+        missing.append(("Die automatische Rollenvergabe ist <b>aus</b>.",
+                        ui.goto("Zu den Einstellungen", "einstellungen", kind="accent")))
+    if missing:
+        body = "".join(ui.callout(f"{text}<div class='wc-callout-act'>{btn}</div>", tone="info")
+                       for text, btn in missing) + status_html
+    elif running:
+        body = ui.callout("Läuft gerade – die Rollen werden im Hintergrund vergeben.", tone="info") + status_html
+    else:
+        body = ui.form(
+            "/cogs/autorole", ui.actions(ui.button("Jetzt anwenden", icon="bi-people"), status_html),
             csrf=csrf, hidden={"form": "applyall", "guild": guild.id},
             confirm="Mitglieder-Rollen an alle bestehenden Mitglieder vergeben?",
-        ),
+        )
+    return ui.card(
+        "Auf bestehende Mitglieder anwenden",
+        body,
         icon="bi-arrow-repeat",
         desc="Vergibt die eingetragenen <b>Mitglieder-Rollen</b> nachträglich an alle Menschen auf dem Server, "
              "die sie noch nicht haben. Auf großen Servern kann das einen Moment dauern.",

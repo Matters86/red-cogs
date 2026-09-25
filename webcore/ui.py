@@ -251,6 +251,11 @@ def button(label: str, *, icon: str | None = None, kind: str = "accent", type: s
     return f"<button class='{cls}'{_attrs(all_attrs)}>{inner}</button>"
 
 
+def goto(label: str, tab: str, *, icon: str | None = "bi-arrow-right", kind: str = "ghost", small: bool = True) -> str:
+    """Button, der auf dieser Seite zum Reiter ``tab`` springt (kein Formular, kein Seitenwechsel)."""
+    return button(label, icon=icon, kind=kind, type="button", small=small, attrs={"data-wc-goto": tab})
+
+
 def actions(*buttons: str, align: str = "start") -> str:
     return f"<div class='wc-form-actions {esc(align)}'>{''.join(buttons)}</div>"
 
