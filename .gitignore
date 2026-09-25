@@ -17,6 +17,12 @@ env/
 *.secret
 config.yml
 
+# Laufzeitdaten (z. B. fivemadmin-DB, falls noch am alten Ort)
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+backups/
+
 # Logs & Temp
 *.log
 *.tmp

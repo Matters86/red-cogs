@@ -45,6 +45,9 @@ red-cogs/
 | autorole | 905172634810 |
 | commands | 318472905613 |
 | guard | 384207516930 |
+| changelog | 274069153822 |
+| onlyimagevideo | 472619305847 |
+| fivemadmin | 10539329 (`0xA0D141`, Altbestand ohne `force_registration` – nicht ändern, sonst Datenverlust) |
 | _neue hier ergänzen_ | |
 
 ## info.json pro Cog — Vorlage

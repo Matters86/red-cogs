@@ -70,9 +70,9 @@ Einstellungen (`raidset`) erfordern „Server verwalten" oder Admin.
 | `[p]raidset timezone <zone>` | Anzeige-Zeitzone setzen (z. B. `Europe/Berlin`) |
 | `[p]raidset reminders <true\|false>` | Erinnerungen an-/ausschalten |
 | `[p]raidset icons` | Zeigt, welche Klasse welches Icon hat |
-| `[p]raidset specicon <klasse> <spec> <emoji>` | Icon einer Spezialisierung manuell auf ein vorhandenes Emoji setzen |
-| `[p]raidset clearspecicon <klasse> <spec>` | Icon einer Spezialisierung entfernen |
-| `[p]raidset uploadicons` | Angehängte Bilddateien als Spec-Icons hochladen (Dateiname = klasse_spec) |
+| `[p]raidset specicon <klasse> <spec> <emoji>` | Icon einer Spezialisierung manuell auf ein vorhandenes Emoji setzen (nur Bot-Owner, gilt botweit) |
+| `[p]raidset clearspecicon <klasse> <spec>` | Icon einer Spezialisierung entfernen (nur Bot-Owner) |
+| `[p]raidset uploadicons` | Angehängte Bilddateien als Spec-Icons hochladen (Dateiname = klasse_spec, nur Bot-Owner) |
 | `[p]raidset settings` | Aktuelle Einstellungen anzeigen |
 | `[p]raidset dashboard` | Hinweis zur Dashboard-Seite |
 

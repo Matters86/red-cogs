@@ -1,5 +1,5 @@
-import asyncio
 import hashlib
+import inspect
 import logging
 import secrets
 import socket
@@ -34,6 +34,9 @@ log = logging.getLogger("red.red-cogs.webcore")
 DISCORD_API = "https://discord.com/api/v10"
 DISCORD_AUTHORIZE = "https://discord.com/oauth2/authorize"
 DISCORD_TOKEN = f"{DISCORD_API}/oauth2/token"
+# Login-Sitzung läuft nach 7 Tagen ab (serverseitig geprüft, Fernet-TTL). Vorher galt
+# das verschlüsselte Cookie unbegrenzt – ein einmal abgegriffenes Cookie für immer.
+SESSION_MAX_AGE = 7 * 86400
 
 try:
     import redbot
@@ -89,6 +92,9 @@ class WebCore(commands.Cog):
         self.recent: collections.deque = collections.deque(maxlen=12)
         self._loaded_at = datetime.now(timezone.utc)
         self._process = None
+        # Kurzlebiger Cache für fetch_member-Fallback (admin-Modus ohne Member-Cache):
+        # (guild_id, user_id) -> (ablauf_ts, member_or_none). Verhindert fetch-Stürme.
+        self._member_cache: dict[tuple[int, int], tuple[float, object]] = {}
 
     # ----------------------------------------------------------------- #
     #  Öffentliche API für andere Cogs
@@ -155,10 +161,17 @@ class WebCore(commands.Cog):
         fernet_key = hashlib.sha256(secret_key.encode()).digest()  # 32 Bytes
 
         app = web.Application()
-        session_setup(app, EncryptedCookieStorage(fernet_key, cookie_name="WEBCORE_SESSION"))
+        storage_kwargs = {"cookie_name": "WEBCORE_SESSION", "max_age": SESSION_MAX_AGE, "httponly": True}
+        # samesite erst ab neueren aiohttp_session-Versionen – nur setzen, wenn unterstützt.
+        if "samesite" in inspect.signature(EncryptedCookieStorage.__init__).parameters:
+            storage_kwargs["samesite"] = "Lax"
+        session_setup(app, EncryptedCookieStorage(fernet_key, **storage_kwargs))
         aiohttp_jinja2.setup(
             app,
             loader=jinja2.FileSystemLoader(str(Path(__file__).parent / "templates")),
+            # Autoescape an: {{ ... }} wird HTML-escaped (schützt vor XSS über Server-/
+            # Nutzernamen in der Übersicht). Cog-HTML kommt bewusst über {{ content | safe }}.
+            autoescape=jinja2.select_autoescape(["html", "xml"]),
             context_processors=[self._global_context],
         )
         app["webcore"] = self
@@ -205,6 +218,30 @@ class WebCore(commands.Cog):
             return None
         return {"id": int(uid), "name": session.get("user_name", "Unbekannt")}
 
+    async def _resolve_member(self, guild, uid):
+        """Mitglied auflösen: erst Cache, sonst ein bewusster REST-Fallback.
+
+        Im Zugriffsmodus ``admin`` hängt die Autorisierung an ``get_member``.
+        Ist das Members-Intent aus oder das Mitglied nicht gecacht, liefert
+        ``get_member`` ``None`` und würde legitime Admins aussperren. Der
+        ``fetch_member``-Fallback fängt das ab; das Ergebnis wird 5 Minuten
+        gecacht, damit wiederholte Requests keine API-Stürme auslösen.
+        """
+        member = guild.get_member(uid)
+        if member is not None:
+            return member
+        key = (guild.id, uid)
+        now = datetime.now(timezone.utc).timestamp()
+        cached = self._member_cache.get(key)
+        if cached is not None and cached[0] > now:
+            return cached[1]
+        try:
+            member = await guild.fetch_member(uid)
+        except (discord.HTTPException, discord.Forbidden):
+            member = None
+        self._member_cache[key] = (now + 300, member)
+        return member
+
     async def _is_authorized(self, user) -> bool:
         """Darf dieser User das Dashboard überhaupt betreten?"""
         if user is None:
@@ -216,10 +253,11 @@ class WebCore(commands.Cog):
         if uid in data["allowed_users"]:
             return True
         if data["access_mode"] == "admin":
-            return any(
-                (m := g.get_member(uid)) is not None and m.guild_permissions.administrator
-                for g in self.bot.guilds
-            )
+            for g in self.bot.guilds:
+                m = await self._resolve_member(g, uid)
+                if m is not None and m.guild_permissions.administrator:
+                    return True
+            return False
         return False
 
     async def _has_full_scope(self, user) -> bool:
@@ -230,15 +268,17 @@ class WebCore(commands.Cog):
             return True
         return user["id"] in await self.config.allowed_users()
 
-    def _admin_guilds(self, user) -> list:
+    async def _admin_guilds(self, user) -> list:
         """Server, in denen der User Administrator ist (für eingeschränkte Sicht)."""
         if user is None:
             return []
         uid = user["id"]
-        return [
-            g for g in self.bot.guilds
-            if (m := g.get_member(uid)) is not None and m.guild_permissions.administrator
-        ]
+        out = []
+        for g in self.bot.guilds:
+            m = await self._resolve_member(g, uid)
+            if m is not None and m.guild_permissions.administrator:
+                out.append(g)
+        return out
 
     async def visible_guilds(self, request) -> list:
         """Öffentlich für Cogs: die Server, die der eingeloggte User sehen darf.
@@ -251,7 +291,15 @@ class WebCore(commands.Cog):
             return []
         if await self._has_full_scope(user):
             return list(self.bot.guilds)
-        return self._admin_guilds(user)
+        return await self._admin_guilds(user)
+
+    async def has_full_scope(self, request) -> bool:
+        """Öffentlich für Cogs: ist der eingeloggte User Owner/Allowlist (volle Sicht)?
+
+        Für botweite Einstellungen (z. B. Application Emojis), die ein Admin eines
+        einzelnen Servers im Modus "admin" nicht ändern darf.
+        """
+        return await self._has_full_scope(await self._get_user(request))
 
     def _login_response(self, request):
         return aiohttp_jinja2.render_template(
@@ -330,7 +378,7 @@ class WebCore(commands.Cog):
     async def _collect_overview(self, user) -> dict:
         bot = self.bot
         full = await self._has_full_scope(user)
-        guilds = list(bot.guilds) if full else self._admin_guilds(user)
+        guilds = list(bot.guilds) if full else await self._admin_guilds(user)
         member_total = sum((g.member_count or 0) for g in guilds)
         channel_count = sum(len(g.channels) for g in guilds)
         emoji_count = sum(len(g.emojis) for g in guilds)
@@ -428,7 +476,10 @@ class WebCore(commands.Cog):
         session = await get_session(request)
         code = request.query.get("code")
         state = request.query.get("state")
-        if not code or state != session.get("oauth_state"):
+        # State einmalig verbrauchen und strikt vergleichen (verhindert Login-CSRF,
+        # wenn die Session noch gar keinen State gesetzt hat -> None == None).
+        stored_state = session.pop("oauth_state", None)
+        if not code or not stored_state or state != stored_state:
             return web.Response(text="Ungültiger OAuth2-Callback (State stimmt nicht).", status=400)
 
         token_payload = {
@@ -439,19 +490,29 @@ class WebCore(commands.Cog):
             "redirect_uri": data["redirect_uri"],
         }
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        async with aiohttp.ClientSession() as cs:
-            async with cs.post(DISCORD_TOKEN, data=token_payload, headers=headers) as resp:
-                if resp.status != 200:
+        timeout = aiohttp.ClientTimeout(total=15)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as cs:
+                async with cs.post(DISCORD_TOKEN, data=token_payload, headers=headers) as resp:
+                    if resp.status != 200:
+                        return web.Response(text="Token-Austausch fehlgeschlagen.", status=400)
+                    token = await resp.json()
+                access_token = token.get("access_token")
+                if not access_token:
                     return web.Response(text="Token-Austausch fehlgeschlagen.", status=400)
-                token = await resp.json()
-            async with cs.get(
-                f"{DISCORD_API}/users/@me",
-                headers={"Authorization": f"Bearer {token['access_token']}"},
-            ) as resp:
-                if resp.status != 200:
-                    return web.Response(text="Konnte Discord-Profil nicht laden.", status=400)
-                me = await resp.json()
+                async with cs.get(
+                    f"{DISCORD_API}/users/@me",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                ) as resp:
+                    if resp.status != 200:
+                        return web.Response(text="Konnte Discord-Profil nicht laden.", status=400)
+                    me = await resp.json()
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            # Discord nicht erreichbar / keine JSON-Antwort -> saubere Meldung statt HTTP 500.
+            return web.Response(text="Discord ist gerade nicht erreichbar – bitte erneut anmelden.", status=502)
 
+        if not me.get("id"):
+            return web.Response(text="Konnte Discord-Profil nicht laden.", status=400)
         session["user_id"] = str(me["id"])
         session["user_name"] = me.get("global_name") or me.get("username", "Unbekannt")
         raise web.HTTPFound("/")
@@ -559,6 +620,9 @@ class WebCore(commands.Cog):
     @webcore.command(name="port")
     async def webcore_port(self, ctx: commands.Context, port: int):
         """Webserver-Port setzen (Standard 42100)."""
+        if not 1 <= port <= 65535:
+            await ctx.send("Ungültiger Port (1–65535).")
+            return
         await self.config.port.set(port)
         await ctx.send(f"Port auf {port} gesetzt. Übernehmen mit `[p]reload webcore`.")
 

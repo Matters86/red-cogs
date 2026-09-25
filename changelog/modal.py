@@ -11,9 +11,13 @@ Cog auf, der validiert, das Embed baut und postet.
 
 from __future__ import annotations
 
+import logging
+
 import discord
 
 from .strings import t
+
+log = logging.getLogger("red.red-cogs.changelog")
 
 
 class ChangelogModal(discord.ui.Modal):
@@ -79,9 +83,14 @@ class ChangelogModal(discord.ui.Modal):
         )
 
     async def on_error(self, interaction: discord.Interaction, error: Exception):  # noqa: D401
-        # Fehler nicht verschlucken, aber der Person eine saubere Rückmeldung geben.
-        msg = "⚠️ " + str(error)
-        if interaction.response.is_done():
-            await interaction.followup.send(msg[:1900], ephemeral=True)
-        else:
-            await interaction.response.send_message(msg[:1900], ephemeral=True)
+        # Original für Betreiber loggen, der Person nur eine generische Meldung
+        # zeigen (interne Fehlertexte nicht an Nutzer leaken).
+        log.exception("Fehler beim Verarbeiten des Changelog-Modals.", exc_info=error)
+        msg = t(self._lang, "err_generic")
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+        except discord.HTTPException:
+            pass

@@ -69,6 +69,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "lang_unknown": "Unbekannte Sprache `{code}`. Verfügbar: {langs}.",
         # applyall
         "apply_running": "⏳ Wende die Mitglieder-Rollen auf bestehende Mitglieder an …",
+        "apply_busy": "⏳ Auf diesem Server läuft bereits eine Anwendung (Befehl oder Dashboard) – bitte warten.",
         "apply_done": "✅ Fertig: **{added}** Rollen-Vergaben an **{members}** Mitglieder.",
         "apply_none": "Es sind keine vergebbaren Mitglieder-Rollen eingetragen – nichts anzuwenden.",
         "apply_disabled": "Autorole ist deaktiviert. Aktiviere es zuerst mit `{p}autorole toggle`.",
@@ -155,6 +156,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "lang_set": "Language set to **{lang}**.",
         "lang_unknown": "Unknown language `{code}`. Available: {langs}.",
         "apply_running": "⏳ Applying member roles to existing members …",
+        "apply_busy": "⏳ An apply run is already in progress on this server (command or dashboard) – please wait.",
         "apply_done": "✅ Done: **{added}** role grants to **{members}** members.",
         "apply_none": "There are no assignable member roles configured – nothing to apply.",
         "apply_disabled": "Autorole is disabled. Enable it first with `{p}autorole toggle`.",

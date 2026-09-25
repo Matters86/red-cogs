@@ -1,7 +1,7 @@
 {
-    "author": ["Matters86"],
-    "name": "Red-Cogs",
-    "short": "Eigene Cogs samt integriertem Web-Dashboard.",
-    "description": "Sammlung eigener Cogs für Red-DiscordBot. Enthält ein zentrales Web-Dashboard (WebCore), in das sich jeder Cog mit eigenen Seiten einklinkt.",
-    "install_msg": "Danke fürs Installieren! Lade zuerst `webcore`, setze die OAuth2-Daten und starte das Dashboard. Details stehen im README."
+    "name": "red-cogs",
+    "short": "Eigene Cogs für den Community-Betrieb – jeweils mit Seite im gemeinsamen WebCore-Dashboard.",
+    "description": "Sammlung eigener Cogs für Red-DiscordBot (Community-Betrieb): u. a. WebCore-Dashboard, Autoroom, Autorole, Guard, Sticky, OnlyImageVideo und Changelog. Jeder Cog klinkt sich mit einer eigenen Seite ins gemeinsame WebCore-Dashboard ein und ist mehrsprachig sowie vollständig dokumentiert.",
+    "install_msg": "Danke für die Installation! Zuerst `webcore` installieren und einrichten (siehe README), danach die gewünschten Cogs mit `[p]cog install red-cogs <cog>` laden.",
+    "author": ["Matters86"]
 }

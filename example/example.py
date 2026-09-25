@@ -41,8 +41,14 @@ class Example(commands.Cog):
         )
 
     async def dashboard_page(self, request):
+        # WICHTIG (Vorlage für neue Cogs): immer nur die für den eingeloggten Nutzer
+        # sichtbaren Server nutzen – NIE ``self.bot.guilds``. Sonst sieht/steuert im
+        # WebCore-Modus "admin" ein Admin von Server A auch Server B.
+        # Für POST-Handler gilt dasselbe: die Ziel-Guild nur aus dieser Liste auflösen.
+        webcore = request.app.get("webcore")
+        guilds = await webcore.visible_guilds(request) if webcore is not None else []
         rows = []
-        for guild in sorted(self.bot.guilds, key=lambda g: g.name.lower()):
+        for guild in sorted(guilds, key=lambda g: g.name.lower()):
             note = await self.config.guild(guild).note()
             note_cell = html_lib.escape(note) if note else "<span style='color:var(--muted)'>—</span>"
             rows.append(

@@ -22,6 +22,7 @@ Verlauf fürs Dashboard gespeichert. Ohne externe pip-Abhängigkeiten.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -45,6 +46,9 @@ CUSTOM_EMOJI_RE = re.compile(r"<a?:\w+:\d+>")
 
 ACTIONS = ("ban", "softban", "kick", "timeout")
 HISTORY_MAX = 50
+# Laufzeit-Einträge (pro (guild,user)) verfallen nach dieser Zeit und werden
+# im Hintergrund-Task entfernt, damit die Speicher-Dicts nicht endlos wachsen.
+RUNTIME_TTL = 3600
 
 # Eskalationsstufen nach Schwere (für den Vergleich „schon gehandelt?\").
 STAGE_RANK = {"none": 0, "warn": 1, "timeout": 2, "kick": 3, "ban": 4}
@@ -118,6 +122,13 @@ class Guard(commands.Cog):
         self._points: dict[tuple, list] = defaultdict(list)   # (gid,uid) -> [(ts, pts), ...]
         self._acted: dict[tuple, int] = {}                    # (gid,uid) -> zuletzt ausgeführter Rang
         self._joins: dict[int, deque] = defaultdict(lambda: deque(maxlen=200))
+        # Notmodus-Start/-Ende pro Server serialisieren: Bei einem Raid feuern viele
+        # Beitritte gleichzeitig; zwei parallele Starts überschrieben sonst die
+        # gesicherten Slowmode-Werte mit {} -> nach dem Notmodus blieb Slowmode hängen.
+        self._ld_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+        # Honeypot: pro Nutzer nur einmal handeln, auch wenn er mehrere Nachrichten
+        # gleichzeitig abschickt (sonst mehrfach Bann/Softban + doppelte Logs).
+        self._hp_recent: dict[tuple, float] = {}
 
     # ----------------------------------------------------------------- #
     #  Lifecycle / Dashboard
@@ -166,11 +177,30 @@ class Guard(commands.Cog):
             except Exception:  # noqa: BLE001
                 continue
             if until and until > 0 and now >= until:
-                await self._end_lockdown(guild)
+                try:
+                    await self._end_lockdown(guild)
+                except Exception:  # noqa: BLE001 – tasks.loop würde sonst dauerhaft stoppen
+                    log.exception("Notmodus-Ende auf %s fehlgeschlagen", guild.id)
+        # Abgelaufene Laufzeit-Einträge aufräumen (unbegrenztes Wachstum vermeiden).
+        self._gc_runtime(now)
 
     @_lockdown_tick.before_loop
     async def _before_tick(self):
         await self.bot.wait_until_red_ready()
+
+    def _gc_runtime(self, now: float | None = None) -> None:
+        """Entfernt abgelaufene Einträge aus ``_msgtimes``/``_lastmsgs``/``_points``
+        (und dem zugehörigen ``_acted``), damit diese Dicts nicht unbegrenzt wachsen."""
+        cutoff = (now if now is not None else time.time()) - RUNTIME_TTL
+        for key in [k for k, dq in self._msgtimes.items() if not dq or dq[-1] < cutoff]:
+            self._msgtimes.pop(key, None)
+        for key in [k for k, dq in self._lastmsgs.items() if not dq or dq[-1][2] < cutoff]:
+            self._lastmsgs.pop(key, None)
+        for key in [k for k, led in self._points.items() if not led or led[-1][0] < cutoff]:
+            self._points.pop(key, None)
+            self._acted.pop(key, None)
+        for key in [k for k, ts in self._hp_recent.items() if ts < cutoff]:
+            self._hp_recent.pop(key, None)
 
     # ----------------------------------------------------------------- #
     #  Helfer
@@ -228,6 +258,21 @@ class Guard(commands.Cog):
             if channel.id in {int(c) for c in conf.get("whitelist_channels", [])}:
                 return True
         return False
+
+    @staticmethod
+    def _thresholds(conf: dict) -> tuple[int, int, int, int]:
+        """Eskalationsschwellen monoton lesen: ``warn ≤ timeout ≤ kick ≤ ban``.
+
+        Falsch sortierte Schwellen (z. B. ``ban_at`` kleiner als ``warn_at``)
+        würden sonst sofort hart bestrafen. Die vier konfigurierten Werte werden
+        aufsteigend den Stufen zugeordnet; bei korrekter Reihenfolge bleibt alles
+        unverändert.
+        """
+        vals = sorted(
+            int(conf.get(key, default))
+            for key, default in (("warn_at", 3), ("timeout_at", 6), ("kick_at", 9), ("ban_at", 12))
+        )
+        return vals[0], vals[1], vals[2], vals[3]
 
     # ---- Discord-Aktionen (alle abgesichert) ------------------------- #
     async def _do_ban(self, guild, user, reason, delete_seconds) -> bool:
@@ -320,7 +365,11 @@ class Guard(commands.Cog):
             hist.insert(0, record)
             del hist[HISTORY_MAX:]
         if kind != "lockdown_end":
-            await self.config.guild(guild).stats_total.set(int(conf.get("stats_total", 0)) + 1)
+            # Read-Modify-Write unter dem Value-Lock, frisch gelesen (kein Race
+            # zwischen gleichzeitigen Aktionen über den stale ``conf``-Snapshot).
+            stats = self.config.guild(guild).stats_total
+            async with stats.get_lock():
+                await stats.set(int(await stats()) + 1)
 
         # Log-Kanal.
         chan_id = conf.get("log_channel")
@@ -374,6 +423,10 @@ class Guard(commands.Cog):
         return bool(await self.config.guild(guild).lockdown_until())
 
     async def _start_lockdown(self, guild, *, reason_kind="raid", joins=None) -> bool:
+        async with self._ld_locks[guild.id]:
+            return await self._start_lockdown_locked(guild, reason_kind=reason_kind, joins=joins)
+
+    async def _start_lockdown_locked(self, guild, *, reason_kind, joins) -> bool:
         gconf = self.config.guild(guild)
         if await self._lockdown_active(guild):
             return False
@@ -412,6 +465,10 @@ class Guard(commands.Cog):
         return True
 
     async def _end_lockdown(self, guild) -> bool:
+        async with self._ld_locks[guild.id]:
+            return await self._end_lockdown_locked(guild)
+
+    async def _end_lockdown_locked(self, guild) -> bool:
         gconf = self.config.guild(guild)
         if not await self._lockdown_active(guild):
             return False
@@ -444,6 +501,8 @@ class Guard(commands.Cog):
         if member.guild is None:
             return
         guild = member.guild
+        if await self.bot.cog_disabled_in_guild(self, guild):
+            return  # [p]command disablecog Guard respektieren
         conf = await self.config.guild(guild).all()
 
         # Während aktivem Notmodus neue Beitritte ggf. behandeln.
@@ -480,14 +539,21 @@ class Guard(commands.Cog):
             return
 
         guild = message.guild
+        if await self.bot.cog_disabled_in_guild(self, guild):
+            return  # [p]command disablecog Guard respektieren
         conf = await self.config.guild(guild).all()
         member = message.author if isinstance(message.author, discord.Member) else guild.get_member(message.author.id)
 
         # --- Honeypot zuerst ---
         if conf.get("hp_enabled") and conf.get("hp_channel") and message.channel.id == int(conf["hp_channel"]):
             if member is not None and not await self._is_exempt(member, honeypot=True):
-                reason = await self._text(guild, "reason_honeypot")
                 await self._delete_message(message)
+                key = (guild.id, member.id)
+                now = time.time()
+                if now - self._hp_recent.get(key, 0) < 60:
+                    return  # schon behandelt (mehrere Nachrichten auf einmal)
+                self._hp_recent[key] = now
+                reason = await self._text(guild, "reason_honeypot")
                 done = await self._execute(
                     guild, member, conf.get("hp_action", "softban"), reason,
                     delete_seconds=conf.get("hp_delete_seconds", 86400),
@@ -521,12 +587,14 @@ class Guard(commands.Cog):
         if conf.get("delete_violations", True):
             await self._delete_message(message)
 
-        # Eskalationsstufe bestimmen (höchste erreichte zuerst).
+        # Eskalationsstufe bestimmen (höchste erreichte zuerst). Schwellen werden
+        # monoton gelesen, damit falsch sortierte Werte nicht sofort hart bestrafen.
+        warn_at, timeout_at, kick_at, ban_at = self._thresholds(conf)
         stage = "none"
-        for threshold, name in ((conf.get("ban_at", 12), "ban"),
-                                (conf.get("kick_at", 9), "kick"),
-                                (conf.get("timeout_at", 6), "timeout"),
-                                (conf.get("warn_at", 3), "warn")):
+        for threshold, name in ((ban_at, "ban"),
+                                (kick_at, "kick"),
+                                (timeout_at, "timeout"),
+                                (warn_at, "warn")):
             if total >= threshold:
                 stage = name
                 break

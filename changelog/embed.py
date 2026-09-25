@@ -24,7 +24,7 @@ def apply_text(messages: dict | None, lang: str | None, key: str, **kwargs) -> s
         if override:
             try:
                 return override.format(**kwargs)
-            except (KeyError, IndexError, ValueError):
+            except Exception:  # noqa: BLE001 – kaputte Override-Vorlage nie durchreichen
                 return override
     return t(lang, key, **kwargs)
 

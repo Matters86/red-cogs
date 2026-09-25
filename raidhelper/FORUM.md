@@ -43,9 +43,9 @@ Voraussetzung: der Cog `webcore` ist installiert und eingerichtet.
 | `[p]raidset timezone <zone>` | Anzeige-Zeitzone setzen (z. B. `Europe/Berlin`). | Admin / Manage Server |
 | `[p]raidset reminders <true\|false>` | Erinnerungen an-/ausschalten. | Admin / Manage Server |
 | `[p]raidset icons` | Zeigt, welche Klasse welches Icon hat. | Admin / Manage Server |
-| `[p]raidset specicon <klasse> <spec> <emoji>` | Icon einer Spezialisierung manuell setzen. | Admin / Manage Server |
-| `[p]raidset clearspecicon <klasse> <spec>` | Icon einer Spezialisierung entfernen. | Admin / Manage Server |
-| `[p]raidset uploadicons` | Angehängte Bilder als Spec-Icons hochladen (Dateiname = klasse_spec). | Admin / Manage Server |
+| `[p]raidset specicon <klasse> <spec> <emoji>` | Icon einer Spezialisierung manuell setzen (botweit). | Bot-Owner |
+| `[p]raidset clearspecicon <klasse> <spec>` | Icon einer Spezialisierung entfernen (botweit). | Bot-Owner |
+| `[p]raidset uploadicons` | Angehängte Bilder als Spec-Icons hochladen (Dateiname = klasse_spec, botweit). | Bot-Owner |
 | `[p]raidset settings` | Aktuelle Einstellungen anzeigen. | Admin / Manage Server |
 | `[p]raidset dashboard` | Hinweis zur Dashboard-Seite. | Admin / Manage Server |
 

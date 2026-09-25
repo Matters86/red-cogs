@@ -63,9 +63,15 @@ Ist `webcore` geladen, erscheint der Tab **Tickets**. Dort lassen sich pro Serve
 
 - **Einstellungen** – Sprache, Ticket-Typ, alle Rollen, Kategorien/Thread-Basis/Forum,
   Log-Kanal, Limit, Kanalname-Vorlage, Bestätigungen sowie eigene Texte (überschreiben die
-  Sprachpakete).
-- **Panels** – bestehende Panels auflisten/löschen und neue erstellen (inkl. Gründe und
-  Modal-Fragen); das Panel wird direkt in den gewählten Kanal gepostet.
+  Sprachpakete; Platzhalter `{num}` und `{user}` in Titel und Begrüßungstext).
+- **Panels** – bestehende Panels auflisten, bearbeiten, löschen und neue erstellen (inkl. Gründe
+  und Modal-Fragen); das Panel wird direkt in den gewählten Kanal gepostet, Änderungen
+  aktualisieren die bestehende Nachricht.
+- **Team-Zuordnung je Grund** (im Panel-Editor) – jeder Grund kann eigene Team-Rollen,
+  Ping-Rollen und eine eigene Kategorie bekommen. Tickets dieses Typs sehen dann nur dieses Team
+  plus die Admin-Rollen; das Team darf sie auch übernehmen, sperren und schließen. Leer = globale
+  Einstellungen. Tickets mit Grund heißen automatisch `<grund>-<nummer>` (Umlaute werden zu
+  ae/oe/ue/ss).
 - **Transcripts** – gespeicherte Ticket-Verläufe als eigene Seite öffnen.
 - **Statistik** – offene/geschlossene Tickets, Ø Laufzeit und Übernahmen je Support-Mitglied.
 

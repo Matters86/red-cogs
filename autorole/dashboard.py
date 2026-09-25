@@ -88,13 +88,21 @@ async def dashboard_handler(cog, request):
     return await _render(cog, request)
 
 
-def _selected_guild(cog, request):
+async def _visible_guilds(cog, request):
+    webcore = request.app.get("webcore")
+    if webcore is not None:
+        guilds = await webcore.visible_guilds(request)
+    else:  # Fallback (sollte im Normalbetrieb nicht eintreten)
+        guilds = list(cog.bot.guilds)
+    return sorted(guilds, key=lambda g: g.name.lower())
+
+
+def _selected_guild(guilds, request):
     gid = request.query.get("guild")
     if gid and gid.isdigit():
-        g = cog.bot.get_guild(int(gid))
-        if g is not None:
-            return g
-    guilds = sorted(cog.bot.guilds, key=lambda g: g.name.lower())
+        for g in guilds:
+            if g.id == int(gid):
+                return g
     return guilds[0] if guilds else None
 
 
@@ -102,7 +110,8 @@ def _selected_guild(cog, request):
 #  Rendern (GET)
 # --------------------------------------------------------------------------- #
 async def _render(cog, request):
-    guild = _selected_guild(cog, request)
+    guilds = await _visible_guilds(cog, request)
+    guild = _selected_guild(guilds, request)
     if guild is None:
         return {"title": "Autorole", "content": "<div class='card-x'>Der Bot ist auf keinem Server.</div>"}
 
@@ -121,7 +130,7 @@ async def _render(cog, request):
         return {"title": f"Autorole · {panels[pid].get('name', 'Panel')}", "content": content}
 
     guild_opts = _options(
-        [(g.id, g.name) for g in sorted(cog.bot.guilds, key=lambda g: g.name.lower())],
+        [(g.id, g.name) for g in guilds],
         [guild.id],
     )
     guild_picker = f"""
@@ -141,7 +150,7 @@ async def _render(cog, request):
         + _render_warnings(cog, guild, conf)
         + _render_settings(cog, guild, conf, csrf)
         + "<div class='ar-spacer'></div>"
-        + _render_apply(guild, conf, csrf)
+        + _render_apply(guild, conf, csrf, cog.apply_status.get(guild.id), cog.apply_running(guild.id))
         + "<div class='ar-spacer'></div>"
         + _render_panels(cog, guild, conf, csrf)
     )
@@ -272,12 +281,16 @@ def _render_settings(cog, guild, conf, csrf) -> str:
     """
 
 
-def _render_apply(guild, conf, csrf) -> str:
-    ready = bool(conf["enabled"] and conf["join_roles"])
+def _render_apply(guild, conf, csrf, status=None, running=False) -> str:
+    configured = bool(conf["enabled"] and conf["join_roles"])
+    ready = configured and not running
     disabled = "" if ready else "disabled"
+    status_html = (
+        f"<div class='hint' style='margin-top:8px'>Letzter Lauf: {_esc(status)}</div>" if status else ""
+    )
     note = (
         ""
-        if ready
+        if configured
         else "<div class='hint'>Aktiviere das System und trage Mitglieder-Rollen ein, um diese Aktion zu nutzen.</div>"
     )
     return f"""
@@ -290,6 +303,7 @@ def _render_apply(guild, conf, csrf) -> str:
         <input type='hidden' name='guild' value='{guild.id}'>
         <button class='btn-accent' type='submit' {disabled}>Jetzt anwenden</button>
         {note}
+        {status_html}
       </form>
     </div>
     """
@@ -584,7 +598,13 @@ async def _handle_post(cog, request):
     data = await request.post()
     form = data.get("form")
     gid = data.get("guild")
-    guild = cog.bot.get_guild(int(gid)) if gid and gid.isdigit() else None
+    guilds = await _visible_guilds(cog, request)
+    guild = None
+    if gid and gid.isdigit():
+        for g in guilds:
+            if g.id == int(gid):
+                guild = g
+                break
     if guild is None:
         raise web.HTTPFound("/cogs/autorole?ok=Server+nicht+gefunden")
 
@@ -612,14 +632,13 @@ async def _handle_post(cog, request):
         raise web.HTTPFound(f"/cogs/autorole?guild={guild.id}&ok=Einstellungen+gespeichert")
 
     if form == "applyall":
-        result = await cog.apply_to_existing(guild)
-        if result is None:
-            raise web.HTTPFound(
-                f"/cogs/autorole?guild={guild.id}&ok=Nichts+anzuwenden+%28System+aus%2C+keine+Rollen+oder+keine+Rechte%29"
-            )
-        added, members = result
+        # Im Hintergrund: auf großen Servern dauert das Minuten (Rate-Limits) – der
+        # Request würde sonst hängen/timeouten und ein zweiter Klick liefe parallel.
+        if cog.start_apply_job(guild) is None:
+            raise web.HTTPFound(f"/cogs/autorole?guild={guild.id}&ok=" + quote_plus("Läuft bereits – bitte warten"))
         raise web.HTTPFound(
-            f"/cogs/autorole?guild={guild.id}&ok={added}+Rollen-Vergaben+an+{members}+Mitglieder"
+            f"/cogs/autorole?guild={guild.id}&ok="
+            + quote_plus("Anwendung gestartet – Ergebnis erscheint unten, Seite ggf. neu laden")
         )
 
     # ---- Rollen-Panels ----

@@ -22,14 +22,16 @@ Danach `webcore` einrichten (siehe [`webcore/README.md`](webcore/README.md)).
 | [`example`](example/) | Vorlage: Hybrid-Befehl + automatische Dashboard-Seite. |
 | [`autoroom`](autoroom/) | Autovoiceroom: automatische temporäre Voicechannels, voll per Dashboard konfigurierbar. |
 | [`autorole`](autorole/) | Automatische Rollenvergabe bei Beitritt + Self-Service-Rollen-Panels (Buttons/Dropdown). |
+| [`changelog`](changelog/) | Server-Updates (Changelogs) per Modal als einheitliches Embed posten – mit Kategorien, optionalem Rollen-Ping und Dashboard-Historie. |
 | [`commands`](commands/) | Listet alle geladenen Cogs und Befehle im Dashboard – mit Stufen und Mitglieds-Prüfung. |
+| [`fivemadmin`](fivemadmin/) | FiveM-Adminpanel (QBox): Support-, Moderations- und Admin-Aktionen per Discord-Befehl und eigenem Webpanel (Login per Discord), gemeinsame Action-Queue, Audit-Log und Not-Aus. |
 | [`guard`](guard/) | Spamschutz, Honeypot und Raid-Notmodus – mehrsprachig und per Dashboard steuerbar. |
 | [`onlyimagevideo`](onlyimagevideo/) | Macht Kanäle zu Nur-Medien-Kanälen: löscht Nachrichten ohne Bild/Video/GIF (auch Tenor-/Giphy-Links, Sticker), Threads erben die Regel, mit Dashboard. |
 | [`organigram`](organigram/) | Postet Server-Organigramme als Bild (5 Muster), Embed oder Text – mit Live-Vorschau im Dashboard. |
 | [`poll`](poll/) | Mehrsprachige Umfragen: Abstimmung per Button, Live-Ergebnis, Einzel-/Mehrfachauswahl, anonym/öffentlich, Auto-Ende, CSV-Export und Dashboard. |
 | [`raidhelper`](raidhelper/) | Mehrsprachiger Raid-Planer: Anmeldung per Button, Roster, Erinnerungen, Wiederholung, CSV-Export und Dashboard. |
 | [`sticky`](sticky/) | Hält eine Nachricht am unteren Ende eines Kanals fest – mit Webhook-Modus, Platzhaltern und Dashboard. |
-| [`tickets`](tickets/) | Mehrsprachiges Ticketsystem mit Panels, Transcripts und Dashboard. |
+| [`tickets`](tickets/) | Mehrsprachiges Ticketsystem mit Panels, Team-Zuordnung je Grund, Transcripts und Dashboard. |
 
 ## Wie das Dashboard funktioniert
 
@@ -54,4 +56,6 @@ Schnellstart für einen neuen Cog: den Ordner `example/` kopieren, umbenennen, I
 ## Lizenz / Hosting-Hinweis
 
 Der Dashboard-Webserver sollte hinter einem HTTPS-Reverse-Proxy laufen und nicht ungeschützt
-ins Internet zeigen. Zugriff haben nur Bot-Owner.
+ins Internet zeigen. Der Zugriff ist über `[p]webcore access` konfigurierbar: `owner` (nur
+Bot-Owner/Co-Owner), `admin` (zusätzlich Server-Admins für ihre eigenen Server) oder `allowlist`
+(Owner plus die per `[p]webcore allow` freigegebenen User).

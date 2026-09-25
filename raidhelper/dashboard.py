@@ -107,13 +107,22 @@ async def dashboard_handler(cog, request):
     return await _render(cog, request)
 
 
-def _selected_guild(cog, request):
+async def _visible_guilds(cog, request):
+    """Nur die für den eingeloggten User sichtbaren Server (WebCore-Rechtemodell)."""
+    webcore = request.app.get("webcore")
+    if webcore is not None:
+        guilds = await webcore.visible_guilds(request)
+    else:  # Fallback (sollte im Normalbetrieb nicht eintreten)
+        guilds = list(cog.bot.guilds)
+    return sorted(guilds, key=lambda g: g.name.lower())
+
+
+def _selected_guild(guilds, request):
     gid = request.query.get("guild")
     if gid and gid.isdigit():
-        g = cog.bot.get_guild(int(gid))
-        if g is not None:
-            return g
-    guilds = sorted(cog.bot.guilds, key=lambda g: g.name.lower())
+        for g in guilds:
+            if g.id == int(gid):
+                return g
     return guilds[0] if guilds else None
 
 
@@ -121,7 +130,8 @@ def _selected_guild(cog, request):
 #  Rendern (GET)
 # --------------------------------------------------------------------------- #
 async def _render(cog, request):
-    guild = _selected_guild(cog, request)
+    guilds = await _visible_guilds(cog, request)
+    guild = _selected_guild(guilds, request)
     if guild is None:
         return {"title": "Raidplaner", "content": "<div class='card-x'>Der Bot ist auf keinem Server.</div>"}
 
@@ -135,7 +145,7 @@ async def _render(cog, request):
         flash = f"<div class='rh-flash'>{_esc(request.query.get('ok'))}</div>"
 
     # Server-Auswahl
-    guild_opts = _options([(g.id, g.name) for g in sorted(cog.bot.guilds, key=lambda g: g.name.lower())], [guild.id])
+    guild_opts = _options([(g.id, g.name) for g in guilds], [guild.id])
     bar = f"""
     <div class='rh-bar'>
       <form method='get' action='/cogs/raidhelper' class='rh-form' style='margin:0'>
@@ -214,7 +224,16 @@ async def _render(cog, request):
     spec_emojis = await cog._spec_emojis()
     supported = cog._supports_app_emojis()
     structure = cog._known_spec_structure()
-    icons_card = _render_icons(csrf, guild.id, spec_emojis, supported, structure)
+    # Spec-Icons sind Application Emojis und gelten botweit -> nur Owner/Allowlist.
+    webcore = request.app.get("webcore")
+    full = await webcore.has_full_scope(request) if webcore is not None else True
+    if full:
+        icons_card = _render_icons(csrf, guild.id, spec_emojis, supported, structure)
+    else:
+        icons_card = (
+            "<div class='card-x'><div style='color:var(--muted)'>Spec-Icons gelten botweit und können nur "
+            "vom Bot-Owner verwaltet werden.</div></div>"
+        )
 
     return {"title": "Raidplaner",
             "content": _FORM_STYLE + bar + flash + stats + settings + table + "<div class='rh-spacer'></div>" + icons_card}
@@ -381,7 +400,13 @@ async def _handle_post(cog, request):
     data = await request.post()
     form = data.get("form")
     gid = data.get("guild")
-    guild = cog.bot.get_guild(int(gid)) if gid and gid.isdigit() else None
+    guilds = await _visible_guilds(cog, request)
+    guild = None
+    if gid and gid.isdigit():
+        for g in guilds:
+            if g.id == int(gid):
+                guild = g
+                break
     if guild is None:
         raise web.HTTPFound("/cogs/raidhelper?ok=Server+nicht+gefunden")
 
@@ -441,6 +466,11 @@ async def _handle_post(cog, request):
             raise web.HTTPFound(f"/cogs/raidhelper?guild={guild.id}&ok=Gel%C3%B6scht")
 
     if form == "icons":
+        webcore = request.app.get("webcore")
+        if webcore is not None and not await webcore.has_full_scope(request):
+            raise web.HTTPFound(
+                f"/cogs/raidhelper?guild={guild.id}&ok=" + quote("Spec-Icons darf nur der Bot-Owner ändern")
+            )
         pairs = cog._known_pair_set()  # {(class_id, spec_id), …}
         removed = 0
         for cid, sid in list(pairs):

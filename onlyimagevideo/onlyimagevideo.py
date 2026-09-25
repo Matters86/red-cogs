@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Union
 
 import discord
@@ -22,6 +23,8 @@ _CHECKED_TYPES = (discord.MessageType.default, discord.MessageType.reply)
 
 NOTIFY_MIN = 2
 NOTIFY_MAX = 60
+# Mindestabstand (Sek.) zwischen zwei Hinweisen an denselben Nutzer im selben Kanal.
+NOTICE_COOLDOWN = 15
 
 
 class OnlyImageVideo(commands.Cog):
@@ -47,6 +50,9 @@ class OnlyImageVideo(commands.Cog):
             messages={},             # Text-Overrides (OVERRIDABLE_KEYS)
             deleted_total=0,         # Zähler für das Dashboard
         )
+        # Hinweis höchstens alle NOTICE_COOLDOWN Sekunden pro Nutzer & Kanal – wer 10
+        # Textnachrichten hintereinander schickt, bekam sonst 10 Hinweise (Kanal-Spam).
+        self._last_notice: dict[tuple[int, int], float] = {}
 
     # ----------------------------------------------------------------- #
     #  Dashboard-Anbindung
@@ -144,6 +150,11 @@ class OnlyImageVideo(commands.Cog):
     async def _check(self, message: discord.Message):
         if message.guild is None:
             return
+        if await self.bot.cog_disabled_in_guild(self, message.guild):
+            return
+        # Owner/Admins/Mods gemäß Reds [p]autoimmune-Liste nie löschen.
+        if await self.bot.is_automod_immune(message):
+            return
         if message.author.id == self.bot.user.id:
             return
         if message.type not in _CHECKED_TYPES:
@@ -178,14 +189,27 @@ class OnlyImageVideo(commands.Cog):
             log.exception("Nachricht konnte nicht gelöscht werden.")
             return
 
-        await self.config.guild(message.guild).deleted_total.set(int(conf.get("deleted_total", 0)) + 1)
+        # Zähler frisch unter dem Lock erhöhen (der conf-Snapshot oben ist bei
+        # gleichzeitigen Löschungen veraltet -> verlorene Zählungen).
+        counter = self.config.guild(message.guild).deleted_total
+        async with counter.get_lock():
+            await counter.set(int(await counter()) + 1)
 
-        if conf.get("notify", True):
+        now = time.monotonic()
+        key = (message.channel.id, message.author.id)
+        recently = now - self._last_notice.get(key, 0.0) < NOTICE_COOLDOWN
+        if not recently:
+            self._last_notice[key] = now
+            if len(self._last_notice) > 2000:  # Speicher begrenzen: alte Einträge verwerfen
+                cutoff = now - NOTICE_COOLDOWN
+                self._last_notice = {k: v for k, v in self._last_notice.items() if v >= cutoff}
+
+        if conf.get("notify", True) and not recently:
             lang = conf.get("language", DEFAULT_LANGUAGE)
             overrides = conf.get("messages") or {}
             text = overrides.get("notice") or t(lang, "notice", user=message.author.mention)
             if "{user}" in text:
-                text = text.format(user=message.author.mention)
+                text = text.replace("{user}", message.author.mention)
             delay = int(conf.get("notify_delete_after", 6))
             try:
                 await message.channel.send(

@@ -11,9 +11,10 @@ import discord
 from discord.ext import tasks
 from redbot.core import Config, commands
 from redbot.core.bot import Red
+from redbot.core.utils.chat_formatting import pagify
 
 from .dashboard import dashboard_handler
-from .embed import build_poll_embed, is_ended_or_closed, result_text, vote_counts
+from .embed import build_poll_embed, result_text, vote_counts
 from .strings import DEFAULT_LANGUAGE, LANGUAGES, t
 from .views import CID_VOTE, MAX_OPTION_BUTTONS, build_poll_view
 
@@ -75,6 +76,31 @@ class Poll(commands.Cog):
             polls={},                   # poll_id -> Umfrage-Datensatz
             counter=0,
         )
+
+    # ----------------------------------------------------------------- #
+    #  Red-Datenschutz-API (End User Data)
+    # ----------------------------------------------------------------- #
+    async def red_delete_data_for_user(self, *, requester, user_id: int):
+        """Entfernt die Stimmen dieses Nutzers aus allen Umfragen aller Server.
+
+        Die Stimmen sind pro Umfrage unter ``votes[str(user_id)]`` gespeichert
+        (enthält Discord-ID als Schlüssel sowie den Anzeigenamen); durch das
+        Entfernen dieses Eintrags werden ID und Name gelöscht.
+        """
+        uid = str(user_id)
+        try:
+            all_guilds = await self.config.all_guilds()
+        except Exception:  # noqa: BLE001
+            return
+        for gid in list(all_guilds.keys()):
+            try:
+                async with self.config.guild_from_id(gid).polls() as polls:
+                    for poll in polls.values():
+                        votes = poll.get("votes") if isinstance(poll, dict) else None
+                        if isinstance(votes, dict):
+                            votes.pop(uid, None)
+            except Exception:  # noqa: BLE001
+                continue
 
     # ----------------------------------------------------------------- #
     #  Dashboard-Anbindung (1:1-Muster aus example/raidhelper)
@@ -142,9 +168,12 @@ class Poll(commands.Cog):
         return await self._is_manager(member)
 
     async def _next_id(self, guild) -> str:
-        n = await self.config.guild(guild).counter()
-        n += 1
-        await self.config.guild(guild).counter.set(n)
+        # Counter unter dem Value-Lock hochzählen, damit zwei gleichzeitige
+        # Creates niemals dieselbe ID erhalten (atomares read-modify-write).
+        counter = self.config.guild(guild).counter
+        async with counter.get_lock():
+            n = await counter() + 1
+            await counter.set(n)
         return f"p-{n:04d}"
 
     # ----------------------------------------------------------------- #
@@ -274,11 +303,12 @@ class Poll(commands.Cog):
             polls[poll_id] = poll
             snapshot = dict(poll)
 
-        await self.refresh_poll_message(guild, snapshot)
+        # Erst antworten (3-s-Fenster), dann die Umfrage-Nachricht aktualisieren.
         key = {"added": "vote_added", "removed": "vote_removed", "changed": "vote_changed"}[action]
         await interaction.response.send_message(
             t(lang, key, option=options[idx]), ephemeral=True
         )
+        await self.refresh_poll_message(guild, snapshot)
 
     # ----------------------------------------------------------------- #
     #  Hintergrund: Auto-Ende + Ergebnis-Ansage
@@ -295,24 +325,39 @@ class Poll(commands.Cog):
             if not polls:
                 continue
             lang = conf.get("language", DEFAULT_LANGUAGE)
-            changed = False
             for pid, poll in list(polls.items()):
+                if not isinstance(poll, dict):
+                    continue
                 end_ts = poll.get("end_ts")
                 if poll.get("closed") or poll.get("ended") or not end_ts:
                     continue
-                if now >= end_ts:
-                    poll["ended"] = True
-                    poll["closed"] = True
-                    await self.refresh_poll_message(guild, poll)
-                    if not poll.get("announced"):
-                        await self._announce_result(guild, poll, lang)
-                        poll["announced"] = True
-                    changed = True
-            if changed:
-                async with self.config.guild(guild).polls() as stored:
-                    for pid, poll in polls.items():
-                        if pid in stored:
-                            stored[pid] = poll
+                if now < end_ts:
+                    continue
+                # Eine unbehandelte Exception würde tasks.loop dauerhaft stoppen
+                # (kein Auto-Ende mehr auf allen Servern) -> pro Umfrage abfangen.
+                try:
+                    await self._end_poll(guild, pid, lang)
+                except Exception:  # noqa: BLE001
+                    log.exception("Auto-Ende von Umfrage %s (Guild %s) fehlgeschlagen", pid, guild.id)
+
+    async def _end_poll(self, guild, pid, lang):
+        # Nur die Statusflags am FRISCHEN Datensatz setzen und NICHT den
+        # Snapshot zurückschreiben – sonst gehen parallel (während der
+        # awaits) abgegebene Stimmen verloren (Lost Update).
+        async with self.config.guild(guild).polls() as stored:
+            fresh = stored.get(pid)
+            if fresh is None:
+                return
+            fresh["ended"] = True
+            fresh["closed"] = True
+            announce = not fresh.get("announced")
+            if announce:
+                fresh["announced"] = True
+            stored[pid] = fresh
+            fresh_poll = dict(fresh)
+        await self.refresh_poll_message(guild, fresh_poll)
+        if announce:
+            await self._announce_result(guild, fresh_poll, lang)
 
     @_poll_tick.before_loop
     async def _before_tick(self):
@@ -331,7 +376,7 @@ class Poll(commands.Cog):
                 fail_if_not_exists=False,
             )
         try:
-            await channel.send(text, reference=reference)
+            await channel.send(text, reference=reference, allowed_mentions=discord.AllowedMentions.none())
         except discord.HTTPException:
             pass
 
@@ -419,7 +464,9 @@ class Poll(commands.Cog):
             status = self._status_word(lang, p)
             q = (p.get("question") or "")[:60]
             rows.append(t(lang, "list_row", id=p["id"], question=q, votes=total, status=status))
-        await ctx.send("\n".join(rows[:30]))
+        # Paginieren, damit die 2000-Zeichen-Grenze von Discord nicht überschritten wird.
+        for page in pagify("\n".join(rows), delims=["\n"], page_length=1900):
+            await ctx.send(page)
 
     @staticmethod
     def _status_word(lang, poll):

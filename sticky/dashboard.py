@@ -11,11 +11,13 @@ ohnehin geladenen Bootstrap-Formularklassen genutzt – kein eigenes Design.
 from __future__ import annotations
 
 import html
+from urllib.parse import quote_plus
 
 import discord
 from aiohttp import web
 
 from .strings import LANGUAGES
+from .validate import validate_sticky
 
 # Kleiner, auf die Theme-Variablen abgestimmter Style nur für Formularfelder.
 _FORM_STYLE = """
@@ -80,13 +82,21 @@ async def dashboard_handler(cog, request):
     return await _render(cog, request)
 
 
-def _selected_guild(cog, request):
+async def _visible_guilds(cog, request):
+    webcore = request.app.get("webcore")
+    if webcore is not None:
+        guilds = await webcore.visible_guilds(request)
+    else:  # Fallback (sollte im Normalbetrieb nicht eintreten)
+        guilds = list(cog.bot.guilds)
+    return sorted(guilds, key=lambda g: g.name.lower())
+
+
+def _pick_guild(guilds, request):
     gid = request.query.get("guild")
     if gid and gid.isdigit():
-        g = cog.bot.get_guild(int(gid))
-        if g is not None:
-            return g
-    guilds = sorted(cog.bot.guilds, key=lambda g: g.name.lower())
+        for g in guilds:
+            if g.id == int(gid):
+                return g
     return guilds[0] if guilds else None
 
 
@@ -94,7 +104,8 @@ def _selected_guild(cog, request):
 #  Rendern (GET)
 # --------------------------------------------------------------------------- #
 async def _render(cog, request):
-    guild = _selected_guild(cog, request)
+    guilds = await _visible_guilds(cog, request)
+    guild = _pick_guild(guilds, request)
     if guild is None:
         return {"title": "Sticky", "content": "<div class='card-x'>Der Bot ist auf keinem Server.</div>"}
 
@@ -109,7 +120,7 @@ async def _render(cog, request):
         flash = f"<div class='st-flash'>{_esc(request.query.get('ok'))}</div>"
 
     guild_opts = _options(
-        [(g.id, g.name) for g in sorted(cog.bot.guilds, key=lambda g: g.name.lower())],
+        [(g.id, g.name) for g in guilds],
         [guild.id],
     )
     guild_picker = f"""
@@ -312,7 +323,14 @@ async def _handle_post(cog, request):
     data = await request.post()
     form = data.get("form")
     gid = data.get("guild")
-    guild = cog.bot.get_guild(int(gid)) if gid and gid.isdigit() else None
+    # Server-Auswahl serverseitig gegen die sichtbaren Server prüfen.
+    guilds = await _visible_guilds(cog, request)
+    guild = None
+    if gid and gid.isdigit():
+        for g in guilds:
+            if g.id == int(gid):
+                guild = g
+                break
     if guild is None:
         raise web.HTTPFound("/cogs/sticky?ok=Server+nicht+gefunden")
 
@@ -347,6 +365,19 @@ async def _handle_post(cog, request):
             raise web.HTTPFound(
                 f"/cogs/sticky?guild={guild.id}&channel={cid}&ok=Embed+braucht+Text%2C+Titel+oder+Bild"
             )
+
+        candidate = {
+            "mode": mode, "text": text, "embed_title": embed_title, "embed_image": embed_image,
+            "embed_footer": (data.get("embed_footer") or "").strip(),
+            "webhook": "webhook" in data,
+            "webhook_name": (data.get("webhook_name") or "").strip(),
+            "webhook_avatar": (data.get("webhook_avatar") or "").strip(),
+        }
+        err = validate_sticky(candidate)
+        if err:
+            # Vorher wurde gespeichert, das Posten scheiterte an Discord-Limits – und die
+            # alte Sticky war dann schon gelöscht. Jetzt: gar nicht erst speichern.
+            raise web.HTTPFound(f"/cogs/sticky?guild={guild.id}&channel={cid}&ok=" + quote_plus(err))
 
         async with gconf.stickies() as stickies:
             entry = {

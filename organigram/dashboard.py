@@ -19,6 +19,7 @@ import re
 import secrets
 import time
 from collections import defaultdict
+from urllib.parse import quote_plus
 
 import discord
 from aiohttp import web
@@ -126,13 +127,21 @@ async def dashboard_handler(cog, request):
     return await _render(cog, request)
 
 
-def _selected_guild(cog, request):
+async def _visible_guilds(cog, request):
+    webcore = request.app.get("webcore")
+    if webcore is not None:
+        guilds = await webcore.visible_guilds(request)
+    else:  # Fallback (sollte im Normalbetrieb nicht eintreten)
+        guilds = list(cog.bot.guilds)
+    return sorted(guilds, key=lambda g: g.name.lower())
+
+
+def _pick_guild(guilds, request):
     gid = request.query.get("guild")
     if gid and gid.isdigit():
-        g = cog.bot.get_guild(int(gid))
-        if g is not None:
-            return g
-    guilds = sorted(cog.bot.guilds, key=lambda g: g.name.lower())
+        for g in guilds:
+            if g.id == int(gid):
+                return g
     return guilds[0] if guilds else None
 
 
@@ -153,7 +162,8 @@ async def _render(cog, request):
         return web.Response(body=data, content_type="image/png",
                             headers={"Cache-Control": "public, max-age=86400"})
 
-    guild = _selected_guild(cog, request)
+    guilds = await _visible_guilds(cog, request)
+    guild = _pick_guild(guilds, request)
     if guild is None:
         return {"title": "Organigramm",
                 "content": "<div class='card-x'>Der Bot ist auf keinem Server.</div>"}
@@ -185,7 +195,7 @@ async def _render(cog, request):
         flash = f"<div class='og-flash'>{_esc(request.query.get('ok'))}</div>"
 
     guild_opts = _options(
-        [(g.id, g.name) for g in sorted(cog.bot.guilds, key=lambda g: g.name.lower())],
+        [(g.id, g.name) for g in guilds],
         [guild.id],
     )
     guild_picker = f"""
@@ -216,7 +226,7 @@ def _render_list(guild, charts, csrf) -> str:
         posts = c.get("posts", [])
         where = ", ".join(
             f"#{ch.name}" for p in posts
-            if (ch := guild.get_channel(p.get("channel_id"))) is not None
+            if (ch := guild.get_channel_or_thread(p.get("channel_id"))) is not None
         ) or "—"
         pat = PATTERNS.get(c.get("pattern", "baum"), c.get("pattern", "baum"))
         edit_link = f"/cogs/organigram?guild={guild.id}&chart={_esc(cid)}"
@@ -556,7 +566,14 @@ async def _handle_post(cog, request):
     data = await request.post()
     form = data.get("form")
     gid = data.get("guild")
-    guild = cog.bot.get_guild(int(gid)) if gid and gid.isdigit() else None
+    # Server-Auswahl serverseitig gegen die sichtbaren Server prüfen.
+    guilds = await _visible_guilds(cog, request)
+    guild = None
+    if gid and gid.isdigit():
+        for g in guilds:
+            if g.id == int(gid):
+                guild = g
+                break
     if guild is None:
         raise web.HTTPFound("/cogs/organigram?ok=Server+nicht+gefunden")
 
@@ -611,6 +628,9 @@ async def _handle_post(cog, request):
             chart["show_avatars"] = "show_avatars" in data
             chart["show_vacant"] = "show_vacant" in data
             chart["auto_update"] = "auto_update" in data
+            refresh = bool(chart.get("posts")) and chart["auto_update"]
+        if refresh:  # gepostete Beiträge direkt nachziehen (vorher erst bei Rollen-Änderungen)
+            cog._schedule(guild.id, cid)
         raise web.HTTPFound(f"{base}&chart={cid}&ok=Einstellungen+gespeichert")
 
     # ---- Organigramm löschen -------------------------------------------- #
@@ -664,12 +684,16 @@ async def _handle_post(cog, request):
                 "color": color,
                 "order": order,
             }
+            refresh = bool(chart.get("posts")) and chart.get("auto_update", True)
+        if refresh:
+            cog._schedule(guild.id, cid)
         raise web.HTTPFound(f"{base}&chart={cid}&ok=Position+gespeichert")
 
     # ---- Position löschen (Kinder hochziehen) --------------------------- #
     if form == "node_delete":
         cid = data.get("chart")
         nid = data.get("node")
+        refresh = False
         async with gconf.charts() as charts:
             chart = charts.get(cid)
             if chart:
@@ -680,6 +704,9 @@ async def _handle_post(cog, request):
                     for nd in nodes.values():
                         if nd.get("parent") == nid:
                             nd["parent"] = new_parent
+                refresh = bool(chart.get("posts")) and chart.get("auto_update", True)
+        if refresh:
+            cog._schedule(guild.id, cid)
         raise web.HTTPFound(f"{base}&chart={cid}&ok=Position+gel%C3%B6scht")
 
     # ---- Posten --------------------------------------------------------- #
@@ -694,7 +721,7 @@ async def _handle_post(cog, request):
             raise web.HTTPFound(f"{base}&ok=Organigramm+nicht+gefunden")
         mode = MODE_MAP.get(data.get("mode"), charts[cid].get("mode", "image"))
         ok, err = await cog._post_and_save(guild, cid, channel, mode)
-        msg = "Gepostet" if ok else f"Fehler:+{(err or '').replace(' ', '+')}"
+        msg = "Gepostet" if ok else quote_plus(f"Fehler: {err or ''}")
         raise web.HTTPFound(f"{base}&chart={cid}&ok={msg}")
 
     raise web.HTTPFound(base)

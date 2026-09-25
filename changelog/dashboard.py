@@ -281,12 +281,14 @@ def _render_detail(guild, r: dict) -> str:
         jump = f" · <a href='{url}' target='_blank' rel='noopener' style='color:var(--accent)'>Zur Nachricht</a>"
     back = f"<a href='/cogs/changelog?guild={guild.id}' style='color:var(--accent)'>&larr; Zurück</a>"
 
+    # Kein Backslash in f-String-Ausdrücken (bricht auf Python 3.11) -> Fallback separat.
+    empty_html = "<div style='color:var(--muted)'>Kein Inhalt.</div>"
     return (
         "<div class='card-x'>"
         f"<div class='cl-title'>🆕 {_esc(r.get('title', '(ohne Titel)'))} "
         f"<span class='mono' style='color:var(--muted);font-size:.8rem'>{_esc(r.get('id'))}</span></div>"
         f"<div style='color:var(--muted);margin-bottom:14px'>{meta}{jump}</div>"
-        f"{sections or '<div style=\"color:var(--muted)\">Kein Inhalt.</div>'}"
+        f"{sections or empty_html}"
         f"<div class='cl-spacer'></div>{back}</div>"
     )
 

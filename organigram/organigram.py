@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from typing import Literal, Optional
 
 import discord
@@ -39,6 +39,9 @@ MODE_LABEL = {"image": "Bild", "embed": "Embed", "text": "Text"}
 
 # Verzögerung fürs Zusammenfassen vieler Änderungs-Events (Sekunden).
 REFRESH_DELAY = 4.0
+# Avatar-Cache (Schlüssel = Avatar-Hash): Jede Rollen-/Namensänderung löst ein
+# Neu-Rendern aus – ohne Cache wurden dabei jedes Mal ALLE Avatare neu geladen.
+AVATAR_CACHE_MAX = 1000
 
 
 def _color_int(hexstr: str | None) -> int:
@@ -58,6 +61,7 @@ class Organigram(commands.Cog):
         # Auto-Update-Infrastruktur
         self._locks: dict[tuple[int, str], asyncio.Lock] = {}
         self._pending: dict[tuple[int, str], asyncio.Task] = {}
+        self._avatar_cache: OrderedDict[str, bytes] = OrderedDict()
 
     # ------------------------------------------------------------------ #
     #  Lebenszyklus / Dashboard
@@ -118,10 +122,18 @@ class Organigram(commands.Cog):
         except Exception:
             log.exception("Auto-Aktualisierung fehlgeschlagen (%s/%s)", gid, cid)
         finally:
-            self._pending.pop((gid, cid), None)
+            # Nur den EIGENEN Task entfernen. Beim Debounce ersetzt _schedule den
+            # Eintrag unter demselben Key durch einen neuen Task – ohne diese
+            # Identitätsprüfung würde das finally des alten (gecancelten) Tasks den
+            # neuen aus _pending poppen.
+            key = (gid, cid)
+            if self._pending.get(key) is asyncio.current_task():
+                del self._pending[key]
 
     async def _schedule_affected(self, guild: discord.Guild, role_ids: set[int]):
         if not role_ids:
+            return
+        if await self.bot.cog_disabled_in_guild(self, guild):
             return
         charts = await self.config.guild(guild).charts()
         for cid, chart in charts.items():
@@ -163,11 +175,24 @@ class Organigram(commands.Cog):
                     if m is not None:
                         needed[m.id] = m
 
+            sem = asyncio.Semaphore(8)  # CDN nicht mit hunderten Parallel-Requests fluten
+
             async def _fetch(member: discord.Member):
+                asset = member.display_avatar
+                key = f"{asset.key}:{member.id}"
+                cached = self._avatar_cache.get(key)
+                if cached is not None:
+                    self._avatar_cache.move_to_end(key)
+                    return member.id, cached
                 try:
-                    return member.id, await member.display_avatar.read()
+                    async with sem:
+                        data = await asset.read()
                 except Exception:
                     return member.id, None
+                self._avatar_cache[key] = data
+                while len(self._avatar_cache) > AVATAR_CACHE_MAX:
+                    self._avatar_cache.popitem(last=False)
+                return member.id, data
 
             if needed:
                 for mid, data in await asyncio.gather(*(_fetch(m) for m in needed.values())):
@@ -246,12 +271,17 @@ class Organigram(commands.Cog):
             title=rchart.title,
             color=discord.Color(_color_int(chart.get("accent"))),
         )
+        # Discord-Limit: max. 25 Felder UND max. 6000 Zeichen je Embed.
+        # Gesamtlaenge (inkl. Titel/Footer) mitzaehlen und mit etwas Puffer
+        # fuer den Hinweis "+N weitere Positionen" kappen, sonst HTTP 400.
+        LIMIT = 5800
         count = 0
+        omitted = 0
+        stop = False
+        total = len(rchart.title or "") + len(guild.name or "")
 
         def walk(node: RNode, depth: int):
-            nonlocal count
-            if count >= 24:
-                return
+            nonlocal count, omitted, stop, total
             indent = "\u3000" * depth  # geviertbreites Leerzeichen für Einrückung
             arrow = "" if depth == 0 else "↳ "
             emoji = (node.emoji + " ") if node.emoji else ""
@@ -266,13 +296,22 @@ class Organigram(commands.Cog):
                     value += f"\n• +{extra} weitere"
             else:
                 value = "—"
-            emb.add_field(name=name, value=value[:1024] or "—", inline=False)
-            count += 1
+            value = value[:1024] or "—"
+            field_len = len(name) + len(value)
+            if stop or count >= 24 or total + field_len > LIMIT:
+                stop = True
+                omitted += 1
+            else:
+                emb.add_field(name=name, value=value, inline=False)
+                total += field_len
+                count += 1
             for c in node.children:
                 walk(c, depth + 1)
 
         for r in rchart.roots:
             walk(r, 0)
+        if omitted > 0:
+            emb.add_field(name="…", value=f"+{omitted} weitere Positionen", inline=False)
         emb.set_footer(text=guild.name)
         emb.timestamp = discord.utils.utcnow()
         return emb
@@ -342,7 +381,11 @@ class Organigram(commands.Cog):
             if not chart:
                 return False, "Organigramm nicht gefunden."
             ok, err = await self._post_chart(guild, chart_id, chart, channel, mode)
-            await self.config.guild(guild).charts.set(charts)
+            # Lost-Update vermeiden: nur den 'posts'-Eintrag dieses Charts frisch
+            # zurückschreiben, nicht den kompletten (evtl. veralteten) Snapshot.
+            async with self.config.guild(guild).charts() as stored:
+                if chart_id in stored:
+                    stored[chart_id]["posts"] = chart.get("posts", [])
             return ok, err
 
     async def _refresh_chart(self, guild_id: int, chart_id: str):
@@ -356,12 +399,16 @@ class Organigram(commands.Cog):
                 return
             posts = chart.get("posts", [])
             # tote Kanäle entfernen
-            alive = [p for p in posts if guild.get_channel(p.get("channel_id")) is not None]
+            alive = [p for p in posts if guild.get_channel_or_thread(p.get("channel_id")) is not None]
             chart["posts"] = alive
             for p in list(alive):
-                channel = guild.get_channel(p["channel_id"])
+                channel = guild.get_channel_or_thread(p["channel_id"])
                 await self._post_chart(guild, chart_id, chart, channel, p.get("mode", "image"))
-            await self.config.guild(guild).charts.set(charts)
+            # Lost-Update vermeiden: nur den 'posts'-Eintrag dieses Charts gezielt
+            # zurückschreiben, nicht den kompletten (evtl. veralteten) Snapshot.
+            async with self.config.guild(guild).charts() as stored:
+                if chart_id in stored:
+                    stored[chart_id]["posts"] = chart.get("posts", [])
 
     # ------------------------------------------------------------------ #
     #  Events -> Auto-Update
@@ -421,7 +468,7 @@ class Organigram(commands.Cog):
             where = ", ".join(
                 f"#{ch.name}"
                 for p in posts
-                if (ch := ctx.guild.get_channel(p.get("channel_id"))) is not None
+                if (ch := ctx.guild.get_channel_or_thread(p.get("channel_id"))) is not None
             ) or "—"
             pat = PATTERNS.get(c.get("pattern", "baum"), c.get("pattern", "baum"))
             lines.append(
@@ -460,6 +507,9 @@ class Organigram(commands.Cog):
                     await ctx.send(self._text_block(rchart))
             except discord.Forbidden:
                 await ctx.send("Mir fehlen Rechte, hier zu posten.")
+            except discord.HTTPException as exc:
+                log.exception("Anzeigen fehlgeschlagen")
+                await ctx.send(f"Konnte das Organigramm nicht senden: {exc}")
 
     @organigram.command(name="post")
     @commands.admin_or_permissions(manage_guild=True)
@@ -512,9 +562,15 @@ class Organigram(commands.Cog):
         kanal: Optional[discord.TextChannel] = None,
     ):
         """Beendet die Auto-Aktualisierung (die Nachricht selbst bleibt bestehen)."""
-        async with self._lock(ctx.guild.id, "_"):
+        charts = await self.config.guild(ctx.guild).charts()
+        cid, chart = self._find(charts, name)
+        if not chart:
+            return await ctx.send(f"Kein Organigramm namens „{name}”.")
+        # Chart VOR dem Lock auflösen, damit wir denselben (guild_id, cid)-Lock
+        # wie ein laufender Refresh nehmen und uns mit ihm ausschließen.
+        async with self._lock(ctx.guild.id, cid):
             charts = await self.config.guild(ctx.guild).charts()
-            cid, chart = self._find(charts, name)
+            chart = charts.get(cid)
             if not chart:
                 return await ctx.send(f"Kein Organigramm namens „{name}”.")
             before = len(chart.get("posts", []))

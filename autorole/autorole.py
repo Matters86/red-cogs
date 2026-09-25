@@ -60,6 +60,10 @@ class Autorole(commands.Cog):
 
         # Laufzeit-Status (nicht persistent): geplante Vergaben pro (guild_id, member_id).
         self._pending: dict[tuple[int, int], asyncio.Task] = {}
+        # "Auf bestehende Mitglieder anwenden": höchstens ein Lauf pro Server, im
+        # Hintergrund (Dashboard-Request kehrt sofort zurück) + letzter Status für die Anzeige.
+        self._apply_jobs: dict[int, asyncio.Task] = {}
+        self.apply_status: dict[int, str] = {}
 
     # ----------------------------------------------------------------- #
     #  Dashboard-Anbindung (1:1-Muster aus example/sticky)
@@ -73,9 +77,24 @@ class Autorole(commands.Cog):
         for task in list(self._pending.values()):
             task.cancel()
         self._pending.clear()
+        for task in list(self._apply_jobs.values()):
+            task.cancel()
+        self._apply_jobs.clear()
         webcore = self.bot.get_cog("WebCore")
         if webcore is not None:
             webcore.unregister_owner(self)
+
+    async def red_delete_data_for_user(self, *, requester, user_id: int):
+        """Löscht die gespeicherten Sticky-/Member-Daten dieses Nutzers (alle Server)."""
+        # Eine evtl. noch geplante Vergabe in jedem Server verwerfen.
+        for (gid, mid), task in list(self._pending.items()):
+            if mid == user_id and not task.done():
+                task.cancel()
+                self._pending.pop((gid, mid), None)
+        all_members = await self.config.all_members()
+        for guild_id, members in all_members.items():
+            if user_id in members:
+                await self.config.member_from_ids(guild_id, user_id).clear()
 
     @commands.Cog.listener()
     async def on_webcore_ready(self, webcore):
@@ -277,6 +296,39 @@ class Autorole(commands.Cog):
             return 0
         await self.config.member(member).sticky.clear()  # sticky-Speicher konsumiert
         return len(to_add)
+
+    def apply_running(self, guild_id: int) -> bool:
+        task = self._apply_jobs.get(guild_id)
+        return task is not None and not task.done()
+
+    def start_apply_job(self, guild: discord.Guild) -> asyncio.Task | None:
+        """Startet ``apply_to_existing`` als Hintergrund-Task. ``None`` = läuft bereits."""
+        if self.apply_running(guild.id):
+            return None
+        task = asyncio.create_task(self._apply_job(guild))
+        self._apply_jobs[guild.id] = task
+        return task
+
+    async def _apply_job(self, guild: discord.Guild):
+        stamp = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+        self.apply_status[guild.id] = f"läuft seit {stamp} …"
+        try:
+            result = await self.apply_to_existing(guild)
+        except asyncio.CancelledError:
+            self.apply_status[guild.id] = f"{stamp}: abgebrochen"
+            raise
+        except Exception:  # noqa: BLE001 – Hintergrund-Task darf nicht still sterben
+            log.exception("applyall fehlgeschlagen (Guild %s)", guild.id)
+            self.apply_status[guild.id] = f"{stamp}: Fehler – siehe Bot-Log"
+            return None
+        finally:
+            self._apply_jobs.pop(guild.id, None)
+        if result is None:
+            self.apply_status[guild.id] = f"{stamp}: nichts anzuwenden (System aus, keine Rollen oder keine Rechte)"
+        else:
+            added, members = result
+            self.apply_status[guild.id] = f"{stamp}: {added} Rollen-Vergaben an {members} Mitglieder"
+        return result
 
     async def apply_to_existing(self, guild: discord.Guild):
         """Vergibt die Mitglieder-Rollen an alle bestehenden Menschen.
@@ -494,23 +546,25 @@ class Autorole(commands.Cog):
         if reason is not None:
             lang = await self._lang(ctx.guild)
             return await ctx.send(t(lang, "add_unassignable", role=role.name, reason=t(lang, reason)))
-        roles = await self.config.guild(ctx.guild).join_roles()
-        if role.id in roles:
-            return await self._say(ctx, "add_already", role=role.name)
-        roles.append(role.id)
-        await self.config.guild(ctx.guild).join_roles.set(roles)
-        await self._say(ctx, "add_ok", role=role.name)
+        async with self.config.guild(ctx.guild).join_roles() as roles:
+            if role.id in roles:
+                key = "add_already"
+            else:
+                roles.append(role.id)
+                key = "add_ok"
+        await self._say(ctx, key, role=role.name)
 
     @autorole.command(name="remove")
     @commands.admin_or_permissions(manage_roles=True)
     async def autorole_remove(self, ctx: commands.Context, *, role: discord.Role):
         """Entfernt eine Rolle aus den Mitglieder-Rollen."""
-        roles = await self.config.guild(ctx.guild).join_roles()
-        if role.id not in roles:
-            return await self._say(ctx, "remove_not_set", role=role.name)
-        roles.remove(role.id)
-        await self.config.guild(ctx.guild).join_roles.set(roles)
-        await self._say(ctx, "remove_ok", role=role.name)
+        async with self.config.guild(ctx.guild).join_roles() as roles:
+            if role.id not in roles:
+                key = "remove_not_set"
+            else:
+                roles.remove(role.id)
+                key = "remove_ok"
+        await self._say(ctx, key, role=role.name)
 
     @autorole.command(name="botadd")
     @commands.admin_or_permissions(manage_roles=True)
@@ -520,40 +574,44 @@ class Autorole(commands.Cog):
         if reason is not None:
             lang = await self._lang(ctx.guild)
             return await ctx.send(t(lang, "add_unassignable", role=role.name, reason=t(lang, reason)))
-        roles = await self.config.guild(ctx.guild).bot_roles()
-        if role.id in roles:
-            return await self._say(ctx, "bot_add_already", role=role.name)
-        roles.append(role.id)
-        await self.config.guild(ctx.guild).bot_roles.set(roles)
-        await self._say(ctx, "bot_add_ok", role=role.name)
+        async with self.config.guild(ctx.guild).bot_roles() as roles:
+            if role.id in roles:
+                key = "bot_add_already"
+            else:
+                roles.append(role.id)
+                key = "bot_add_ok"
+        await self._say(ctx, key, role=role.name)
 
     @autorole.command(name="botremove")
     @commands.admin_or_permissions(manage_roles=True)
     async def autorole_botremove(self, ctx: commands.Context, *, role: discord.Role):
         """Entfernt eine Rolle aus den Bot-Rollen."""
-        roles = await self.config.guild(ctx.guild).bot_roles()
-        if role.id not in roles:
-            return await self._say(ctx, "bot_remove_not_set", role=role.name)
-        roles.remove(role.id)
-        await self.config.guild(ctx.guild).bot_roles.set(roles)
-        await self._say(ctx, "bot_remove_ok", role=role.name)
+        async with self.config.guild(ctx.guild).bot_roles() as roles:
+            if role.id not in roles:
+                key = "bot_remove_not_set"
+            else:
+                roles.remove(role.id)
+                key = "bot_remove_ok"
+        await self._say(ctx, key, role=role.name)
 
     @autorole.command(name="sticky")
     @commands.admin_or_permissions(manage_roles=True)
     async def autorole_sticky(self, ctx: commands.Context, *, role: discord.Role):
         """Markiert eine Rolle als sticky (kommt beim erneuten Beitritt zurück) – erneut zum Entfernen."""
-        roles = await self.config.guild(ctx.guild).sticky_roles()
-        if role.id in roles:
-            roles.remove(role.id)
-            await self.config.guild(ctx.guild).sticky_roles.set(roles)
-            return await self._say(ctx, "sticky_off", role=role.name)
-        reason = self._assignable_reason(ctx.guild, role)
-        if reason is not None:
-            lang = await self._lang(ctx.guild)
-            return await ctx.send(t(lang, "sticky_unassignable", role=role.name, reason=t(lang, reason)))
-        roles.append(role.id)
-        await self.config.guild(ctx.guild).sticky_roles.set(roles)
-        await self._say(ctx, "sticky_on", role=role.name)
+        async with self.config.guild(ctx.guild).sticky_roles() as roles:
+            if role.id in roles:
+                roles.remove(role.id)
+                key = "sticky_off"
+            else:
+                reason = self._assignable_reason(ctx.guild, role)
+                if reason is not None:
+                    lang = await self._lang(ctx.guild)
+                    return await ctx.send(
+                        t(lang, "sticky_unassignable", role=role.name, reason=t(lang, reason))
+                    )
+                roles.append(role.id)
+                key = "sticky_on"
+        await self._say(ctx, key, role=role.name)
 
     @autorole.command(name="delay")
     @commands.admin_or_permissions(manage_roles=True)
@@ -611,8 +669,11 @@ class Autorole(commands.Cog):
         me = ctx.guild.me
         if me is None or not me.guild_permissions.manage_roles:
             return await self._say(ctx, "no_manage_roles")
+        task = self.start_apply_job(ctx.guild)
+        if task is None:
+            return await self._say(ctx, "apply_busy")
         await self._say(ctx, "apply_running")
-        result = await self.apply_to_existing(ctx.guild)
+        result = await task
         if result is None:
             return await self._say(ctx, "apply_none")
         added, members = result
