@@ -154,6 +154,9 @@ async def _render(cog, request):
       <span class='mono' style='color:var(--muted)'>{_esc(guild.name)}</span>
     </div>
     """
+    # Globaler Server-Wechsler von WebCore aktiv -> eigenes Dropdown ausblenden.
+    if request.get("wc_switcher"):
+        bar = ""
 
     # Roster-Detailansicht?
     sel_event = request.query.get("event")

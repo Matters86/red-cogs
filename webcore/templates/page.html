@@ -1,4 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
+{% if readonly %}
+<div class="ro-banner"><i class="bi bi-eye"></i>
+  <div><strong>Nur Ansicht.</strong> Du kannst diese Seite für <strong>{{ switcher_guild_name }}</strong> ansehen, aber nichts ändern.</div>
+</div>
+{% endif %}
 {{ content | safe }}
 {% endblock %}

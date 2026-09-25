@@ -24,6 +24,9 @@ Beispiel-Cog als Vorlage. Zeigt, wie ein Cog gleichzeitig
 
 ## Dashboard
 
-Ist `webcore` geladen, erscheint automatisch der Tab **Example** mit einer Übersicht aller
-Server und ihrer Notizen. Die Anbindung steckt in `cog_load`, `cog_unload` und dem
-`on_webcore_ready`-Listener – genau dieses Muster für eigene Cogs übernehmen.
+Ist `webcore` geladen, erscheint automatisch der Tab **Example**: Mitgliederzahl und Notiz des
+oben rechts gewählten Servers, die Notiz lässt sich direkt speichern. Die Anbindung steckt in
+`cog_load`, `cog_unload` und dem `on_webcore_ready`-Listener; `dashboard_page` zeigt das
+empfohlene Muster (Server über `visible_guilds`, `?guild=` aus dem globalen Wechsler,
+CSRF + Post/Redirect/Get). Genau dieses Muster für eigene Cogs übernehmen – dann greifen die
+Rollen-Rechte aus „Zugriff & Rollen“ automatisch.

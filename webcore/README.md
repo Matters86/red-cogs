@@ -4,6 +4,13 @@ Zentrales Web-Dashboard für Red-DiscordBot. Läuft **im Bot-Prozess** (aiohttp)
 Discord-OAuth2-Login mit und stellt anderen Cogs eine einfache API bereit, um eigene
 Dashboard-Seiten zu registrieren. Neue Cogs erscheinen automatisch in der Navigation.
 
+- **Rollen-Rechte:** Der Bot-Owner legt pro Server fest, welche Discord-Rolle welche Seite
+  **ansehen** oder **bearbeiten** darf. Team-Mitglieder melden sich mit Discord an und sehen
+  nur ihre freigegebenen Bereiche.
+- **Globaler Server-Wechsler** in der Kopfzeile (die Auswahl bleibt beim Seitenwechsel erhalten).
+- **Audit-Log:** jede Änderung über das Dashboard mit Nutzer, Server, Seite und Ergebnis.
+- Login-Seite, Nutzer-Menü mit Avatar und Rolle, Toast-Meldungen, mobil bedienbar.
+
 ## Installation
 
 ```
@@ -39,10 +46,47 @@ Dashboard-Seiten zu registrieren. Neue Cogs erscheinen automatisch in der Naviga
 | `[p]webcore access <owner|admin|allowlist>` | Zugriffsmodus setzen |
 | `[p]webcore allow <user>` | User freigeben (volle Sicht) |
 | `[p]webcore deny <user>` | Freigabe entfernen |
+| `[p]webcore roleperm <rolle> <seite\|alle> <none\|view\|edit>` | Dashboard-Recht einer Rolle setzen (im Server ausführen) |
+| `[p]webcore roles` | Dashboard-Rechte der Rollen dieses Servers anzeigen |
 | `[p]webcore settings` | Aktuelle Einstellungen anzeigen (ohne Secret) |
+
+Alle `webcore`-Befehle sind dem Bot-Owner vorbehalten.
+
+## Rollen-Rechte (Team-Zugang)
+
+Im Dashboard unter **Verwaltung → Zugriff & Rollen** (nur Bot-Owner):
+
+1. Oben rechts den Server wählen.
+2. Unter „Rolle hinzufügen“ eine Discord-Rolle eintragen (Startwert *Ansehen* oder *Bearbeiten*).
+3. In der Matrix pro Seite festlegen: **—** (kein Zugriff), **Ansehen** oder **Bearbeiten** – speichern.
+
+| Stufe | Wirkung |
+|---|---|
+| — | Seite erscheint nicht in der Navigation, Aufruf wird abgelehnt (403). |
+| Ansehen | Seite öffnet sich schreibgeschützt (Hinweis „Nur Ansicht“, alle Formulare gesperrt). |
+| Bearbeiten | Alle Einstellungen und Aktionen dieser Seite – nur für **diesen Server**. |
+
+- Hat ein Mitglied mehrere Rollen, gilt je Seite die höchste Stufe. Rechte gelten immer nur für
+  den Server, auf dem die Rolle eingetragen ist.
+- Die Rechte werden bei **jeder Anfrage live** aus den Discord-Rollen berechnet: Rolle entzogen
+  = Zugriff sofort weg.
+- **Schutz vor Selbst-Hochstufung:** Team-Mitglieder können Rollen nur dann automatisch
+  vergeben lassen (Autorole-Beitrittsrollen/-Panels, Ticket-Inhaberrolle), wenn die Rolle
+  **unter ihrer eigenen höchsten Rolle** liegt und **keine Moderations-/Verwaltungsrechte** hat.
+- Botweite Einstellungen (z. B. Spec-Icons im Raidplaner, versteckte Befehle) und die Seiten
+  „Zugriff & Rollen“ und „Audit-Log“ bleiben dem Owner vorbehalten.
+- Wichtig: „Bearbeiten“ gibt **alle** Einstellungen einer Seite frei (bei Tickets z. B. auch die
+  Admin-Rollen des Ticketsystems). Vergib es nur an Rollen, denen du das zutraust.
+
+## Audit-Log
+
+**Verwaltung → Audit-Log** zeigt jede speichernde Aktion im Dashboard: Zeit, Nutzer, Server,
+Seite, Aktion und Ergebnis – auch abgelehnte Versuche ohne Bearbeitungsrecht. Aufbewahrt werden
+die letzten 300 Einträge; Suche und Server-Filter sind eingebaut.
 
 ## Sicherheit
 
+- **Rollen-Rechte** (siehe oben) gelten in jedem Modus zusätzlich.
 - **Zugriffsmodi** (per `[p]webcore access` umschaltbar):
   - `owner` (Standard): nur Bot-Owner und Co-Owner.
   - `admin`: zusätzlich Discord-Admins – aber **eingeschränkte Sicht**: sie sehen nur die
@@ -50,6 +94,7 @@ Dashboard-Seiten zu registrieren. Neue Cogs erscheinen automatisch in der Naviga
     serverübergreifende Zahlen). Erfordert das **Members-Intent**, damit Mitglieder erkannt werden.
   - `allowlist`: zusätzlich die per `[p]webcore allow` freigegebenen User – mit **voller Sicht**.
 - Owner und Allowlist-User haben volle Sicht (alle Server + Infrastruktur).
+- Login-Sitzungen laufen nach 7 Tagen ab. Jede Anfrage prüft die Rechte neu.
 - Empfehlung: den Webserver hinter einen Reverse-Proxy mit HTTPS legen (z. B. Caddy/Nginx),
   statt den Port direkt offen ins Internet zu stellen.
 
@@ -137,5 +182,24 @@ async def dashboard_page(self, request):
     ...
 ```
 
-`visible_guilds(request)` liefert für Owner/Allowlist-User alle Server, für Admin-Modus-User nur
-die, in denen sie Administrator sind. So bleibt die serverbezogene Datentrennung gewahrt.
+`visible_guilds(request)` liefert für Owner/Allowlist-User alle Server, sonst nur die Server, auf
+denen der User für **diese Seite** mindestens *Ansehen* hat – bei **POST** mindestens
+*Bearbeiten*. Wer die Ziel-Guild eines Formulars gegen diese Liste prüft (so machen es alle Cogs
+im Repo), bekommt die Rollen-Rechte damit automatisch. Zusätzlich lehnt WebCore POSTs zentral ab,
+wenn das Feld `guild`/`guild_id` auf einen Server ohne Bearbeiten-Recht zeigt.
+
+### Weitere Helfer für Cogs
+
+| Aufruf | Zweck |
+|---|---|
+| `await webcore.page_level(request, guild)` | Stufe des Users auf dieser Seite: 0 = kein Zugriff, 1 = Ansehen, 2 = Bearbeiten |
+| `await webcore.has_full_scope(request)` | Owner/Allowlist? – für botweite Einstellungen |
+| `await webcore.can_grant_role(request, guild, role)` | Darf der User diese Rolle automatisch vergeben lassen? (Schutz vor Selbst-Hochstufung) |
+
+**Server-Auswahl:** WebCore hängt beim Öffnen einer Cog-Seite immer `?guild=<id>` an (zuletzt
+gewählter Server). Eine Cog-Seite liest einfach `request.query.get("guild")` und braucht kein
+eigenes Server-Dropdown mehr – solange `request.get("wc_switcher")` gesetzt ist, zeigt WebCore
+den Wechsler in der Kopfzeile.
+
+**Meldungen:** `?ok=<Text>` bzw. `?err=<Text>` in der Weiterleitung nach einem POST zeigt WebCore
+als Toast an (Hinweisbalken mit einer Klasse `…-flash` werden dann ausgeblendet).

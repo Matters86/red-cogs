@@ -1,7 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="card-x" style="max-width:560px">
-  <p style="color:var(--muted);margin-top:0">{{ message }}</p>
-  <a href="/"><i class="bi bi-arrow-left"></i> Zurück zur Übersicht</a>
+  <div style="display:flex;gap:14px;align-items:flex-start">
+    <div class="wc-intro-icon" style="background:var(--danger-soft);color:var(--danger)"><i class="bi {{ icon or 'bi-exclamation-triangle' }}"></i></div>
+    <div>
+      <p style="color:var(--text);margin:4px 0 14px">{{ message }}</p>
+      <a class="btn-ghost" href="/"><i class="bi bi-arrow-left"></i> Zurück zur Übersicht</a>
+    </div>
+  </div>
 </div>
 {% endblock %}

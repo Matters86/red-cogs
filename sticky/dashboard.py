@@ -131,6 +131,9 @@ async def _render(cog, request):
       </form>
     </div>
     """
+    # Globaler Server-Wechsler von WebCore aktiv -> eigenes Dropdown ausblenden.
+    if request.get("wc_switcher"):
+        guild_picker = ""
 
     settings_form = _render_settings(guild, conf, csrf)
     table_html = _render_table(guild, stickies, csrf)

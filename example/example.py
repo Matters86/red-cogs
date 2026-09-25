@@ -41,30 +41,45 @@ class Example(commands.Cog):
         )
 
     async def dashboard_page(self, request):
-        # WICHTIG (Vorlage für neue Cogs): immer nur die für den eingeloggten Nutzer
-        # sichtbaren Server nutzen – NIE ``self.bot.guilds``. Sonst sieht/steuert im
-        # WebCore-Modus "admin" ein Admin von Server A auch Server B.
-        # Für POST-Handler gilt dasselbe: die Ziel-Guild nur aus dieser Liste auflösen.
+        """Vorlage für neue Cogs – das empfohlene Muster in kurz:
+
+        * Server NUR über ``webcore.visible_guilds(request)`` auflösen (nie ``self.bot.guilds``).
+          Die Liste ist seitenbewusst: GET = Server mit „Ansehen“, POST = mit „Bearbeiten“
+          (Rollen-Rechte aus „Zugriff & Rollen“).
+        * Den gewählten Server liest man aus ``?guild=`` – WebCore setzt ihn automatisch und
+          zeigt den globalen Server-Wechsler; ein eigenes Dropdown ist nicht nötig.
+        * Jedes Formular: ``csrf_token`` + ``guild`` mitsenden, danach PRG mit ``?ok=<Text>``.
+        """
         webcore = request.app.get("webcore")
         guilds = await webcore.visible_guilds(request) if webcore is not None else []
-        rows = []
-        for guild in sorted(guilds, key=lambda g: g.name.lower()):
-            note = await self.config.guild(guild).note()
-            note_cell = html_lib.escape(note) if note else "<span style='color:var(--muted)'>—</span>"
-            rows.append(
-                "<tr>"
-                f"<td>{html_lib.escape(guild.name)}</td>"
-                f"<td class='mono'>{guild.member_count}</td>"
-                f"<td>{note_cell}</td>"
-                "</tr>"
-            )
-        body = "".join(rows) or "<tr><td colspan='3' style='color:var(--muted)'>Keine Server.</td></tr>"
+        by_id = {g.id: g for g in guilds}
+
+        if request.method == "POST":
+            form = await request.post()
+            raw = form.get("guild") or ""
+            guild = by_id.get(int(raw)) if raw.isdigit() else None
+            if guild is None:  # kein Bearbeiten-Recht auf diesem Server (oder unbekannt)
+                return {"redirect": "/cogs/example?ok=Server+nicht+gefunden"}
+            await self.config.guild(guild).note.set((form.get("note") or "").strip()[:500])
+            return {"redirect": f"/cogs/example?guild={guild.id}&ok=Notiz+gespeichert"}
+
+        raw = request.query.get("guild") or ""
+        guild = by_id.get(int(raw)) if raw.isdigit() else (guilds[0] if guilds else None)
+        if guild is None:
+            return {"title": "Example", "content": "<div class='card-x'>Keine Server verfügbar.</div>"}
+        note = await self.config.guild(guild).note()
+        csrf = html_lib.escape(request.get("webcore_csrf", ""))
         content = (
             "<div class='card-x'>"
-            "<table class='table'>"
-            "<thead><tr><th>Server</th><th>Mitglieder</th><th>Notiz</th></tr></thead>"
-            f"<tbody>{body}</tbody>"
-            "</table></div>"
+            f"<div class='section-title'>{html_lib.escape(guild.name)}</div>"
+            f"<p style='color:var(--muted)'>Mitglieder: <span class='mono'>{guild.member_count}</span></p>"
+            "<form method='post' action='/cogs/example' style='display:flex;gap:10px;flex-wrap:wrap'>"
+            f"<input type='hidden' name='csrf_token' value='{csrf}'>"
+            f"<input type='hidden' name='guild' value='{guild.id}'>"
+            f"<input name='note' class='form-control' style='max-width:420px' value='{html_lib.escape(note or '')}' "
+            "placeholder='Notiz für diesen Server'>"
+            "<button class='btn-accent' type='submit'>Speichern</button>"
+            "</form></div>"
         )
         return {"title": "Example", "content": content}
 

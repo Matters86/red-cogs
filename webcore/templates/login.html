@@ -1,9 +1,45 @@
-{% extends "base.html" %}
-{% block content %}
-<div class="card-x" style="max-width:440px">
-  <p style="color:var(--muted);margin-top:0">
-    Melde dich mit Discord an, um das Dashboard zu öffnen. Zugriff haben nur Bot-Owner.
-  </p>
-  <a class="btn-accent" href="/login"><i class="bi bi-discord"></i> Mit Discord anmelden</a>
-</div>
-{% endblock %}
+<!DOCTYPE html>
+<html lang="de" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="referrer" content="same-origin">
+  <title>Anmeldung · {{ bot_name }}</title>
+  {% if bot_avatar %}<link rel="icon" href="{{ bot_avatar }}">{% endif %}
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="/static/webcore.css?v={{ asset_version }}" rel="stylesheet">
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-card">
+      {% if bot_avatar %}<img class="lc-avatar" src="{{ bot_avatar }}" alt="">{% else %}<div class="lc-avatar"><i class="bi bi-robot"></i></div>{% endif %}
+      <h1>{{ bot_name }}</h1>
+
+      {% if state == 'noaccess' %}
+        <p>Du bist angemeldet, hast aber (noch) keinen Zugriff auf das Dashboard.</p>
+        <div class="lc-user">
+          <img src="{{ current_user.avatar }}" alt="">
+          <div><strong>{{ current_user.name }}</strong><br><small class="mono" style="color:var(--muted)">{{ current_user.id }}</small></div>
+        </div>
+        <div class="lc-msg info"><i class="bi bi-info-circle"></i>
+          <span>Der Bot-Owner kann deiner Discord-Rolle unter „Zugriff &amp; Rollen“ Rechte geben. Danach einfach neu laden.</span></div>
+        <a class="btn-discord" href="/logout" style="background:var(--panel-3)"><i class="bi bi-box-arrow-right"></i> Mit anderem Konto anmelden</a>
+      {% else %}
+        <p>Melde dich mit deinem Discord-Konto an. Du siehst danach genau die Bereiche, für die deine Rolle freigeschaltet ist.</p>
+        {% if error %}<div class="lc-msg err"><i class="bi bi-exclamation-octagon"></i><span>{{ error }}</span></div>{% endif %}
+        {% if not_configured %}
+          <div class="lc-msg info"><i class="bi bi-gear"></i>
+            <span>Der Login ist noch nicht eingerichtet. Bot-Owner: <code>[p]webcore oauth &lt;client_id&gt; &lt;secret&gt; &lt;redirect_uri&gt;</code></span></div>
+        {% else %}
+          <a class="btn-discord" href="/login?go=1"><i class="bi bi-discord"></i> Mit Discord anmelden</a>
+        {% endif %}
+      {% endif %}
+      <div class="lc-foot">Es wird nur deine Discord-ID und dein Name abgefragt (Scope <span class="mono">identify</span>).</div>
+    </div>
+  </div>
+</body>
+</html>

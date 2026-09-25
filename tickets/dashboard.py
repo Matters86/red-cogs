@@ -252,6 +252,9 @@ async def _render(cog, request):
       </form>
     </div>
     """
+    # Globaler Server-Wechsler von WebCore aktiv -> eigenes Dropdown ausblenden.
+    if request.get("wc_switcher"):
+        guild_picker = ""
 
     content = (
         _FORM_STYLE
@@ -548,7 +551,15 @@ async def _handle_post(cog, request):
         await gconf.admin_roles.set(_ids(data.getall("admin_roles", [])))
         await gconf.view_roles.set(_ids(data.getall("view_roles", [])))
         await gconf.ping_roles.set(_ids(data.getall("ping_roles", [])))
-        await gconf.owner_role.set(_one_id(data.get("owner_role")))
+        # Die Inhaber-Rolle bekommt jeder Ticket-Ersteller automatisch -> neue Rolle nur,
+        # wenn der User sie vergeben darf (sonst Selbst-Hochstufung über ein Ticket).
+        new_owner = _one_id(data.get("owner_role"))
+        cur_owner = await gconf.owner_role()
+        webcore = request.app.get("webcore")
+        if (new_owner and new_owner != cur_owner and webcore is not None and hasattr(webcore, "can_grant_role")
+                and not await webcore.can_grant_role(request, guild, guild.get_role(new_owner))):
+            new_owner = cur_owner
+        await gconf.owner_role.set(new_owner)
         await gconf.category_open.set(_one_id(data.get("category_open")))
         await gconf.category_close.set(_one_id(data.get("category_close")))
         await gconf.thread_base.set(_one_id(data.get("thread_base")))

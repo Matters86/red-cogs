@@ -18,7 +18,7 @@ Danach `webcore` einrichten (siehe [`webcore/README.md`](webcore/README.md)).
 
 | Cog | Beschreibung |
 |---|---|
-| [`webcore`](webcore/) | Zentrales Web-Dashboard (aiohttp, Discord-OAuth2). Andere Cogs klinken sich ein. |
+| [`webcore`](webcore/) | Zentrales Web-Dashboard (aiohttp, Discord-OAuth2) mit Rollen-Rechten (Ansehen/Bearbeiten je Seite), globalem Server-Wechsler und Audit-Log. Andere Cogs klinken sich ein. |
 | [`example`](example/) | Vorlage: Hybrid-Befehl + automatische Dashboard-Seite. |
 | [`autoroom`](autoroom/) | Autovoiceroom: automatische temporäre Voicechannels, voll per Dashboard konfigurierbar. |
 | [`autorole`](autorole/) | Automatische Rollenvergabe bei Beitritt + Self-Service-Rollen-Panels (Buttons/Dropdown). |

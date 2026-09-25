@@ -17,8 +17,8 @@ Beispiel-Cog als Vorlage – ein Befehl plus eine eigene Seite im Web-Dashboard.
 | `[p]example setnote <text>` | Setzt die Server-Notiz. | Admin / „Server verwalten" |
 
 ## Dashboard
-Nach dem Laden erscheint im Web-Dashboard automatisch der Tab **Example** mit einer
-Übersicht aller Server und ihrer Notizen.
+Nach dem Laden erscheint im Web-Dashboard automatisch der Tab **Example** – mit Mitgliederzahl
+und Notiz des gewählten Servers (direkt im Browser änderbar).
 
 ## Hinweise
 - Slash-Befehle ggf. mit `[p]slash sync` aktivieren.

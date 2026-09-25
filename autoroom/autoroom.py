@@ -807,13 +807,14 @@ class AutoRoom(commands.Cog):
 
         flash = ""
         if request.query.get("ok"):
-            flash = "<div class='card-x' style='border-color:var(--accent);margin-bottom:16px'>Gespeichert.</div>"
+            flash = "<div class='card-x ar-flash' style='border-color:var(--accent);margin-bottom:16px'>Gespeichert.</div>"
         elif request.query.get("err"):
-            flash = "<div class='card-x' style='border-color:var(--danger);margin-bottom:16px'>Eingabe ungültig – bitte prüfen.</div>"
+            flash = "<div class='card-x ar-flash' style='border-color:var(--danger);margin-bottom:16px'>Eingabe ungültig – bitte prüfen.</div>"
 
         # Server-Auswahl (nur wenn der Bot auf mehr als einem Server ist)
         guild_picker = ""
-        if len(guilds) > 1:
+        # Eigenes Dropdown nur, wenn WebCore (noch) keinen globalen Server-Wechsler hat.
+        if len(guilds) > 1 and not request.get("wc_switcher"):
             options = "".join(
                 f"<option value='{g.id}'{' selected' if g.id == guild.id else ''}>{html.escape(g.name)}</option>"
                 for g in guilds

@@ -7,7 +7,7 @@ richtet sich danach. Diese Datei gehört ins Projekt-Wissen **und** in die Proje
 ## Ziel & Stack
 - Red-DiscordBot (min. 3.5), Python 3.11+
 - Monorepo `red-cogs`, **ein Ordner pro Cog**
-- Web-Dashboard: **WebCore** (läuft im Bot-Prozess), **Standard-Theme** aus `webcore/base.html` —
+- Web-Dashboard: **WebCore** (läuft im Bot-Prozess), **Standard-Theme** aus `webcore/static/webcore.css` —
   **nicht** neu designen, nur dessen CSS-Klassen verwenden
 - Doku & Forum-Posts auf **Deutsch**
 
@@ -114,6 +114,19 @@ async def dashboard_page(self, request):
 ```
 - Jedes Formular muss `csrf_token` als verstecktes Feld mitsenden.
 - Werte serverseitig validieren (z. B. Channel-IDs gegen echte Guild-Objekte prüfen).
+
+### Server-Auswahl & Rollen-Rechte (Pflicht)
+- Server **nur** über `await webcore.visible_guilds(request)` auflösen – nie `self.bot.guilds`.
+  Die Liste ist seitenbewusst: GET = Server mit *Ansehen*, POST = Server mit *Bearbeiten*.
+  Jedes Formular sendet die Ziel-Guild als Feld `guild` (oder `guild_id`); der POST-Handler prüft
+  sie gegen `visible_guilds`.
+- Den aktuellen Server aus `request.query.get("guild")` lesen. WebCore setzt den Parameter
+  automatisch und zeigt den **globalen Server-Wechsler** in der Kopfzeile – kein eigenes
+  Server-Dropdown bauen (nur als Fallback, wenn `request.get("wc_switcher")` fehlt).
+- Nach POST per `?ok=<Text>` / `?err=<Text>` umleiten → WebCore zeigt einen Toast.
+- Rollen, die ein Cog **automatisch vergibt** (Beitritts-/Panel-/Inhaber-Rollen …), vor dem
+  Speichern mit `await webcore.can_grant_role(request, guild, role)` prüfen.
+- Botweite Einstellungen (gelten für alle Server) nur mit `await webcore.has_full_scope(request)`.
 
 ## Definition of Done (ein Cog ist erst fertig, wenn ALLE 4 stehen)
 1. **Code** — `<cog>/` mit `__init__.py`, `<cog>.py`, `info.json`

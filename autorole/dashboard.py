@@ -141,6 +141,9 @@ async def _render(cog, request):
       </form>
     </div>
     """
+    # Globaler Server-Wechsler von WebCore aktiv -> eigenes Dropdown ausblenden.
+    if request.get("wc_switcher"):
+        guild_picker = ""
 
     content = (
         _FORM_STYLE
@@ -594,6 +597,14 @@ _POST_MSG = {
 }
 
 
+async def _may_grant(request, guild, role_id) -> bool:
+    """WebCore-Prüfung, ob der eingeloggte User diese Rolle vergeben lassen darf."""
+    webcore = request.app.get("webcore")
+    if webcore is None or not hasattr(webcore, "can_grant_role"):
+        return True
+    return await webcore.can_grant_role(request, guild, guild.get_role(int(role_id)))
+
+
 async def _handle_post(cog, request):
     data = await request.post()
     form = data.get("form")
@@ -611,6 +622,22 @@ async def _handle_post(cog, request):
     gconf = cog.config.guild(guild)
 
     if form == "settings":
+        current = await gconf.all()
+        blocked = 0
+
+        async def _allowed(key):
+            # Neu hinzugefügte Rollen nur, wenn der User sie vergeben darf (WebCore-Rollenrechte);
+            # bereits eingetragene bleiben unverändert, Entfernen ist immer erlaubt.
+            nonlocal blocked
+            keep = []
+            before = {int(r) for r in (current.get(key) or [])}
+            for rid in _ids(data.getall(key, [])):
+                if rid in before or await _may_grant(request, guild, rid):
+                    keep.append(rid)
+                else:
+                    blocked += 1
+            return keep
+
         lang = data.get("language") or "de"
         await gconf.language.set(lang if lang in LANGUAGES else "de")
         scr = data.get("screening") or "auto"
@@ -626,9 +653,14 @@ async def _handle_post(cog, request):
         except (TypeError, ValueError):
             age = 0
         await gconf.min_account_age.set(max(0, age))
-        await gconf.join_roles.set(_ids(data.getall("join_roles", [])))
-        await gconf.bot_roles.set(_ids(data.getall("bot_roles", [])))
-        await gconf.sticky_roles.set(_ids(data.getall("sticky_roles", [])))
+        await gconf.join_roles.set(await _allowed("join_roles"))
+        await gconf.bot_roles.set(await _allowed("bot_roles"))
+        await gconf.sticky_roles.set(await _allowed("sticky_roles"))
+        if blocked:
+            raise web.HTTPFound(
+                f"/cogs/autorole?guild={guild.id}&ok="
+                + quote_plus(f"Gespeichert – {blocked} Rolle(n) nicht übernommen: über deiner Rolle oder mit Moderationsrechten")
+            )
         raise web.HTTPFound(f"/cogs/autorole?guild={guild.id}&ok=Einstellungen+gespeichert")
 
     if form == "applyall":
@@ -682,6 +714,8 @@ async def _handle_post(cog, request):
             raise _panel_redirect(guild.id, pid, "Rolle nicht gefunden")
         if cog._assignable_reason(guild, role) is not None:
             raise _panel_redirect(guild.id, pid, "Diese Rolle kann ich nicht vergeben")
+        if not await _may_grant(request, guild, role.id):
+            raise _panel_redirect(guild.id, pid, "Diese Rolle darfst du nicht vergeben (über deiner Rolle oder mit Moderationsrechten)")
         existing = panels[pid].get("roles", [])
         if any(int(r["role_id"]) == role.id for r in existing):
             raise _panel_redirect(guild.id, pid, "Rolle ist bereits im Panel")
