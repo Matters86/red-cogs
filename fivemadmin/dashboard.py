@@ -165,7 +165,7 @@ async def _actor(cog, request, guild) -> Actor:
     full = await webcore.has_full_scope(request)
     member = await _resolve_member(guild, int(user["id"])) if user else None
     perms = await cog.member_permissions(member) if member is not None else set()
-    admin = bool(member is not None and member.guild_permissions.administrator)
+    admin = full or await cog.is_panel_admin(member)
     return Actor(user=user, member=member, full=full, panel_perms=set(perms), discord_admin=admin)
 
 

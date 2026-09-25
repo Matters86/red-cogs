@@ -178,7 +178,8 @@ class AutoRoom(commands.Cog):
         if rec is None:
             await ctx.send("Dein aktueller Channel ist kein AutoRoom.")
             return None
-        if rec.get("owner_id") != ctx.author.id:
+        # Bot-Owner darf jeden Raum verwalten.
+        if rec.get("owner_id") != ctx.author.id and not await self.bot.is_owner(ctx.author):
             await ctx.send(
                 "Das ist nicht dein AutoRoom. Falls der Besitzer weg ist, "
                 f"kannst du ihn mit `{ctx.clean_prefix}autoroom claim` übernehmen."

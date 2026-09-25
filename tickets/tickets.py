@@ -155,8 +155,12 @@ class Tickets(commands.Cog):
         ids = {int(r) for r in (role_ids or [])}
         return any(r.id in ids for r in getattr(member, "roles", []))
 
+    def _is_bot_owner(self, member) -> bool:
+        """Bot-Owner (inkl. Co-Owner) hat immer alle Rechte."""
+        return getattr(member, "id", None) in (getattr(self.bot, "owner_ids", None) or set())
+
     def _is_admin(self, member: discord.Member, conf: dict) -> bool:
-        if member.guild_permissions.manage_guild:
+        if self._is_bot_owner(member) or member.guild_permissions.manage_guild:
             return True
         return self._has_any_role(member, conf.get("admin_roles"))
 

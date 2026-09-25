@@ -130,6 +130,10 @@ async def dashboard_page(self, request):
 - Rollen, die ein Cog **automatisch vergibt** (Beitritts-/Panel-/Inhaber-Rollen …), vor dem
   Speichern mit `await webcore.can_grant_role(request, guild, role)` prüfen.
 - Botweite Einstellungen (gelten für alle Server) nur mit `await webcore.has_full_scope(request)`.
+- **Bot-Owner hat immer alle Rechte.** Jede eigene Rechteprüfung (Staff-/Manager-/Admin-Checks,
+  Button-Handler, Ausnahmen von Filtern) lässt den Owner zuerst durch: `await self.bot.is_owner(member)`
+  bzw. synchron `member.id in self.bot.owner_ids`. Reds Dekoratoren (`commands.has_permissions`,
+  `admin_or_permissions` …) machen das schon selbst.
 
 ## Definition of Done (ein Cog ist erst fertig, wenn ALLE 4 stehen)
 1. **Code** — `<cog>/` mit `__init__.py`, `<cog>.py`, `info.json`

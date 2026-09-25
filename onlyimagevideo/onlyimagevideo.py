@@ -167,6 +167,8 @@ class OnlyImageVideo(commands.Cog):
         if conf.get("ignore_bots", True) and (message.author.bot or message.webhook_id is not None):
             return
         member = message.author
+        if await self.bot.is_owner(member):  # Bot-Owner hat immer alle Rechte
+            return
         if isinstance(member, discord.Member):
             exempt = {int(r) for r in (conf.get("exempt_roles") or [])}
             if exempt and any(r.id in exempt for r in member.roles):

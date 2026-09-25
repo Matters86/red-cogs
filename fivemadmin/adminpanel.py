@@ -229,9 +229,25 @@ class AdminPanel(commands.Cog):
     # Berechtigungs-Auflösung (live aus Discord-Rollen)
     # --------------------------------------------------------------
 
+    def _is_panel_admin_sync(self, member) -> bool:
+        """Wie ``is_panel_admin``, ohne await (für Listen/innere Funktionen)."""
+        if member is None:
+            return False
+        if member.id in (getattr(self.bot, "owner_ids", None) or set()):
+            return True
+        return bool(getattr(member, "guild_permissions", None) and member.guild_permissions.administrator)
+
+    async def is_panel_admin(self, member) -> bool:
+        """Discord-Administrator des Servers oder Bot-Owner (Owner hat immer alle Rechte)."""
+        if member is None:
+            return False
+        if await self.bot.is_owner(member):
+            return True
+        return bool(getattr(member, "guild_permissions", None) and member.guild_permissions.administrator)
+
     async def member_permissions(self, member: discord.Member) -> set:
         perms: set = set()
-        if member.guild_permissions.administrator:
+        if await self.is_panel_admin(member):
             return set(ALL_PERMS)
         role_map = await self.config.guild(member.guild).role_map()
         for role in member.roles:
@@ -485,7 +501,7 @@ class AdminPanel(commands.Cog):
             "server": None,
             "limits": {"money": self.money_max, "item": self.item_max},
             "locked": await self.config.locked(),
-            "is_admin": request["member"].guild_permissions.administrator,
+            "is_admin": await self.is_panel_admin(request["member"]),
         }
         if state:
             server = {
@@ -718,7 +734,7 @@ class AdminPanel(commands.Cog):
 
     async def http_get_role_map(self, request: web.Request):
         member = request["member"]
-        if not member.guild_permissions.administrator:
+        if not await self.is_panel_admin(member):
             return web.json_response({"error": "Nur Discord-Administratoren"}, status=403)
         guild = member.guild
         role_map = await self.config.guild(guild).role_map()
@@ -742,7 +758,7 @@ class AdminPanel(commands.Cog):
                 "id": uid,
                 "name": m.display_name if m else f"nicht mehr auf dem Server ({uid})",
                 "on_guild": m is not None,
-                "is_admin": bool(m and m.guild_permissions.administrator),
+                "is_admin": self._is_panel_admin_sync(m),
                 "preset": preset,
             })
         users.sort(key=lambda u: u["name"].lower())
@@ -751,7 +767,7 @@ class AdminPanel(commands.Cog):
     async def http_user_search(self, request: web.Request):
         """Mitglieder-Suche für Einzelpersonen-Zugriffe (nur Discord-Admins)."""
         member = request["member"]
-        if not member.guild_permissions.administrator:
+        if not await self.is_panel_admin(member):
             return web.json_response({"error": "Nur Discord-Administratoren"}, status=403)
         q = (request.query.get("q") or "").strip()
         if len(q) < 2:
@@ -767,7 +783,7 @@ class AdminPanel(commands.Cog):
                 "id": str(m.id),
                 "name": m.display_name,
                 "username": m.name,
-                "is_admin": m.guild_permissions.administrator,
+                "is_admin": self._is_panel_admin_sync(m),
             })
 
         needle = q.lower()
@@ -789,7 +805,7 @@ class AdminPanel(commands.Cog):
     async def http_set_user_map(self, request: web.Request):
         """Einzelperson ein Preset geben/entziehen (nur Discord-Admins)."""
         member = request["member"]
-        if not member.guild_permissions.administrator:
+        if not await self.is_panel_admin(member):
             return web.json_response({"error": "Nur Discord-Administratoren"}, status=403)
         data = await self._read_json(request)
         user_id = str(data.get("user_id", "")).strip()
@@ -819,7 +835,7 @@ class AdminPanel(commands.Cog):
 
     async def http_set_role_map(self, request: web.Request):
         member = request["member"]
-        if not member.guild_permissions.administrator:
+        if not await self.is_panel_admin(member):
             return web.json_response({"error": "Nur Discord-Administratoren"}, status=403)
         data = await self._read_json(request)
         role_id = str(data.get("role_id", "")).strip()
