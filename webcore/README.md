@@ -17,7 +17,8 @@ Dashboard-Seiten zu registrieren. Neue Cogs erscheinen automatisch in der Naviga
   gemeinsame UI-Kit; mobil bedienbar.
 - **Bot-Status & Fehlerprotokoll** (nur Owner): Laufzeit, Latenz, RAM/CPU, Versionen, geladene Cogs mit
   ihren Seiten – und alle Warnungen/Fehler der Cogs mit Traceback, Secrets maskiert.
-- **Sichern & Wiederherstellen** (nur Owner): Server-Einstellungen aller Module als JSON sichern und mit
+- **Sichern & Wiederherstellen** (nur Owner): Server-Einstellungen aller Module – und WebCores eigene
+  Dashboard-Einstellungen des Servers (Rollen-Rechte, Mein Bereich, Log-Kanal) – als JSON sichern und mit
   Vorschau, Bestätigung und „Rückgängig“ wieder einspielen.
 - Login-Seite, Nutzer-Menü mit Avatar und Rolle, Toast-Meldungen.
 
@@ -149,8 +150,16 @@ Dashboard-Seite** (generisch über deren Red-`Config`) als Datei:
 ```json
 {"format": "red-cogs-backup", "version": 1, "created": "2026-09-26T12:00:00+00:00",
  "guild_id": 1000, "guild_name": "Matters Community",
- "cogs": {"Tickets": {"identifier": "846215097433", "guild": {"language": "de", "…": "…"}}}}
+ "cogs": {"Tickets": {"identifier": "846215097433", "guild": {"language": "de", "…": "…"}}},
+ "webcore": {"role_perms": {"1101": {"tickets": "edit", "poll": "view"}},
+             "member_portal": true, "audit_channel": 1004}}
 ```
+
+**Dashboard-Einstellungen (`webcore`):** Beim Export durch den **Bot-Owner** kommen WebCores eigene
+Einstellungen **nur dieses Servers** dazu: Rollen-Rechte-Matrix (Rolle → Seite → `view`/`edit`),
+Mitglieder-Bereich an/aus und Audit-Log-Kanal. Keine anderen Server, keine Secrets, keine Allowlist-
+oder Owner-Daten. Allowlist-Nutzer exportieren/importieren diesen Abschnitt nicht (wie „Zugriff & Rollen“).
+Der Abschnitt ist optional – ältere Dateien ohne ihn lassen sich weiter einspielen (Format-Version bleibt 1).
 
 Optional „Botweite Einstellungen mitsichern“ (Feld `global` je Cog). **Secrets sind nie enthalten:**
 Schlüssel mit *secret*, *token*, *password*/*passwort*, *api_key* oder *key* im Namen werden – auch
@@ -167,10 +176,27 @@ verschachtelt – weggelassen.
 3. **Anderer Server:** Eine Sicherung darf auch auf einem anderen Server eingespielt werden (z. B. zweiten
    Server gleich einrichten). Die Vorschau warnt dann: **Kanal- und Rollen-IDs passen nicht** – danach in
    den Modulen prüfen.
-4. **Rückgängig:** Vor jedem Import hält WebCore den Ist-Zustand der betroffenen Einstellungen vor (die
-   letzten 5 Importe je Server, nur im Arbeitsspeicher – bis zum Neustart bzw. Neuladen von WebCore).
+4. **Dashboard-Einstellungen:** Enthält die Datei den Abschnitt `webcore`, zeigt die Vorschau einen eigenen
+   Block „Dashboard-Einstellungen“: je Rolle, welche Seiten sie **bekommt**, **verliert** oder mit anderer
+   Stufe erhält, dazu Mein Bereich an/aus und den Log-Kanal (alt → neu). Übernommen wird er nur mit dem
+   eigenen Häkchen **„Dashboard-Einstellungen übernehmen“** (Standard **aus**, weil Rechte-Vergabe
+   sicherheitsrelevant ist) und nur vom **Bot-Owner**.
+   * *Gleicher Server:* die Rechte-Matrix wird auf den Stand der Sicherung gesetzt (Rollen, die dort
+     fehlen, verlieren ihre Rechte). *Anderer Server:* nur Rollen aus der Sicherung, die es dort gibt,
+     werden gesetzt; alle anderen Rollen behalten ihre Rechte.
+   * Übersprungen und gemeldet werden: Rollen, die es auf dem Ziel-Server nicht gibt (auch `@everyone`),
+     Log-Kanäle, die dort kein Textkanal sind, ungültige Stufen (erlaubt nur `none`/`view`/`edit`; der
+     bisherige Wert bleibt), unbekannte Seiten (erlaubt: registrierte Seiten und Seiten, für die schon
+     Rechte gespeichert sind) und Werte mit falschem Typ.
+   * Neue Rechte gelten **sofort** (die Rechte werden pro Request aus der Config berechnet; der Cache des
+     laufenden Requests wird nach Import/Rückgängig verworfen).
+5. **Rückgängig:** Vor jedem Import hält WebCore den Ist-Zustand der betroffenen Einstellungen vor – inkl.
+   Rollen-Rechten, Mein Bereich und Log-Kanal (die letzten 5 Importe je Server, nur im Arbeitsspeicher –
+   bis zum Neustart bzw. Neuladen von WebCore). Enthält ein Import Dashboard-Rechte, kann ihn nur der
+   Bot-Owner rückgängig machen.
 
-Export, Import und Rückgängig landen im **Audit-Log**. Cogs mit anderem `identifier` als in der Datei
+Export, Import und Rückgängig landen im **Audit-Log** (Import mit Dashboard-Einstellungen als
+„import (inkl. Dashboard-Rechte)“). Cogs mit anderem `identifier` als in der Datei
 (gleicher Name, anderer Cog) werden übersprungen.
 
 ## Mein Bereich (Mitglieder-Bereich)

@@ -10,6 +10,7 @@ Diagramme für 7, 30 oder 90 Tage.
 - 🤖 Bots, Webhooks und der AFK-Kanal zählen nicht; Kanäle lassen sich ausschließen
 - 🧾 CSV-Export je Tag oder je Kanal
 - 🎫 Zusatz-Kacheln „Offene Tickets“ und „Kommende Raids“, wenn Tickets/Raidplaner geladen sind
+- 🕓 Tage in der **Zeitzone des Servers** (Standard Europe/Berlin, Sommerzeit inklusive)
 - 🧹 Alte Tage werden automatisch gelöscht (Standard 90 Tage)
 
 **Installation**
@@ -25,8 +26,11 @@ Diagramme für 7, 30 oder 90 Tage.
 | `[p]stats [tage]` | Kurzübersicht als Embed (Standard 7 Tage, max. 90) | alle |
 | `[p]statsset retention <tage>` | Aufbewahrung in Tagen (7–730, Standard 90) | Server verwalten |
 | `[p]statsset ignore <#kanal>` | Kanal nicht mehr zählen / wieder zählen | Server verwalten |
+| `[p]statsset timezone [zone]` | Zeitzone anzeigen/setzen (IANA, Standard Europe/Berlin) | Server verwalten |
 | `[p]statsset language <de\|en>` | Sprache der Antworten | Server verwalten |
 | `[p]statsset settings` | Einstellungen anzeigen | Server verwalten |
 
 **Dashboard:** Seite **Statistik** – Zeitraum 7/30/90 Tage, Reiter *Übersicht* (Diagramme, Export),
-*Kanäle* (Tabelle mit Suche) und *Einstellungen* (Aufbewahrung, Sprache, ignorierte Kanäle, Zurücksetzen).
+*Kanäle* (Tabelle mit Suche) und *Einstellungen* (Aufbewahrung, Zeitzone, Sprache, ignorierte Kanäle, Zurücksetzen).
+
+*Update-Hinweis:* Früher wurde in UTC-Tagen gezählt – vorhandene Daten laufen einfach weiter (Versatz max. 2 Stunden).

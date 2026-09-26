@@ -733,6 +733,19 @@ class WebCore(commands.Cog):
             request["_wc_access"] = result
         return result
 
+    @staticmethod
+    def _invalidate_access_cache(request=None) -> None:
+        """Rechte-Cache verwerfen, nachdem Rollen-Rechte/Mitglieder-Bereich geändert wurden.
+
+        ``_access_map`` und ``_portal_scope`` cachen nur pro Request (``request["_wc_access"]`` bzw.
+        ``_wc_portal*``) – jeder neue Request rechnet frisch aus der Config. Innerhalb des laufenden
+        Requests werden die Einträge hier verworfen, damit auch er schon die neuen Rechte sieht.
+        """
+        if request is None:
+            return
+        for key in ("_wc_access", "_wc_portal", "_wc_portal_members", "_wc_portal_preview"):
+            request.pop(key, None)
+
     async def _is_authorized(self, user, request=None) -> bool:
         """Darf dieser User das Dashboard überhaupt betreten?"""
         if user is None:
@@ -2018,11 +2031,14 @@ class WebCore(commands.Cog):
             base = f"/backup?guild={guild.id}"
             action = form.get("form")
 
+            is_owner = user["id"] in self.bot.owner_ids
             if action == "export":
                 include_global = bool(form.get("include_global"))
-                data = await bk.build_export(self, guild, include_global=include_global)
+                # Dashboard-Einstellungen (Rollen-Rechte …) nur für den Bot-Owner – wie „Zugriff & Rollen“.
+                data = await bk.build_export(self, guild, include_global=include_global, include_webcore=is_owner)
                 await self._audit(request, user, page="backup", guild_id=guild.id, action="export",
-                                  result=f"{len(data['cogs'])} Cogs exportiert" + (" (inkl. botweit)" if include_global else ""),
+                                  result=f"{len(data['cogs'])} Cogs exportiert" + (" (inkl. botweit)" if include_global else "")
+                                  + (" + Dashboard-Einstellungen" if "webcore" in data else ""),
                                   ok=True)
                 return web.Response(
                     body=json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"),
@@ -2060,11 +2076,17 @@ class WebCore(commands.Cog):
                 async with self._backup_lock:
                     plan = await bk.plan_import(self, guild, pending["data"])
                     include_global = bool(form.get("include_global")) and plan["has_global"]
+                    wplan = plan.get("webcore")
+                    # Rechte-Vergabe ist sicherheitsrelevant: nur Bot-Owner und nur mit eigenem Häkchen.
+                    include_webcore = bool(form.get("include_webcore")) and is_owner and wplan is not None
                     totals = bk.plan_totals(plan, include_global=include_global)
                     snapshot = await bk.apply_import(self, guild, plan, include_global=include_global)
+                    wc_snap = await bk.apply_webcore(self, guild, wplan) if include_webcore else {}
+                if wc_snap:
+                    self._invalidate_access_cache(request)
                 self._import_pending.pop(str(form.get("preview")), None)
                 ignored = totals["unknown"] + totals["type_errors"]
-                if not snapshot:
+                if not snapshot and not wc_snap:
                     msg = "Keine Änderungen – die Einstellungen waren schon so"
                 else:
                     src = pending["data"]
@@ -2072,15 +2094,26 @@ class WebCore(commands.Cog):
                     undo.insert(0, {
                         "id": secrets.token_urlsafe(10), "ts": time.time(), "user": user["name"],
                         "source": f"{src.get('guild_name') or '?'} ({src.get('guild_id')})",
-                        "cogs": sorted(snapshot), "snapshot": snapshot,
-                        "keys": sum(len(s.get("guild", {})) + len(s.get("global", {})) for s in snapshot.values()),
+                        "cogs": sorted(snapshot) + (["Dashboard-Einstellungen"] if wc_snap else []),
+                        "snapshot": snapshot, "webcore": wc_snap or None,
+                        "keys": sum(len(s.get("guild", {})) + len(s.get("global", {})) for s in snapshot.values())
+                        + int(wc_snap.get("changes", 0) if wc_snap else 0),
                     })
                     del undo[IMPORT_UNDO_KEEP:]
-                    msg = f"Import: {totals['changed']} Einstellung(en) in {totals['cogs']} Cog(s) übernommen"
+                    done = []
+                    if snapshot:
+                        done.append(f"{totals['changed']} Einstellung(en) in {totals['cogs']} Cog(s)")
+                    if wc_snap:
+                        done.append(f"Dashboard-Rechte/-Einstellungen ({int(wc_snap.get('changes', 0))} Änderung(en))")
+                    msg = "Import: " + " und ".join(done) + " übernommen"
                 if ignored:
                     msg += f", {ignored} ignoriert (unbekannt/falscher Typ)"
+                if include_webcore and bk.webcore_problems(wplan):
+                    msg += f", {bk.webcore_problems(wplan)} Dashboard-Einträge übersprungen"
+                extras = (["botweit"] if include_global else []) + (["Dashboard-Rechte"] if wc_snap else [])
+                action_label = "import" + (f" (inkl. {', '.join(extras)})" if extras else "")
                 await self._audit(request, user, page="backup", guild_id=guild.id,
-                                  action="import" + (" (inkl. botweit)" if include_global else ""), result=msg, ok=True)
+                                  action=action_label, result=msg, ok=True)
                 raise web.HTTPFound(f"{base}&ok=" + quote_plus(msg))
 
             if action == "undo":
@@ -2089,10 +2122,18 @@ class WebCore(commands.Cog):
                 entry = next((e for e in entries if e["id"] == uid), None)
                 if entry is None:
                     raise web.HTTPFound(f"{base}&err=" + quote_plus("Dieser Stand ist nicht mehr verfügbar."))
+                if entry.get("webcore") and not is_owner:
+                    raise web.HTTPFound(f"{base}&err=" + quote_plus(
+                        "Dieser Import enthält Dashboard-Rechte – rückgängig machen kann ihn nur der Bot-Owner."))
                 async with self._backup_lock:
                     count, missing = await bk.restore_snapshot(self, guild, entry["snapshot"])
+                    wc_count = await bk.restore_webcore(self, guild, entry["webcore"]) if entry.get("webcore") else 0
+                if wc_count:
+                    self._invalidate_access_cache(request)
                 entries.remove(entry)
                 msg = f"Rückgängig: {count} Einstellung(en) wiederhergestellt"
+                if wc_count:
+                    msg += ", Dashboard-Rechte/-Einstellungen zurückgesetzt"
                 if missing:
                     msg += " (nicht geladen: " + ", ".join(missing) + ")"
                 await self._audit(request, user, page="backup", guild_id=guild.id, action="undo", result=msg,
@@ -2112,8 +2153,10 @@ class WebCore(commands.Cog):
                 request["wc_toast_err"] = "Die Vorschau ist abgelaufen oder gehört zu einem anderen Server."
             else:
                 plan = await bk.plan_import(self, guild, pending["data"])
+                page_names = {p.slug: p.name for p in self.pages.values()}
                 preview_html = render_backup_preview(guild=guild, data=pending["data"], plan=plan, token=pid,
-                                                     csrf=token, filename=pending["filename"])
+                                                     csrf=token, filename=pending["filename"], page_names=page_names,
+                                                     can_webcore=user["id"] in self.bot.owner_ids)
         cogs = [(name, len(bk.guild_defaults(cog.config)), len(bk.global_defaults(cog.config)))
                 for name, cog in bk.backup_cogs(self).items()
                 if bk.guild_defaults(cog.config) or bk.global_defaults(cog.config)]
@@ -2122,7 +2165,8 @@ class WebCore(commands.Cog):
              "cogs": e["cogs"], "keys": e["keys"]}
             for e in self._import_undo.get(guild.id) or []
         ]
-        content = render_backup(guild=guild, cogs=cogs, csrf=token, undo=undo, preview=preview_html)
+        content = render_backup(guild=guild, cogs=cogs, csrf=token, undo=undo, preview=preview_html,
+                                webcore_export=user["id"] in self.bot.owner_ids)
         return aiohttp_jinja2.render_template(
             "page.html", request,
             self._page_ctx(request, title="Sichern & Wiederherstellen", content=content, active_page="backup",

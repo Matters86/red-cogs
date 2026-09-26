@@ -58,6 +58,10 @@ Red-Instanz im System-Temp an und löscht sie am Ende wieder.
 | `gv_test.py` | giveaways: Teilnahme-Regeln, persistente Views nach Neustart, faire gewichtete Auslosung, Nachholen nach Downtime, Reroll/Ende/Abbruch, Ping nur Gewinner, Rechte, Dashboard, `/me/gewinnspiele`, Datenlöschung |
 | `sc_test.py` | scheduler: nächster Termin für alle Typen inkl. Sommerzeitwechsel Europe/Berlin und Monatsende, Downtime-Regel (< 10 min), Auto-Pause nach 5 Fehlern, allowed_mentions nur Ping-Rolle, Dashboard-Formulare/Vorschau, Befehle, Rechte |
 
+## Live-Test mit echtem Bot
+
+Die Checkliste zum Durchklicken mit echtem Discord steht in [`LIVE-TEST.md`](LIVE-TEST.md).
+
 ## Bausteine (Harnesses)
 
 | Datei | Inhalt |

@@ -52,9 +52,12 @@ async def seed(cog, bot, days=95):
     out = {}
     text_ids = [c.id for c in g.text_channels]
     voice_ids = [c.id for c in g.voice_channels if c.name != "AFK"]
-    from rc.serverstats.serverstats import day_of
+    from datetime import timedelta
+
+    from rc.serverstats.serverstats import local_date
+    today = local_date(now, await cog.guild_tz(g))          # Tage in der Zeitzone des Servers
     for i in range(days, 0, -1):
-        d = day_of(now - i * 86400)
+        d = (today - timedelta(days=i)).isoformat()
         joins, leaves = rnd.randint(0, 9), rnd.randint(0, 5)
         members += joins - leaves
         weekend = (i % 7) in (0, 1)

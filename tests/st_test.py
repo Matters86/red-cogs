@@ -8,6 +8,7 @@ import re
 import time
 from datetime import datetime, timezone
 from urllib.parse import unquote_plus
+from zoneinfo import ZoneInfo
 
 import st_harness as S
 from aiohttp.test_utils import TestClient, TestServer
@@ -43,8 +44,161 @@ class FakeThread(discord.Thread):
         return o
 
 
-def ts(y, m, d, hh=0, mm=0, ss=0):
+BERLIN = ZoneInfo("Europe/Berlin")
+
+
+def ts(y, m, d, hh=0, mm=0, ss=0, *, fold=0):
+    """Zeitstempel einer Ortszeit in Europe/Berlin (Standard-Zeitzone des Cogs)."""
+    return datetime(y, m, d, hh, mm, ss, tzinfo=BERLIN, fold=fold).timestamp()
+
+
+def uts(y, m, d, hh=0, mm=0, ss=0):
     return datetime(y, m, d, hh, mm, ss, tzinfo=timezone.utc).timestamp()
+
+
+async def tz_tests(cog, bot, g, gconf, now, ctx):
+    """Zeitzone des Servers: Tagesschlüssel, Voice an lokaler Mitternacht (inkl. Sommerzeit), Aufräumen, Befehl."""
+    from rc.serverstats import serverstats as SS
+    allg = g.text_channels[0]
+    lobby = g.voice_channels[0]
+    kai, mia, tom = (g.get_member(i) for i in (13, 14, 12))
+    B = S.vstate
+    await cog.flush()
+    saved_days, saved_clock = await gconf.days(), now[0]
+    await gconf.days.set({})
+    assert await gconf.timezone() == "Europe/Berlin", "Standard-Zeitzone"
+
+    async def fresh():
+        await cog.flush()
+        await gconf.days.set({})
+        cog._members_written.clear()
+
+    # Helfer
+    assert SS.valid_tz("Europe/Berlin") and SS.valid_tz("UTC") and SS.valid_tz("America/New_York")
+    for bad in ("", " ", "Mars/Olympus", "../etc/passwd", "/etc/localtime", "Europe/Berlin ", "x" * 100, None, 5):
+        assert not SS.valid_tz(bad), bad
+    assert SS.get_tz("Quatsch").key == "Europe/Berlin" and SS.get_tz(None).key == "Europe/Berlin"
+    assert SS.day_of(uts(2026, 9, 20, 22, 30)) == "2026-09-20"                       # ohne tz = UTC
+    assert SS.day_of(uts(2026, 9, 20, 22, 30), BERLIN) == "2026-09-21"
+    # Sommerzeit-Tage: 23 bzw. 25 Stunden bis zur nächsten Mitternacht
+    assert SS.next_midnight(ts(2026, 3, 29), BERLIN) - ts(2026, 3, 29) == 23 * 3600
+    assert SS.next_midnight(ts(2026, 10, 25), BERLIN) - ts(2026, 10, 25) == 25 * 3600
+    assert SS.next_midnight(ts(2026, 3, 29, 23, 59), BERLIN) == ts(2026, 3, 30)
+
+    # 1) Zählung kurz vor / nach lokaler Mitternacht (in UTC wären beide am 20.09.)
+    await fresh()
+    now[0] = ts(2026, 9, 20, 23, 59, 59)
+    await cog.on_message(S.msg(g, kai, allg)); await cog.on_member_join(kai)
+    now[0] = ts(2026, 9, 21, 0, 0, 1)
+    await cog.on_message(S.msg(g, kai, allg)); await cog.on_message(S.msg(g, kai, allg))
+    await cog.on_member_remove(tom)
+    pend = cog._pending[g.id]
+    assert sorted(pend) == ["2026-09-20", "2026-09-21"], pend
+    assert pend["2026-09-20"]["messages"] == {str(allg.id): 1} and pend["2026-09-20"]["joins"] == 1
+    assert pend["2026-09-21"]["messages"] == {str(allg.id): 2} and pend["2026-09-21"]["leaves"] == 1
+    days = await cog.get_days(g, 3)                     # Auswertung nach lokalem Datum (inkl. Puffer)
+    assert [d for d, _ in days] == ["2026-09-19", "2026-09-20", "2026-09-21"], days
+    assert sum(days[-1][1]["messages"].values()) == 2 and sum(days[-2][1]["messages"].values()) == 1
+    await cog.flush()
+    stored = await gconf.days()
+    assert stored["2026-09-21"]["members"] == g.member_count, "Tagesendstand unter lokalem Datum"
+    assert stored["2026-09-20"]["members"] is None, stored["2026-09-20"]
+    # bestehende Daten mit UTC-Schlüsseln werden ohne Migration weiterverwendet
+    await gconf.days.set({"2026-09-19": {"joins": 4, "leaves": 0, "members": 50, "messages": {}, "voice_sec": {}}})
+    days = await cog.get_days(g, 3)
+    assert days[0][1]["joins"] == 4 and days[1][1]["members"] == 50, days
+    print("Zeitzone: Zählung vor/nach lokaler Mitternacht, get_days, Mitglieder-Tagesendstand, Altdaten OK")
+
+    # 2) Voice über lokale Mitternacht
+    await fresh()
+    now[0] = ts(2026, 9, 20, 23, 30)
+    await cog.on_voice_state_update(kai, B(None), B(lobby))
+    now[0] = ts(2026, 9, 21, 0, 45)
+    await cog.on_voice_state_update(kai, B(lobby), B(None))
+    await cog.flush()
+    d = await gconf.days()
+    assert d["2026-09-20"]["voice_sec"] == {str(lobby.id): 1800}, d
+    assert d["2026-09-21"]["voice_sec"] == {str(lobby.id): 2700}, d
+
+    # 3) Sommerzeit-Beginn 29.03.2026 (Tag mit 23 h): 28.03. 22:00 -> 30.03. 01:00
+    await fresh()
+    now[0] = ts(2026, 3, 28, 22)
+    await cog.on_voice_state_update(mia, B(None), B(lobby))
+    now[0] = ts(2026, 3, 30, 1)
+    await cog.on_voice_state_update(mia, B(lobby), B(None))
+    await cog.flush()
+    d = await gconf.days()
+    v = {k: d[k]["voice_sec"].get(str(lobby.id)) for k in ("2026-03-28", "2026-03-29", "2026-03-30")}
+    assert v == {"2026-03-28": 7200, "2026-03-29": 23 * 3600, "2026-03-30": 3600}, v
+    assert sum(v.values()) == now[0] - ts(2026, 3, 28, 22)
+
+    # 4) Sommerzeit-Ende 25.10.2026 (Tag mit 25 h): 24.10. 23:00 -> 26.10. 00:30, dazwischen ein Flush
+    await fresh()
+    now[0] = ts(2026, 10, 24, 23)
+    await cog.on_voice_state_update(mia, B(None), B(lobby))
+    now[0] = ts(2026, 10, 25, 2, 30, fold=0)           # 02:30 Sommerzeit (die Stunde kommt zweimal)
+    await cog.on_message(S.msg(g, kai, allg))
+    now[0] = ts(2026, 10, 25, 2, 30, fold=1)           # 02:30 Winterzeit – derselbe Tag
+    await cog.on_message(S.msg(g, kai, allg))
+    now[0] = ts(2026, 10, 25, 12)
+    await cog.flush()                                   # laufende Sitzung bis 12:00 anrechnen (13 h echte Zeit)
+    assert (await gconf.days())["2026-10-25"]["voice_sec"][str(lobby.id)] == 13 * 3600
+    now[0] = ts(2026, 10, 26, 0, 30)
+    await cog.on_voice_state_update(mia, B(lobby), B(None))
+    await cog.flush()
+    d = await gconf.days()
+    v = {k: d[k]["voice_sec"].get(str(lobby.id)) for k in ("2026-10-24", "2026-10-25", "2026-10-26")}
+    assert v == {"2026-10-24": 3600, "2026-10-25": 25 * 3600, "2026-10-26": 1800}, v
+    assert d["2026-10-25"]["messages"][str(allg.id)] == 2, d["2026-10-25"]
+    now[0] = ts(2026, 10, 26, 0, 30)
+    assert [k for k, _ in await cog.get_days(g, 3)] == ["2026-10-24", "2026-10-25", "2026-10-26"]
+    now[0] = ts(2026, 3, 30, 0, 30)
+    assert [k for k, _ in await cog.get_days(g, 3)] == ["2026-03-28", "2026-03-29", "2026-03-30"]
+    print("Zeitzone: Voice über Mitternacht und Sommerzeit-Umstellung (29.03. = 23 h, 25.10. = 25 h) OK")
+
+    # 5) Aufräumen nach lokalem Datum: 26.09. 00:30 Berlin = 25.09. 22:30 UTC
+    await fresh()
+    await gconf.retention_days.set(7)
+    now[0] = ts(2026, 9, 26, 0, 30)
+    await gconf.days.set({"2026-09-19": {"joins": 1}, "2026-09-20": {"joins": 1}})
+    assert await cog.cleanup() >= 1 and list(await gconf.days()) == ["2026-09-20"]   # (Server 2 räumt mit auf)
+    await gconf.days.set({"2026-09-19": {"joins": 1}, "2026-09-20": {"joins": 1}})
+    await gconf.timezone.set("UTC"); cog.invalidate(g.id)
+    await cog.cleanup()
+    assert sorted(await gconf.days()) == ["2026-09-19", "2026-09-20"], "in UTC ist noch der 25.09. -> 19.09. bleibt"
+    await gconf.timezone.set("Europe/Berlin"); cog.invalidate(g.id)
+    await gconf.retention_days.set(90)
+    print("Zeitzone: Aufräumen nach lokalem Datum OK")
+
+    # 6) Befehl [p]statsset timezone: anzeigen, setzen (gilt ab dann), ungültig ablehnen
+    await fresh()
+    now[0] = ts(2026, 9, 21, 0, 30)                     # Berlin 21.09., UTC 20.09. 22:30
+    await cog.statsset_timezone.callback(cog, ctx, None)
+    assert "Europe/Berlin" in ctx.sent[-1][0] and "21.09.2026 00:30" in ctx.sent[-1][0], ctx.sent[-1]
+    for bad in ("Mars/Olympus", "../etc/passwd", "Berlin"):
+        await cog.statsset_timezone.callback(cog, ctx, bad)
+        assert "Unbekannte Zeitzone" in ctx.sent[-1][0], ctx.sent[-1]
+        assert await gconf.timezone() == "Europe/Berlin"
+    await cog.on_message(S.msg(g, kai, allg))           # noch Berlin -> 21.09.
+    await cog.statsset_timezone.callback(cog, ctx, "UTC")
+    assert "UTC" in ctx.sent[-1][0] and await gconf.timezone() == "UTC"
+    await cog.on_message(S.msg(g, kai, allg))           # jetzt UTC -> 20.09.
+    assert sorted(cog._pending[g.id]) == ["2026-09-20", "2026-09-21"], cog._pending[g.id]
+    await cog.stats.callback(cog, ctx, 7)
+    assert "Zeitzone UTC" in ctx.sent[-1][1]["embed"].description
+    await cog.statsset_settings.callback(cog, ctx)
+    assert ctx.sent[-1][1]["embed"].fields[-1].value == "UTC"
+    await cog.statsset_timezone.callback(cog, ctx, " Europe/Berlin ")
+    assert await gconf.timezone() == "Europe/Berlin" and (await cog.guild_tz(g)).key == "Europe/Berlin"
+    await cog.stats.callback(cog, ctx, 7)
+    assert "Zeitzone Europe/Berlin" in ctx.sent[-1][1]["embed"].description
+    print("Zeitzone: [p]statsset timezone (anzeigen, setzen, ungültig abgelehnt, gilt ab dann) OK")
+
+    await cog.flush()
+    cog._pending.clear()
+    cog._members_written.clear()
+    await gconf.days.set(saved_days)
+    now[0] = saved_clock
 
 
 async def main():
@@ -118,7 +272,7 @@ async def main():
     assert (await gconf.days())["2026-09-20"]["voice_sec"][str(gaming.id)] == 150
     assert cog._voice[(g.id, lena.id)][1] == now[0]
     await cog.on_voice_state_update(lena, B(gaming), B(None))
-    # Mitternacht: Sitzung 23:59 -> 00:02 wird auf beide Tage verteilt
+    # Mitternacht (Ortszeit Berlin): Sitzung 23:59 -> 00:02 wird auf beide Tage verteilt
     now[0] = ts(2026, 9, 20, 23, 59)
     await cog.on_voice_state_update(tom, B(None), B(lobby))
     now[0] = ts(2026, 9, 21, 0, 2)
@@ -133,6 +287,9 @@ async def main():
     lobby.members = []; afk.members = []
     cog._voice.clear()
     print("Voice-Zeit (AFK/Bots ausgenommen, Kanalwechsel, laufende Sitzung, Mitternacht, Startbestand) OK")
+
+    # ------------------------------------------------------------ 2b) Zeitzone des Servers
+    await tz_tests(cog, bot, g, gconf, now, ctx)
 
     # ------------------------------------------------------------ 3) Keine Personendaten
     raw = await cog.config.all_guilds()
@@ -207,6 +364,11 @@ async def main():
               "Voice-Stunden", "Top-10-Textkanäle", "Offene Tickets", "Kommende Raids", "CSV je Tag"):
         assert s in t, s
     assert t.count("<svg viewBox") >= 6, t.count("<svg viewBox")
+    # Zeitzone: Hinweis im Kopf, Feld in den Einstellungen mit Vorschlagsliste, Raid-Zeit in Ortszeit
+    assert "Tage nach Zeitzone <b>Europe/Berlin</b>" in t and "Tage in UTC" not in t
+    assert "name='timezone' value='Europe/Berlin'" in t and "list='ss-timezones'" in t
+    assert "<datalist id='ss-timezones'>" in t and "<option value='Europe/Vienna'>" in t
+    assert re.search(r"nächster: \d\d\.\d\d\. \d\d:\d\d CES?T", t), "Raid-Zeit in Server-Zeitzone"
     data30 = await cog.get_days(g, 30)
     day = data30[-5]
     n_msgs = sum(day[1]["messages"].values())
@@ -247,6 +409,16 @@ async def main():
     d7 = await cog.get_days(g, 7)
     assert rows[3][0] == d7[2][0] and int(rows[3][5]) == sum(d7[2][1]["messages"].values()), rows[3]
     assert int(rows[3][3]) == d7[2][1]["joins"] - d7[2][1]["leaves"]
+    # CSV-Datum = lokales Datum: 21.09. 00:30 Berlin ist in UTC noch der 20.09.
+    real_now = now[0]
+    now[0] = ts(2026, 9, 21, 0, 30)
+    await cog.on_message(S.msg(g, kai, allg))
+    r = await client.get("/cogs/serverstats?guild=1000&range=7&export=days", headers=OWNER)
+    lrows = list(csv.reader(io.StringIO((await r.read()).decode("utf-8").lstrip("\ufeff"))))
+    assert lrows[-1][0] == "2026-09-21" and lrows[1][0] == "2026-09-15", (lrows[1], lrows[-1])
+    assert int(lrows[-1][5]) == sum((await gconf.days()).get("2026-09-21", {}).get("messages", {}).values()) + 1
+    cog._pending.pop(g.id, None)
+    now[0] = real_now
     sup.name = "=HYPERLINK(\"x\")"
     r = await client.get("/cogs/serverstats?guild=1000&range=30&export=channels", headers=OWNER)
     crow = list(csv.reader(io.StringIO((await r.read()).decode("utf-8").lstrip("﻿"))))
@@ -274,12 +446,30 @@ async def main():
         r = await client.post("/cogs/serverstats", headers=OWNER, **NR, data=d)
         assert "err=" in r.headers["Location"] and msg in unquote_plus(r.headers["Location"]), (bad, r.headers["Location"])
     assert await gconf.retention_days() == 30
+    # Zeitzone speichern (Cache wird verworfen) / ungültige ablehnen / Feld fehlt -> unverändert
+    base_form = {"csrf_token": tok, "form": "settings", "guild": "1000", "retention_days": "30", "language": "de"}
+    for bad in ("Mars/Olympus", "", "../../etc/passwd", "<script>"):
+        r = await client.post("/cogs/serverstats", headers=OWNER, **NR, data={**base_form, "timezone": bad})
+        loc = unquote_plus(r.headers["Location"])
+        assert "err=Unbekannte Zeitzone" in loc, (bad, loc)
+    assert await gconf.timezone() == "Europe/Berlin"
+    assert (await cog.guild_tz(g)).key == "Europe/Berlin"
+    r = await client.post("/cogs/serverstats", headers=OWNER, **NR, data={**base_form, "timezone": " America/New_York "})
+    assert "ok=" in r.headers["Location"] and await gconf.timezone() == "America/New_York"
+    assert (await cog.guild_tz(g)).key == "America/New_York", "Zeitzonen-Cache muss nach dem Speichern neu geladen sein"
+    r = await client.get("/cogs/serverstats?guild=1000", headers=OWNER); tn = await r.text()
+    assert "Tage nach Zeitzone <b>America/New_York</b>" in tn and "value='America/New_York'" in tn
+    r = await client.post("/cogs/serverstats", headers=OWNER, **NR, data=base_form)          # ohne Feld
+    assert "ok=" in r.headers["Location"] and await gconf.timezone() == "America/New_York"
+    r = await client.post("/cogs/serverstats", headers=OWNER, **NR, data={**base_form, "timezone": "Europe/Berlin"})
+    assert await gconf.timezone() == "Europe/Berlin" and (await cog.guild_tz(g)).key == "Europe/Berlin"
     # Tom (Ansehen): Seite ja, Speichern nein
     r = await client.get("/cogs/serverstats?guild=1000", headers=TOM); tt = await r.text()
     assert r.status == 200 and "Netto-Wachstum" in tt
     r = await client.post("/cogs/serverstats", headers=TOM, **NR, data={
-        "csrf_token": csrf(tt), "form": "settings", "guild": "1000", "retention_days": "60", "language": "de"})
-    assert r.status in (302, 403) and await gconf.retention_days() == 30
+        "csrf_token": csrf(tt), "form": "settings", "guild": "1000", "retention_days": "60", "language": "de",
+        "timezone": "UTC"})
+    assert r.status in (302, 403) and await gconf.retention_days() == 30 and await gconf.timezone() == "Europe/Berlin"
     # Lena (Bearbeiten) darf, aber nicht auf Server 2000
     r = await client.get("/cogs/serverstats?guild=1000", headers=LENA); lt = await r.text()
     r = await client.post("/cogs/serverstats", headers=LENA, **NR, data={
@@ -333,7 +523,7 @@ async def main():
     assert "serverstats" in wc.pages
     await cog.cog_unload()
     assert "serverstats" not in wc.pages and cog._pending == {}
-    today = time.strftime("%Y-%m-%d", time.gmtime(now[0]))
+    today = datetime.fromtimestamp(now[0], BERLIN).date().isoformat()
     assert sum((await gconf.days())[today]["messages"].values()) >= 2
     print("cog_unload: Puffer geschrieben, Dashboard-Seite entfernt OK")
     print("ALLE SERVERSTATS-TESTS OK")

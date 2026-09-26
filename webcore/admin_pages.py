@@ -10,7 +10,7 @@ import html
 from datetime import datetime, timezone
 
 from . import ui
-from .access import EDIT, NONE, VIEW, parse_level
+from .access import EDIT, LEVEL_LABEL, NONE, VIEW, parse_level
 
 _MODE_TEXT = {
     "owner": "Nur Bot-Owner (plus die hier vergebenen Rollen-Rechte).",
@@ -453,7 +453,85 @@ def _fmt_iso(value) -> str:
         return str(value or "—")
 
 
-def render_backup_preview(*, guild, data: dict, plan: dict, token: str, csrf: str, filename: str) -> str:
+def _render_webcore_plan(wplan: dict, *, page_names: dict, can_import: bool) -> tuple[str, str]:
+    """Block „Dashboard-Einstellungen“ der Import-Vorschau. -> (Diff-HTML, Schalter fürs Bestätigungsformular)."""
+    def page(slug):
+        return _esc(page_names.get(slug, slug))
+
+    def lvl(name):
+        return _esc(LEVEL_LABEL[parse_level(name)])
+
+    def items(pairs, fmt):
+        if not pairs:
+            return "<span class='wc-muted'>—</span>"
+        return "<div class='wc-keys'>" + "".join(f"<code>{fmt(p)}</code>" for p in pairs) + "</div>"
+
+    rows = [
+        ui.row(
+            f"<div class='wc-cell-title'>{_esc(r['name'])}</div><div class='wc-cell-sub mono'>{_esc(r['id'])}</div>",
+            items(r["gain"], lambda p: f"{page(p[0])}: {lvl(p[1])}"),
+            items(r["lose"], lambda p: f"{page(p[0])} ({lvl(p[1])})"),
+            items(r["change"], lambda p: f"{page(p[0])}: {lvl(p[1])} → {lvl(p[2])}"),
+        )
+        for r in wplan["roles"]
+    ]
+    parts = ["<div class='wc-sub'><i class='bi bi-shield-lock'></i> Dashboard-Einstellungen</div>"]
+    if wplan["role_perms"] is not None:
+        parts.append(ui.table(["Rolle", "Bekommt", "Verliert", "Ändert"], rows, id="wc-import-webcore",
+                              empty_text="Rollen-Rechte: keine Änderungen."))
+        parts.append("<p class='wc-hint' style='margin:8px 0 12px'>"
+                     + ("Gleicher Server: die Rechte-Matrix wird auf den Stand der Sicherung gesetzt – Rollen, die "
+                        "dort fehlen, verlieren ihre Rechte." if wplan["same_guild"] else
+                        "Anderer Server: nur Rollen aus der Sicherung, die es hier gibt, werden gesetzt – alle "
+                        "anderen Rollen behalten ihre Rechte.") + "</p>")
+    kv = []
+    portal = wplan.get("portal")
+    if portal:
+        onoff = {True: "an", False: "aus"}
+        kv.append(("Mein Bereich", (f"{onoff[portal['old']]} → <b>{onoff[portal['new']]}</b> "
+                                    + ui.badge("Änderung", "warn")) if portal["changed"]
+                   else f"{onoff[portal['old']]} " + ui.badge("unverändert", "ok")))
+    chan = wplan.get("audit_channel")
+    if chan:
+        def cname(cid, name):
+            if not cid:
+                return "aus"
+            return f"#{_esc(name)}" if name else f"<span class='mono'>{_esc(cid)}</span>"
+        old_c, new_c = cname(chan["old"], chan["old_name"]), cname(chan["new"], chan["new_name"])
+        kv.append(("Log-Kanal (Audit)", f"{old_c} → <b>{new_c}</b> " + ui.badge("Änderung", "warn")
+                   if chan["changed"] else f"{old_c} " + ui.badge("unverändert", "ok")))
+    if kv:
+        parts.append(_kv(kv))
+    problems = []
+    if wplan["skipped_roles"]:
+        problems.append("Rollen gibt es auf diesem Server nicht (übersprungen): " + _key_list(wplan["skipped_roles"]))
+    if wplan["unknown_slugs"]:
+        problems.append("Unbekannte Seiten (übersprungen): " + _key_list(wplan["unknown_slugs"]))
+    if wplan["invalid_levels"]:
+        problems.append("Ungültige Stufe (übersprungen, bisheriger Wert bleibt): " + _key_list(
+            [f"{role} / {slug}: {val}" for role, slug, val in wplan["invalid_levels"]]))
+    if wplan["skipped_channel"] is not None:
+        problems.append("Log-Kanal gibt es auf diesem Server nicht (übersprungen): "
+                        f"<span class='mono'>{_esc(wplan['skipped_channel'])}</span>")
+    for err in wplan["errors"]:
+        problems.append("Ungültig (übersprungen): " + _esc(err))
+    if problems:
+        parts.append("<div style='height:10px'></div>" + ui.callout("<br>".join(problems), tone="warn"))
+    switch = ""
+    if not can_import:
+        parts.append(ui.callout("Dashboard-Einstellungen (Rollen-Rechte) importiert nur der Bot-Owner – "
+                                "sie werden übersprungen.", tone="info", icon="bi-shield-lock"))
+    elif wplan["changes"]:
+        switch = ui.switch("include_webcore", "Dashboard-Einstellungen übernehmen", False,
+                           desc=f"{int(wplan['changes'])} Änderung(en) an Rollen-Rechten, Mein Bereich bzw. "
+                                "Log-Kanal dieses Servers. <b>Sicherheitsrelevant</b> – bitte die Liste oben prüfen.")
+    else:
+        parts.append("<p class='wc-hint' style='margin:10px 0 0'>Dashboard-Einstellungen: keine Änderungen.</p>")
+    return "".join(parts), switch
+
+
+def render_backup_preview(*, guild, data: dict, plan: dict, token: str, csrf: str, filename: str,
+                          page_names: dict | None = None, can_webcore: bool = False) -> str:
     """Vorschau eines hochgeladenen Backups mit Bestätigung."""
     src_id, src_name = data.get("guild_id"), data.get("guild_name") or "?"
     info = _kv([
@@ -510,6 +588,11 @@ def render_backup_preview(*, guild, data: dict, plan: dict, token: str, csrf: st
     if unchanged:
         table += ("<p class='wc-hint' style='margin:10px 0 0'><b>Unverändert</b> (bereits identisch): "
                   + ", ".join(_esc(n) for n in unchanged) + "</p>")
+    wc_block, wc_switch = "", ""
+    if plan.get("webcore") is not None:
+        wc_block, wc_switch = _render_webcore_plan(plan["webcore"], page_names=page_names or {},
+                                                   can_import=can_webcore)
+        table += ui.divider() + wc_block
     glob = ""
     if plan["has_global"]:
         glob = ui.switch("include_global", "Botweite Einstellungen übernehmen", False,
@@ -517,7 +600,7 @@ def render_backup_preview(*, guild, data: dict, plan: dict, token: str, csrf: st
                               "bleiben unverändert.")
     confirm_form = ui.form(
         "/backup",
-        glob + ui.actions(
+        (ui.switches(*[x for x in (glob, wc_switch) if x]) if glob or wc_switch else "") + ui.actions(
             ui.button("Import ausführen", icon="bi-upload", kind="danger", name="form", value="confirm",
                       confirm=f"Einstellungen auf „{guild.name}“ jetzt überschreiben? Rückgängig ist möglich, "
                               "solange der Bot läuft."),
@@ -531,7 +614,7 @@ def render_backup_preview(*, guild, data: dict, plan: dict, token: str, csrf: st
                    desc="Es wird erst etwas geändert, wenn du den Import bestätigst.")
 
 
-def render_backup(*, guild, cogs: list, csrf: str, undo: list, preview: str = "") -> str:
+def render_backup(*, guild, cogs: list, csrf: str, undo: list, preview: str = "", webcore_export: bool = False) -> str:
     """Owner-Seite „Sichern & Wiederherstellen“. cogs: [(name, n_guild_keys, n_global_keys)],
     undo: [{"id", "time", "user", "cogs", "keys", "source"}]."""
     head = ui.hero(
@@ -549,6 +632,10 @@ def render_backup(*, guild, cogs: list, csrf: str, undo: list, preview: str = ""
         cog_list = f"<ul class='wc-list'>{items}</ul>"
     else:
         cog_list = ui.empty("bi-puzzle", "Kein geladenes Modul mit Dashboard-Seite und Einstellungen.")
+    if webcore_export:
+        cog_list += ("<ul class='wc-list'><li><i class='bi bi-shield-lock'></i><span style='min-width:0'>"
+                     "<b>Dashboard-Einstellungen</b> <span class='wc-muted'>– Rollen-Rechte, Mein Bereich und "
+                     "Log-Kanal nur dieses Servers</span></span></li></ul>")
     export = ui.card(
         "Sichern (Export)",
         cog_list + ui.divider() + ui.form(

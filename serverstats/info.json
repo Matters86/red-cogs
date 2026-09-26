@@ -1,9 +1,9 @@
 {
     "name": "ServerStats",
     "short": "Server-Statistik: Beitritte, Abgänge, Mitglieder, Nachrichten und Voice-Zeit – ohne Personendaten.",
-    "description": "Zählt pro Tag Beitritte, Abgänge, die Mitgliederzahl, Nachrichten je Kanal (nur Anzahl, keine Inhalte, ohne Bots) und Voice-Zeit je Kanal (ohne AFK-Kanal). Dashboard-Seite „Statistik“ mit Kennzahlen, Diagrammen (Inline-SVG) für 7/30/90 Tage, Top-10-Kanälen und CSV-Export; Kurzübersicht per [p]stats. Schreibt gepuffert (alle 60 s) und löscht alte Tage automatisch (Standard 90 Tage).",
+    "description": "Zählt pro Tag (in der Zeitzone des Servers, Standard Europe/Berlin) Beitritte, Abgänge, die Mitgliederzahl, Nachrichten je Kanal (nur Anzahl, keine Inhalte, ohne Bots) und Voice-Zeit je Kanal (ohne AFK-Kanal). Dashboard-Seite „Statistik“ mit Kennzahlen, Diagrammen (Inline-SVG) für 7/30/90 Tage, Top-10-Kanälen und CSV-Export; Kurzübersicht per [p]stats. Schreibt gepuffert (alle 60 s) und löscht alte Tage automatisch (Standard 90 Tage).",
     "tags": ["stats", "statistik", "statistics", "analytics", "dashboard", "voice", "messages"],
-    "requirements": [],
+    "requirements": ["tzdata"],
     "min_bot_version": "3.5.0",
     "hidden": false,
     "disabled": false,

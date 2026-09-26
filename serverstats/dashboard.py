@@ -3,7 +3,9 @@
 * GET  ``/cogs/serverstats?guild=<id>&range=7|30|90``        -> Seite (Übersicht, Kanäle, Einstellungen)
 * GET  ``…&export=days``                                     -> CSV je Tag
 * GET  ``…&export=channels``                                 -> CSV je Kanal (Summe im Zeitraum)
-* POST ``form=settings`` (Aufbewahrung, ignorierte Kanäle, Sprache) · ``form=reset`` (alle Tage löschen)
+* POST ``form=settings`` (Aufbewahrung, Zeitzone, ignorierte Kanäle, Sprache) · ``form=reset`` (alle Tage löschen)
+
+Alle Tage (Diagramm-Achsen, Tabellen, CSV-Spalte ``datum``) sind Kalendertage in der Zeitzone des Servers.
 
 Nur UI-Kit von WebCore, Diagramme als Inline-SVG (``charts.py``). Rechte: Server über
 ``visible_guilds`` (GET = Ansehen, POST = Bearbeiten).
@@ -86,7 +88,7 @@ async def dashboard_handler(cog, request):
 # --------------------------------------------------------------------------- #
 #  Kacheln aus anderen Cogs (nur lesend, robust wenn nicht geladen)
 # --------------------------------------------------------------------------- #
-async def other_tiles(bot, guild) -> list[tuple]:
+async def other_tiles(bot, guild, tz=timezone.utc) -> list[tuple]:
     tiles = []
     tickets = bot.get_cog("Tickets")
     if tickets is not None and getattr(tickets, "config", None) is not None:
@@ -105,7 +107,8 @@ async def other_tiles(bot, guild) -> list[tuple]:
                               if isinstance(e, dict) and not e.get("completed") and (e.get("start_ts") or 0) > now)
             hint = None
             if upcoming:
-                hint = "nächster: " + datetime.fromtimestamp(upcoming[0], timezone.utc).strftime("%d.%m. %H:%M UTC")
+                nxt = datetime.fromtimestamp(upcoming[0], tz)
+                hint = "nächster: " + nxt.strftime("%d.%m. %H:%M ") + (nxt.tzname() or "")
             tiles.append(("Kommende Raids", len(upcoming), "bi-calendar-event", hint, "info" if upcoming else None))
         except Exception:  # noqa: BLE001
             log.debug("ServerStats: Raids nicht lesbar", exc_info=True)
@@ -125,6 +128,7 @@ async def _render(cog, request):
     conf = await cog.config.guild(guild).all()
     csrf = request.get("webcore_csrf", "")
     rng = _range(request)
+    tz = await cog.guild_tz(guild)
     data = await cog.get_days(guild, rng)
     s = cog.summarize(data)
     labels = [_short(d) for d, _ in data]
@@ -151,7 +155,7 @@ async def _render(cog, request):
     head = ui.hero(
         "bi-graph-up", "",
         f"Aktivität auf <b>{ui.esc(guild.name)}</b> – nur Zählungen, keine Inhalte und keine Personendaten. "
-        "Tage in UTC.",
+        f"Tage nach Zeitzone <b>{ui.esc(tz.key)}</b> (Mitternacht zu Mitternacht).",
         actions=range_btns,
     )
     net = s["net"]
@@ -162,7 +166,7 @@ async def _render(cog, request):
         ("Nachrichten", charts.fmt_num(s["messages"]), "bi-chat-dots", f"Ø {charts.fmt_num(round(s['messages'] / rng, 1))} pro Tag", None),
         ("Voice-Stunden", charts.fmt_num(round(s["voice_hours"], 1)), "bi-mic", "ohne AFK-Kanal", None),
     ])
-    tiles = await other_tiles(cog.bot, guild)
+    tiles = await other_tiles(cog.bot, guild, tz)
     extra = ui.stats(tiles) if tiles else ""
 
     # --- Diagramme ---
@@ -226,7 +230,11 @@ async def _render(cog, request):
                        icon="bi-list-ol", desc="Summen im gewählten Zeitraum. Ignorierte Kanäle werden nicht gezählt.")
 
     # --- Einstellungen ---
-    from .serverstats import MAX_RETENTION, MIN_RETENTION
+    from .serverstats import COMMON_TIMEZONES, MAX_RETENTION, MIN_RETENTION
+    tz_name = conf.get("timezone") or tz.key
+    local_now = datetime.fromtimestamp(cog._clock(), tz).strftime("%d.%m.%Y, %H:%M")
+    tz_list = "<datalist id='ss-timezones'>" + "".join(
+        f"<option value='{ui.esc(z)}'></option>" for z in COMMON_TIMEZONES) + "</datalist>"
     ignored = [int(c) for c in conf.get("ignored_channels") or []]
     settings = ui.form(
         f"/cogs/{SLUG}",
@@ -234,6 +242,12 @@ async def _render(cog, request):
             ui.field("Aufbewahrung", ui.number("retention_days", conf["retention_days"], min=MIN_RETENTION,
                                                max=MAX_RETENTION, unit="Tage"),
                      help=f"Ältere Tage werden stündlich automatisch gelöscht ({MIN_RETENTION}–{MAX_RETENTION}, Standard 90)."),
+            ui.field("Zeitzone", ui.text_input("timezone", tz_name, placeholder="Europe/Berlin",
+                                               attrs={"list": "ss-timezones", "autocomplete": "off",
+                                                      "spellcheck": "false"}) + tz_list,
+                     help="IANA-Name, z. B. <code>Europe/Berlin</code>, <code>Europe/Vienna</code>, <code>UTC</code> "
+                          f"(Vorschläge beim Tippen). Jetzt dort: {ui.esc(local_now)}. Tage laufen von Mitternacht "
+                          "zu Mitternacht dieser Zeitzone (Sommerzeit inklusive); ein Wechsel gilt ab dann."),
             ui.field("Sprache", ui.select("language", list(LANGUAGES.items()), conf["language"]),
                      help="Sprache von <code>[p]stats</code>."),
             ui.field("Ignorierte Kanäle", ui.select("ignored", _channel_items(guild), ignored, multiple=True,
@@ -305,7 +319,7 @@ async def _export(cog, request):
 #  Speichern (POST)
 # --------------------------------------------------------------------------- #
 async def _handle_post(cog, request):
-    from .serverstats import MAX_RETENTION, MIN_RETENTION, RANGES
+    from .serverstats import MAX_RETENTION, MIN_RETENTION, RANGES, valid_tz
 
     data = await request.post()
     guild = _pick(await _visible(request), data.get("guild"))
@@ -325,6 +339,10 @@ async def _handle_post(cog, request):
         lang = data.get("language") or "de"
         if lang not in LANGUAGES:
             return _redirect(guild.id, err="Unbekannte Sprache", rng=rng)
+        tz_raw = data.get("timezone")
+        tz_name = (tz_raw if tz_raw is not None else await gconf.timezone()).strip()
+        if not valid_tz(tz_name):
+            return _redirect(guild.id, err=f"Unbekannte Zeitzone: {tz_name[:60]}", rng=rng)
         valid = {c.id for c in guild.text_channels} | {c.id for c in guild.voice_channels}
         ignored = []
         for raw in data.getall("ignored", []):
@@ -334,6 +352,7 @@ async def _handle_post(cog, request):
                 ignored.append(int(raw))
         await gconf.retention_days.set(keep)
         await gconf.language.set(lang)
+        await gconf.timezone.set(tz_name)
         await gconf.ignored_channels.set(ignored)
         cog.invalidate(guild.id)
         for k in [k for k, sess in cog._voice.items() if k[0] == guild.id and sess[0] in ignored]:

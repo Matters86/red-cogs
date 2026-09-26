@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+from urllib.parse import unquote_plus
 
 from aiohttp import FormData
 from aiohttp.test_utils import TestClient, TestServer
@@ -262,6 +263,152 @@ async def main():
     await client.post("/backup", headers=OWNER, data={"csrf_token": tok, "form": "undo", "guild": "2000", "undo": uid}, **nr)
     assert await demo.config.public_name() == "Demo" and await demo.config.nested() == {"mode": "a", "password": "pw-geheim-123"}
     print("Import botweit (nur mit Häkchen, Secrets bleiben) + Rückgängig – OK")
+
+    # ------------------------------------------------------------ Dashboard-Einstellungen (Abschnitt "webcore")
+    TOM = {"X-Test-User": "12"}     # Moderator (1102) auf Server 1000, bisher ohne Rechte
+    NINA = {"X-Test-User": "15"}    # Allowlist (volle Sicht, aber kein Owner)
+    rp_before = {"1000": {"1101": {"tickets": "edit"}, "1104": {"poll": "view"}},
+                 "2000": {"2101": {"tickets": "view"}}}
+    await wc.config.role_perms.set(json.loads(json.dumps(rp_before)))
+    await wc.config.member_portal.set({"1000": True})
+    await wc.config.audit_channels.set({"1000": 1004, "2000": 2002})
+    await wc.config.allowed_users.set([15])
+    wc_state = lambda: asyncio.gather(wc.config.role_perms(), wc.config.member_portal(), wc.config.audit_channels())
+    state0 = await wc_state()
+
+    # Export: Block nur für den gewählten Server, keine anderen Server/Allowlist/Secrets
+    t = await (await client.get("/backup?guild=1000", headers=OWNER)).text()
+    assert "Dashboard-Einstellungen" in t
+    tok = csrf(t)
+    r = await client.post("/backup", headers=OWNER, data={"csrf_token": tok, "form": "export", "guild": "1000"}, **nr)
+    body = await r.text(); exp = json.loads(body)
+    assert exp["version"] == 1 and exp["webcore"] == {
+        "role_perms": {"1101": {"tickets": "edit"}, "1104": {"poll": "view"}},
+        "member_portal": True, "audit_channel": 1004}, exp["webcore"]
+    sect = json.dumps(exp["webcore"])
+    assert "2101" not in sect and "2002" not in sect and "2000" not in sect
+    for needle in ("allowed_users", "Nina", "owner_ids", WH.CLIENT_SECRET, "secret_key", "access_mode"):
+        assert needle not in body, needle
+    r = await client.post("/backup", headers=OWNER, data={"csrf_token": tok, "form": "export", "guild": "2000"}, **nr)
+    assert json.loads(await r.text())["webcore"] == {"role_perms": {"2101": {"tickets": "view"}},
+                                                     "member_portal": False, "audit_channel": 2002}
+    assert "Dashboard-Einstellungen" in (await wc.config.audit())[0]["result"]
+    t_n = await (await client.get("/backup?guild=1000", headers=NINA)).text()
+    tok_n = csrf(t_n)
+    assert "Dashboard-Einstellungen" not in t_n
+    r = await client.post("/backup", headers=NINA, data={"csrf_token": tok_n, "form": "export", "guild": "1000"}, **nr)
+    assert r.status == 200 and "webcore" not in json.loads(await r.text()), "Allowlist exportiert keine Rechte"
+    print("Export Dashboard-Einstellungen: nur gewählter Server, keine Allowlist/Secrets, nur Owner – OK")
+
+    # Import auf denselben Server: Vorschau mit Diff, Häkchen Standard aus
+    wsec = {"role_perms": {"1101": {"tickets": "view", "poll": "edit"}, "1102": {"poll": "view"},
+                           "9999": {"tickets": "edit"}, "1103": {"tickets": "superadmin", "gibtsnicht": "edit"}},
+            "member_portal": False, "audit_channel": 1002}
+    wfile = {"format": "red-cogs-backup", "version": 1, "guild_id": 1000, "guild_name": "Matters Community",
+             "cogs": {}, "webcore": wsec}
+    wraw = json.dumps(wfile).encode()
+    r = await client.get("/cogs/poll?guild=1000", headers=TOM, **nr)
+    assert r.status != 200, r.status
+    r = await client.post("/backup?guild=1000", headers=OWNER, data=upload(tok, 1000, wraw), **nr)
+    loc = r.headers["Location"]; pid = re.search(r"preview=([^&]+)", loc).group(1)
+    t = await (await client.get(loc, headers=OWNER)).text()
+    for needle in ("Dashboard-Einstellungen", "id='wc-import-webcore'", "Support", "Moderator", "VIP",
+                   f"{wc.pages['poll'].name}: Bearbeiten", f"{wc.pages['tickets'].name}: Bearbeiten → Ansehen",
+                   "9999", "gibtsnicht", "superadmin", "Gleicher Server", "an → <b>aus</b>",
+                   "#logs → <b>#support</b>", "name='include_webcore'"):
+        assert needle in t, needle
+    assert "name='include_webcore' checked" not in t, "Häkchen muss standardmäßig aus sein"
+    assert await wc_state() == state0, "Vorschau darf nichts ändern"
+    # ohne Häkchen: nichts an den Dashboard-Einstellungen
+    r = await client.post("/backup", headers=OWNER, data={"csrf_token": tok, "form": "confirm", "guild": "1000",
+                                                          "preview": pid}, **nr)
+    assert "ok=" in r.headers["Location"] and await wc_state() == state0
+    assert "Dashboard" not in (await wc.config.audit())[0]["action"]
+    r = await client.get("/cogs/poll?guild=1000", headers=TOM, **nr)
+    assert r.status != 200
+    # Allowlist: sieht den Block, darf ihn aber nicht übernehmen
+    r = await client.post("/backup?guild=1000", headers=NINA, data=upload(tok_n, 1000, wraw), **nr)
+    loc = r.headers["Location"]; pid = re.search(r"preview=([^&]+)", loc).group(1)
+    t = await (await client.get(loc, headers=NINA)).text()
+    assert "importiert nur der Bot-Owner" in t and "name='include_webcore'" not in t
+    await client.post("/backup", headers=NINA, data={"csrf_token": tok_n, "form": "confirm", "guild": "1000",
+                                                     "preview": pid, "include_webcore": "on"}, **nr)
+    assert await wc_state() == state0, "Allowlist darf keine Rechte importieren"
+    # mit Häkchen (Owner)
+    r = await client.post("/backup?guild=1000", headers=OWNER, data=upload(tok, 1000, wraw), **nr)
+    pid = re.search(r"preview=([^&]+)", r.headers["Location"]).group(1)
+    r = await client.post("/backup", headers=OWNER, data={"csrf_token": tok, "form": "confirm", "guild": "1000",
+                                                          "preview": pid, "include_webcore": "on"}, **nr)
+    loc = unquote_plus(r.headers["Location"])
+    assert "ok=" in loc and "Dashboard-Rechte" in loc and "3 Dashboard-Einträge übersprungen" in loc, loc
+    rp, mp, ac = await wc_state()
+    assert rp["1000"] == {"1101": {"tickets": "view", "poll": "edit"}, "1102": {"poll": "view"}}, rp
+    assert rp["2000"] == rp_before["2000"] and mp == {} and ac == {"1000": 1002, "2000": 2002}, (mp, ac)
+    au = (await wc.config.audit())[0]
+    assert au["page"] == "backup" and "Dashboard-Rechte" in au["action"] and "Dashboard-Rechte" in au["result"], au
+    # Rechte greifen sofort: Tom (Moderator) sieht jetzt Umfragen, Kai (VIP) nicht mehr
+    r = await client.get("/cogs/poll?guild=1000", headers=TOM, **nr)
+    assert r.status == 200, r.status
+    r = await client.get("/cogs/poll?guild=1000", headers=KAI, **nr)
+    assert r.status != 200
+    print("Import Dashboard-Einstellungen: Diff-Vorschau, ohne Häkchen keine Änderung, nur Owner, mit Häkchen "
+          "Rechte/Portal/Kanal gesetzt, fremde Rolle/ungültige Stufe/unbekannte Seite gemeldet, Rechte sofort aktiv – OK")
+
+    # Rückgängig: nur Owner, stellt alles wieder her
+    t = await (await client.get("/backup?guild=1000", headers=OWNER)).text()
+    assert "Dashboard-Einstellungen" in t
+    uid = re.search(r"name='undo' value='([^']+)'", t).group(1)
+    r = await client.post("/backup", headers=NINA, data={"csrf_token": tok_n, "form": "undo", "guild": "1000",
+                                                         "undo": uid}, **nr)
+    assert "err=" in r.headers["Location"] and (await wc_state())[0]["1000"] != rp_before["1000"]
+    r = await client.post("/backup", headers=OWNER, data={"csrf_token": tok, "form": "undo", "guild": "1000",
+                                                          "undo": uid}, **nr)
+    assert "ok=" in r.headers["Location"] and "Dashboard-Rechte" in unquote_plus(r.headers["Location"])
+    assert await wc_state() == state0, await wc_state()
+    r = await client.get("/cogs/poll?guild=1000", headers=TOM, **nr)
+    assert r.status != 200
+    r = await client.get("/cogs/poll?guild=1000", headers=KAI, **nr)
+    assert r.status == 200
+    print("Rückgängig Dashboard-Einstellungen: Rechte/Portal/Kanal wiederhergestellt (Allowlist abgelehnt) – OK")
+
+    # Import auf einen anderen Server: fremde Rollen/Kanäle übersprungen, andere Rollen behalten Rechte
+    xfile = dict(exp, cogs={}, webcore={"role_perms": {"1101": {"tickets": "edit"}, "2101": {"poll": "edit"}},
+                                        "member_portal": True, "audit_channel": 1004})
+    r = await client.post("/backup?guild=2000", headers=OWNER, data=upload(tok, 2000, json.dumps(xfile).encode()), **nr)
+    loc = r.headers["Location"]; pid = re.search(r"preview=([^&]+)", loc).group(1)
+    t = await (await client.get(loc, headers=OWNER)).text()
+    for needle in ("Anderer Server", "Rollen gibt es auf diesem Server nicht", "1101",
+                   "Log-Kanal gibt es auf diesem Server nicht", "1004", "RP-Support", "aus → <b>an</b>"):
+        assert needle in t, needle
+    r = await client.post("/backup", headers=OWNER, data={"csrf_token": tok, "form": "confirm", "guild": "2000",
+                                                          "preview": pid, "include_webcore": "on"}, **nr)
+    rp, mp, ac = await wc_state()
+    assert rp["2000"] == {"2101": {"poll": "edit"}} and rp["1000"] == rp_before["1000"], rp
+    assert mp == {"1000": True, "2000": True} and ac == {"1000": 1004, "2000": 2002}, (mp, ac)
+    r = await client.get("/cogs/poll?guild=2000", headers=LENA, **nr)
+    assert r.status == 200, r.status
+    t = await (await client.get("/backup?guild=2000", headers=OWNER)).text()
+    uid = re.search(r"name='undo' value='([^']+)'", t).group(1)
+    await client.post("/backup", headers=OWNER, data={"csrf_token": tok, "form": "undo", "guild": "2000", "undo": uid}, **nr)
+    assert await wc_state() == state0
+    # Validierung direkt: falsche Typen, Stufen nur none/view/edit, "none" entzieht
+    wp = await bk.plan_webcore(wc, g1, {"role_perms": [], "member_portal": "ja", "audit_channel": "abc"}, same_guild=True)
+    assert len(wp["errors"]) == 3 and wp["changes"] == 0 and wp["portal"] is None and wp["audit_channel"] is None, wp
+    wp = await bk.plan_webcore(wc, g1, {"role_perms": {"1101": {"tickets": 2, "poll": "EDIT"},
+                                                       "1104": {"poll": "none"}, "1000": {"poll": "edit"}}},
+                               same_guild=False)
+    assert wp["invalid_levels"] == [("Support", "tickets", "2")], wp["invalid_levels"]
+    assert wp["skipped_roles"] == ["1000"], "@everyone wird übersprungen"
+    assert wp["role_perms"] == {"1101": {"tickets": "edit", "poll": "edit"}}, wp["role_perms"]
+    assert bk.webcore_problems(wp) == 2
+    # alte Datei ohne Abschnitt: kein Block
+    old = json.dumps({"format": "red-cogs-backup", "version": 1, "guild_id": 1000,
+                      "cogs": {"WsDemo": {"guild": {"greeting": "Alt"}}}}).encode()
+    r = await client.post("/backup?guild=1000", headers=OWNER, data=upload(tok, 1000, old), **nr)
+    t = await (await client.get(r.headers["Location"], headers=OWNER)).text()
+    assert "Import ausführen" in t and "wc-import-webcore" not in t and "include_webcore" not in t
+    await wc.config.allowed_users.set([])
+    print("Dashboard-Einstellungen anderer Server + Validierung (Typen, Stufen, @everyone), alte Dateien ohne Block – OK")
 
     # ------------------------------------------------------------ Fehlerfälle beim Upload
     async def up(content, **kw):

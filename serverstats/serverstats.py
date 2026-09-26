@@ -1,11 +1,16 @@
 """ServerStats – Server-Statistik ohne personenbezogene Daten.
 
-Erfasst pro Server und **UTC-Tag**:
+Erfasst pro Server und **Kalendertag in der Zeitzone des Servers** (Guild-Config ``timezone``,
+IANA-Name, Standard ``Europe/Berlin``; Sommerzeit inklusive):
 
 * Beitritte, Abgänge, Mitgliederzahl (Tagesendstand = letzter Stand des Tages),
 * Nachrichten je Kanal (nur Zählung, keine Inhalte; Bots/Webhooks ausgenommen; Threads zählen
   zu ihrem Elternkanal),
-* Voice-Zeit je Kanal in Sekunden (ohne AFK-Kanal, ohne Bots).
+* Voice-Zeit je Kanal in Sekunden (ohne AFK-Kanal, ohne Bots), an lokaler Mitternacht auf die Tage
+  aufgeteilt (auch an Sommerzeit-Tagen mit 23 bzw. 25 Stunden).
+
+Ältere Versionen haben in UTC-Tagen gezählt; diese Tage werden unverändert weiterverwendet (Versatz
+höchstens ein paar Stunden). Ein Zeitzonen-Wechsel gilt ab dann, bisherige Tage bleiben, wie sie sind.
 
 Datenschutz: Dauerhaft gespeichert werden nur Tages-Summen je Kanal. Laufende Voice-Sitzungen
 (Mitglied → Kanal, Startzeit) liegen ausschließlich im Arbeitsspeicher.
@@ -20,8 +25,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional, Union
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import discord
 from discord.ext import tasks
@@ -38,11 +44,53 @@ CLEANUP_EVERY = 60          # jede 60. Runde (≈ stündlich) alte Tage entferne
 DEFAULT_RETENTION = 90
 MIN_RETENTION, MAX_RETENTION = 7, 730
 RANGES = (7, 30, 90)
+DEFAULT_TZ = "Europe/Berlin"
+
+# Vorschläge für das Dashboard (Freitext bleibt möglich – jeder IANA-Name ist erlaubt).
+COMMON_TIMEZONES = (
+    "Europe/Berlin", "Europe/Vienna", "Europe/Zurich", "Europe/Amsterdam", "Europe/Brussels", "Europe/Luxembourg",
+    "Europe/Paris", "Europe/London", "Europe/Dublin", "Europe/Lisbon", "Europe/Madrid", "Europe/Rome",
+    "Europe/Warsaw", "Europe/Prague", "Europe/Stockholm", "Europe/Helsinki", "Europe/Athens", "Europe/Istanbul",
+    "Europe/Moscow", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+    "America/Sao_Paulo", "Asia/Dubai", "Asia/Kolkata", "Asia/Shanghai", "Asia/Tokyo", "Australia/Sydney", "UTC",
+)
 
 
-def day_of(ts: float) -> str:
-    """UTC-Datum ``YYYY-MM-DD`` eines Zeitstempels."""
-    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d")
+def valid_tz(name) -> bool:
+    """``True``, wenn ``name`` ein gültiger IANA-Zeitzonen-Name ist (wie im Cog ``scheduler``)."""
+    if not isinstance(name, str) or not name.strip() or len(name) > 64 or name != name.strip():
+        return False
+    try:
+        ZoneInfo(name)
+        return True
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        return False
+
+
+def get_tz(name) -> ZoneInfo:
+    """Zeitzone zum Namen; ungültig/leer -> Standard ``Europe/Berlin`` (notfalls UTC)."""
+    for candidate in (name, DEFAULT_TZ):
+        if valid_tz(candidate):
+            return ZoneInfo(candidate)
+    return ZoneInfo("UTC")
+
+
+def local_date(ts: float, tz=None) -> date:
+    """Kalenderdatum eines Zeitstempels in ``tz`` (``None`` = UTC)."""
+    return datetime.fromtimestamp(ts, tz or timezone.utc).date()
+
+
+def day_of(ts: float, tz=None) -> str:
+    """Datum ``YYYY-MM-DD`` eines Zeitstempels in der Zeitzone ``tz`` (``None`` = UTC)."""
+    return local_date(ts, tz).isoformat()
+
+
+def next_midnight(ts: float, tz) -> float:
+    """Zeitstempel der nächsten lokalen Mitternacht nach ``ts`` (berücksichtigt Sommerzeit: Tage mit 23/25 h)."""
+    d = local_date(ts, tz) + timedelta(days=1)
+    nxt = datetime(d.year, d.month, d.day, tzinfo=tz).timestamp()
+    # Zonen, in denen Mitternacht in einer Zeitumstellungs-Lücke liegt: nie rückwärts laufen.
+    return nxt if nxt > ts else ts + 3600
 
 
 def empty_day() -> dict:
@@ -72,6 +120,7 @@ class ServerStats(commands.Cog):
         self.config.register_guild(
             language="de",
             retention_days=DEFAULT_RETENTION,
+            timezone=DEFAULT_TZ,     # IANA-Zeitzone, nach deren Kalendertagen gezählt wird
             ignored_channels=[],     # Kanal-IDs, die nicht gezählt werden (Text und Voice)
             days={},                 # "YYYY-MM-DD" -> {joins, leaves, members, messages{cid:n}, voice_sec{cid:s}}
         )
@@ -80,6 +129,7 @@ class ServerStats(commands.Cog):
         self._voice: dict[tuple[int, int], list] = {}       # (guild_id, member_id) -> [channel_id, start_ts] – nur RAM
         self._members_written: dict[int, tuple[str, int]] = {}
         self._ignored: dict[int, set[int]] = {}
+        self._tz: dict[int, ZoneInfo] = {}
         self._ticks = 0
         self._clock = time.time      # für Tests austauschbar
 
@@ -131,23 +181,30 @@ class ServerStats(commands.Cog):
         return self._pending.setdefault(guild_id, {}).setdefault(
             day, {"joins": 0, "leaves": 0, "messages": {}, "voice_sec": {}})
 
-    def _count(self, guild_id: int, key: str, *, channel_id: int | None = None, amount: float = 1,
+    def _count(self, guild_id: int, key: str, tz, *, channel_id: int | None = None, amount: float = 1,
                ts: float | None = None):
-        rec = self._bucket(guild_id, day_of(self._clock() if ts is None else ts))
+        rec = self._bucket(guild_id, day_of(self._clock() if ts is None else ts, tz))
         if channel_id is None:
             rec[key] = rec.get(key, 0) + amount
         else:
             sub = rec[key]
             sub[str(channel_id)] = sub.get(str(channel_id), 0) + amount
 
-    def _credit_voice(self, guild_id: int, channel_id: int, start: float, end: float):
-        """Voice-Zeit ``start``–``end`` gutschreiben, an UTC-Mitternacht auf Tage aufgeteilt."""
+    def _credit_voice(self, guild_id: int, channel_id: int, start: float, end: float, tz):
+        """Voice-Zeit ``start``–``end`` gutschreiben, an lokaler Mitternacht (Zeitzone ``tz``) auf Tage aufgeteilt."""
         while start < end:
-            d = datetime.fromtimestamp(start, timezone.utc)
-            midnight = (datetime(d.year, d.month, d.day, tzinfo=timezone.utc) + timedelta(days=1)).timestamp()
-            seg_end = min(end, midnight)
-            self._count(guild_id, "voice_sec", channel_id=channel_id, amount=seg_end - start, ts=start)
+            seg_end = min(end, next_midnight(start, tz))
+            self._count(guild_id, "voice_sec", tz, channel_id=channel_id, amount=seg_end - start, ts=start)
             start = seg_end
+
+    async def guild_tz(self, guild) -> ZoneInfo:
+        """Zeitzone eines Servers (``guild`` oder ID), zwischengespeichert bis ``invalidate``."""
+        gid = guild if isinstance(guild, int) else guild.id
+        cached = self._tz.get(gid)
+        if cached is None:
+            cached = get_tz(await self.config.guild_from_id(gid).timezone())
+            self._tz[gid] = cached
+        return cached
 
     async def ignored_channels(self, guild) -> set[int]:
         cached = self._ignored.get(guild.id)
@@ -158,6 +215,7 @@ class ServerStats(commands.Cog):
 
     def invalidate(self, guild_id: int):
         self._ignored.pop(guild_id, None)
+        self._tz.pop(guild_id, None)
 
     async def _active(self, guild) -> bool:
         if guild is None:
@@ -172,18 +230,30 @@ class ServerStats(commands.Cog):
         async with self._lock:
             now = self._clock()
             # Laufende Voice-Sitzungen bis jetzt anrechnen (Sitzung läuft ab jetzt weiter).
+            tzs: dict[int, ZoneInfo] = {}
             for (gid, _uid), sess in list(self._voice.items()):
                 if now > sess[1]:
-                    self._credit_voice(gid, sess[0], sess[1], now)
+                    try:
+                        tz = tzs[gid] = tzs.get(gid) or await self.guild_tz(gid)
+                    except Exception:  # noqa: BLE001 – Sitzung läuft weiter, nächste Runde erneut
+                        log.exception("ServerStats: Zeitzone für Server %s nicht lesbar", gid)
+                        continue
+                    self._credit_voice(gid, sess[0], sess[1], now, tz)
                     sess[1] = now
             pending, self._pending = self._pending, {}
-            today = day_of(now)
             members: dict[int, int] = {}
+            today: dict[int, str] = {}
             for guild in list(getattr(self.bot, "guilds", []) or []):
                 count = getattr(guild, "member_count", None)
                 if count is None:
                     continue
-                if self._members_written.get(guild.id) != (today, int(count)) or guild.id in pending:
+                try:
+                    tz = tzs[guild.id] = tzs.get(guild.id) or await self.guild_tz(guild.id)
+                except Exception:  # noqa: BLE001
+                    log.exception("ServerStats: Zeitzone für Server %s nicht lesbar", guild.id)
+                    continue
+                today[guild.id] = day_of(now, tz)
+                if self._members_written.get(guild.id) != (today[guild.id], int(count)) or guild.id in pending:
                     members[guild.id] = int(count)
             written = 0
             for gid in set(pending) | set(members):
@@ -192,9 +262,9 @@ class ServerStats(commands.Cog):
                         for day, rec in pending.get(gid, {}).items():
                             merge_day(days.setdefault(day, empty_day()), rec)
                         if gid in members:
-                            days.setdefault(today, empty_day())["members"] = members[gid]
+                            days.setdefault(today[gid], empty_day())["members"] = members[gid]
                     if gid in members:
-                        self._members_written[gid] = (today, members[gid])
+                        self._members_written[gid] = (today[gid], members[gid])
                     written += 1
                 except Exception:  # noqa: BLE001 – ein Server darf die anderen nicht blockieren
                     log.exception("ServerStats: Schreiben für Server %s fehlgeschlagen", gid)
@@ -211,7 +281,8 @@ class ServerStats(commands.Cog):
             for gid, conf in all_guilds.items():
                 try:
                     keep = max(MIN_RETENTION, min(MAX_RETENTION, int(conf.get("retention_days") or DEFAULT_RETENTION)))
-                    cutoff = day_of(now - (keep - 1) * 86400)
+                    tz = get_tz(conf.get("timezone"))
+                    cutoff = (local_date(now, tz) - timedelta(days=keep - 1)).isoformat()
                     old = [d for d in (conf.get("days") or {}) if d < cutoff]
                     if not old:
                         continue
@@ -261,14 +332,14 @@ class ServerStats(commands.Cog):
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
         if await self._active(getattr(member, "guild", None)):
-            self._count(member.guild.id, "joins")
+            self._count(member.guild.id, "joins", await self.guild_tz(member.guild))
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
         guild = getattr(member, "guild", None)
         self._voice.pop((getattr(guild, "id", 0), member.id), None)
         if await self._active(guild):
-            self._count(guild.id, "leaves")
+            self._count(guild.id, "leaves", await self.guild_tz(guild))
 
     @staticmethod
     def _message_channel_id(channel) -> int | None:
@@ -286,7 +357,7 @@ class ServerStats(commands.Cog):
             return
         if cid in await self.ignored_channels(guild):
             return
-        self._count(guild.id, "messages", channel_id=cid)
+        self._count(guild.id, "messages", await self.guild_tz(guild), channel_id=cid)
 
     async def _counts_voice(self, member, channel) -> bool:
         if channel is None or getattr(member, "bot", False):
@@ -309,7 +380,7 @@ class ServerStats(commands.Cog):
         key = (guild.id, member.id)
         sess = self._voice.pop(key, None)
         if sess is not None and now > sess[1]:
-            self._credit_voice(guild.id, sess[0], sess[1], now)
+            self._credit_voice(guild.id, sess[0], sess[1], now, await self.guild_tz(guild))
         if a is not None and await self._active(guild) and await self._counts_voice(member, a):
             self._voice[key] = [a.id, now]
 
@@ -317,12 +388,12 @@ class ServerStats(commands.Cog):
     #  Auswertung
     # ----------------------------------------------------------------- #
     async def get_days(self, guild, n: int) -> list[tuple[str, dict]]:
-        """Die letzten ``n`` UTC-Tage (inkl. heute) – gespeicherte Werte + noch nicht geschriebener
-        Puffer. Fehlende Tage werden mit 0 aufgefüllt; ``members`` wird vorwärts fortgeschrieben
-        (``None`` vor dem ersten bekannten Wert), heute = aktuelle Mitgliederzahl."""
+        """Die letzten ``n`` Kalendertage in der Zeitzone des Servers (inkl. heute) – gespeicherte Werte
+        + noch nicht geschriebener Puffer. Fehlende Tage werden mit 0 aufgefüllt; ``members`` wird
+        vorwärts fortgeschrieben (``None`` vor dem ersten bekannten Wert), heute = aktuelle Mitgliederzahl."""
         stored = await self.config.guild(guild).days()
-        now = self._clock()
-        keys = [day_of(now - (n - 1 - i) * 86400) for i in range(n)]
+        today = local_date(self._clock(), await self.guild_tz(guild))
+        keys = [(today - timedelta(days=n - 1 - i)).isoformat() for i in range(n)]
         out = []
         last_members = None
         for d in sorted(stored):
@@ -380,8 +451,9 @@ class ServerStats(commands.Cog):
         data = await self.get_days(guild, days)
         s = self.summarize(data)
         from .charts import fmt_num
+        tz_name = (await self.guild_tz(guild)).key
         emb = discord.Embed(title=t(lang, "stats_title", server=guild.name)[:256],
-                            description=t(lang, "stats_desc", days=days), color=0x3DDC97)
+                            description=t(lang, "stats_desc", days=days, tz=tz_name), color=0x3DDC97)
         emb.add_field(name=t(lang, "members"), value=fmt_num(s["members"]), inline=True)
         emb.add_field(name=t(lang, "growth"), value=t(lang, "growth_value", net=s["net"], joins=s["joins"],
                                                        leaves=s["leaves"]), inline=True)
@@ -439,6 +511,22 @@ class ServerStats(commands.Cog):
                 self._voice.pop(k, None)
         await self._say(ctx, key, channel=channel.mention)
 
+    @statsset.command(name="timezone")
+    @commands.guild_only()
+    @commands.admin_or_permissions(manage_guild=True)
+    async def statsset_timezone(self, ctx: commands.Context, zone: Optional[str] = None):
+        """Zeitzone anzeigen oder setzen (IANA, z. B. Europe/Berlin) – danach richten sich die Tage."""
+        if not zone:
+            tz = await self.guild_tz(ctx.guild)
+            now = datetime.fromtimestamp(self._clock(), tz).strftime("%d.%m.%Y %H:%M")
+            return await self._say(ctx, "tz_current", tz=tz.key, now=now)
+        zone = zone.strip()
+        if not valid_tz(zone):
+            return await self._say(ctx, "tz_unknown", tz=zone[:60].replace("`", "'"))
+        await self.config.guild(ctx.guild).timezone.set(zone)
+        self.invalidate(ctx.guild.id)
+        await self._say(ctx, "tz_set", tz=zone)
+
     @statsset.command(name="language")
     @commands.guild_only()
     @commands.admin_or_permissions(manage_guild=True)
@@ -463,4 +551,5 @@ class ServerStats(commands.Cog):
         emb.add_field(name=t(lang, "settings_ignored"),
                       value=(", ".join(c.mention for c in ign if c) or t(lang, "none"))[:1024])
         emb.add_field(name=t(lang, "settings_lang"), value=LANGUAGES.get(lang, lang))
+        emb.add_field(name=t(lang, "settings_tz"), value=(await self.guild_tz(ctx.guild)).key)
         await ctx.send(embed=emb)
