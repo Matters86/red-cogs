@@ -155,13 +155,12 @@ class Guard(commands.Cog):
         self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
-        webcore.register_page(
-            owner=self,
-            slug="guard",
-            name="Guard",
-            icon="bi-shield-shaded",
-            handler=self.dashboard_page,
-        )
+        page = dict(owner=self, slug="guard", name="Guard", icon="bi-shield-shaded", handler=self.dashboard_page)
+        try:
+            # Tagesgeschäft für die Stufe „Bedienen“: Notmodus (Not-Aus) an/aus.
+            webcore.register_page(**page, operate_forms={"lockdown"})
+        except TypeError:  # ältere WebCore-Versionen ohne Stufe „Bedienen“
+            webcore.register_page(**page)
 
     async def dashboard_page(self, request):
         return await dashboard_handler(self, request)

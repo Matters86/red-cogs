@@ -178,13 +178,14 @@ class AdminPanel(commands.Cog):
         self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
-        webcore.register_page(
-            owner=self,
-            slug="fivemadmin",
-            name="FiveM-Admin",
-            icon="bi-controller",
-            handler=self.dashboard_page,
-        )
+        page = dict(owner=self, slug="fivemadmin", name="FiveM-Admin", icon="bi-controller",
+                    handler=self.dashboard_page)
+        try:
+            # Tagesgeschäft für die Stufe „Bedienen“: Im Live-Panel anmelden, Not-Aus, Entbannen –
+            # die eigenen Prüfungen (Panel-Recht „ban“, Discord-Admin für den Not-Aus) gelten zusätzlich.
+            webcore.register_page(**page, operate_forms={"sso", "lockdown", "unban"})
+        except TypeError:  # ältere WebCore-Versionen ohne Stufe „Bedienen“
+            webcore.register_page(**page)
 
     async def dashboard_page(self, request):
         from .dashboard import dashboard_handler

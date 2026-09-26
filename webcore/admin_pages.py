@@ -10,7 +10,7 @@ import html
 from datetime import datetime, timezone
 
 from . import ui
-from .access import EDIT, LEVEL_LABEL, NONE, VIEW, parse_level
+from .access import EDIT, LEVEL_LABEL, NAME_BY_LEVEL, NONE, OPERATE, ROLE_TEMPLATES, VIEW, parse_level
 
 _MODE_TEXT = {
     "owner": "Nur Bot-Owner (plus die hier vergebenen Rollen-Rechte).",
@@ -23,44 +23,92 @@ def _esc(value) -> str:
     return html.escape(str(value)) if value is not None else ""
 
 
-def _level_select(name: str, level: int) -> str:
-    opts = [(NONE, "—"), (VIEW, "Ansehen"), (EDIT, "Bearbeiten")]
+_LV_CLASS = {NONE: "lv-none", VIEW: "lv-view", OPERATE: "lv-operate", EDIT: "lv-edit"}
+
+
+def _level_select(name: str, level: int, *, operate_ok: bool = True) -> str:
+    """Stufen-Auswahl einer Matrix-Zelle. Werte = gespeicherte Namen (none/view/operate/edit)."""
+    opts = [(NONE, "—"), (VIEW, "Ansehen"),
+            (OPERATE, "Bedienen" if operate_ok else "Bedienen (= Ansehen)"), (EDIT, "Bearbeiten")]
     inner = "".join(
-        f"<option value='{v}'{' selected' if v == level else ''}>{label}</option>"
+        f"<option value='{NAME_BY_LEVEL[v]}'{' selected' if v == level else ''}>{label}</option>"
         for v, label in opts
     )
-    cls = {NONE: "lv-none", VIEW: "lv-view", EDIT: "lv-edit"}[level]
-    return f"<select class='wc-lv {cls}' name='{_esc(name)}' onchange='wcLv(this)'>{inner}</select>"
+    return (f"<select class='wc-lv {_LV_CLASS[level]}' name='{_esc(name)}' aria-label='Stufe' "
+            f"onchange='wcLv(this)'>{inner}</select>")
 
 
-def render_access(*, guild, roles, pages, guild_perms: dict, csrf: str, access_mode: str) -> str:
+def _template_options(selected: str | None = None, *, placeholder: str | None = None) -> str:
+    out = f"<option value=''>{_esc(placeholder)}</option>" if placeholder else ""
+    return out + "".join(
+        f"<option value='{_esc(key)}'{' selected' if key == selected else ''} title='{_esc(t['desc'])}'>"
+        f"{_esc(t['label'])}</option>"
+        for key, t in ROLE_TEMPLATES.items()
+    )
+
+
+_LEGEND = (
+    "<div class='wc-lv-legend'>"
+    "<span class='wc-lv lv-view'>Ansehen</span><small>Seite öffnen, nichts ändern</small>"
+    "<span class='wc-lv lv-operate'>Bedienen</span><small>Tagesgeschäft (z. B. Ticket schließen, verwarnen, "
+    "Event-Aktionen) – keine Einstellungen</small>"
+    "<span class='wc-lv lv-edit'>Bearbeiten</span><small>alles, auch Einstellungen</small>"
+    "</div>"
+)
+
+
+def render_access(*, guild, roles, pages, guild_perms: dict, csrf: str, access_mode: str,
+                  operate_pages=None) -> str:
     """Rechte-Matrix eines Servers.
 
     roles  : [(role_id, name, color_hex|None, member_count, position)] – alle Rollen des Servers
     pages  : [(slug, name, icon)]
-    guild_perms : {role_id(str): {slug: 'view'|'edit'}}
+    guild_perms : {role_id(str): {slug: 'view'|'operate'|'edit'}}
+    operate_pages : slugs mit Tagesgeschäft (``None`` = alle); sonst wirkt „Bedienen“ wie „Ansehen“
     """
+    op_ok = (lambda slug: True) if operate_pages is None else (lambda slug: slug in operate_pages)
     role_by_id = {str(r[0]): r for r in roles}
     configured = [rid for rid in guild_perms if rid in role_by_id]
     configured.sort(key=lambda rid: -role_by_id[rid][4])
     stale = [rid for rid in guild_perms if rid not in role_by_id]
 
     head_cells = "".join(
-        f"<th class='wc-col'><i class='bi {_esc(icon)}'></i><span>{_esc(name)}</span></th>"
-        for _slug, name, icon in pages
+        f"<th class='wc-col'><i class='bi {_esc(icon)}'></i><span>{_esc(name)}</span>"
+        + ("" if op_ok(slug) else "<small class='wc-no-op' title='Kein Tagesgeschäft: Bedienen wirkt wie Ansehen'>"
+                                  "ohne Bedienen</small>")
+        + "</th>"
+        for slug, name, icon in pages
     )
-    rows = []
+    rows, tpl_forms = [], []
     for rid in configured:
         _id, rname, color, count, _pos = role_by_id[rid]
         dot = f"<span class='wc-role-dot' style='background:{_esc(color)}'></span>" if color else "<span class='wc-role-dot'></span>"
         cells = "".join(
-            f"<td class='wc-col'>{_level_select(f'p:{rid}:{slug}', parse_level(guild_perms[rid].get(slug)))}</td>"
+            f"<td class='wc-col'>{_level_select(f'p:{rid}:{slug}', parse_level(guild_perms[rid].get(slug)), operate_ok=op_ok(slug))}</td>"
             for slug, _n, _i in pages
+        )
+        tpl_form_id = f"wc-tpl-{_esc(rid)}"
+        tpl_forms.append(
+            f"<form id='{tpl_form_id}' method='post' action='/access' hidden>"
+            f"<input type='hidden' name='csrf_token' value='{_esc(csrf)}'>"
+            "<input type='hidden' name='form' value='apply_template'>"
+            f"<input type='hidden' name='guild' value='{guild.id}'>"
+            f"<input type='hidden' name='role_id' value='{_esc(rid)}'></form>"
+        )
+        tpl_menu = (
+            "<span class='wc-tpl'>"
+            f"<select class='wc-lv lv-none' form='{tpl_form_id}' name='template' required "
+            f"aria-label='Vorlage für {_esc(rname)}'>{_template_options(placeholder='Vorlage …')}</select>"
+            f"<button class='wc-icon-btn wc-tpl-btn' type='submit' form='{tpl_form_id}' title='Vorlage anwenden' "
+            f"data-confirm='Vorlage auf „{_esc(rname)}“ anwenden? Die Stufen aller geladenen Seiten dieser Rolle "
+            "werden überschrieben (ungespeicherte Änderungen in der Tabelle gehen verloren).'>"
+            "<i class='bi bi-magic'></i></button></span>"
         )
         rows.append(
             "<tr>"
             f"<td class='wc-role'>{dot}<span>{_esc(rname)}</span>"
             f"<small>{int(count)} Mitglied{'er' if count != 1 else ''}</small>"
+            f"{tpl_menu}"
             f"<input type='hidden' name='roles' value='{_esc(rid)}'></td>"
             f"{cells}"
             f"<td class='wc-col'><button class='wc-icon-btn' name='remove' value='{_esc(rid)}' "
@@ -79,9 +127,9 @@ def render_access(*, guild, roles, pages, guild_perms: dict, csrf: str, access_m
             f"<tbody>{''.join(rows)}</tbody></table></div>"
             "<div class='wc-actions'>"
             "<button class='btn-accent' type='submit'><i class='bi bi-check2'></i> Rechte speichern</button>"
-            "<span class='wc-hint'>„Ansehen“ öffnet die Seite schreibgeschützt, „Bearbeiten“ erlaubt Speichern. "
-            "Bei mehreren Rollen zählt die höchste Stufe.</span>"
-            "</div></form>"
+            "<span class='wc-hint'>Bei mehreren Rollen zählt die höchste Stufe. Seiten mit „ohne Bedienen“ haben kein "
+            "Tagesgeschäft – dort wirkt „Bedienen“ wie „Ansehen“.</span>"
+            "</div></form>" + "".join(tpl_forms)
         )
     else:
         matrix = (
@@ -101,9 +149,7 @@ def render_access(*, guild, roles, pages, guild_perms: dict, csrf: str, access_m
         f"<input type='hidden' name='guild' value='{guild.id}'>"
         "<label>Rolle<select name='role_id' required>"
         f"<option value=''>— Rolle wählen —</option>{role_opts}</select></label>"
-        "<label>Startwert für alle Seiten<select name='default'>"
-        "<option value='1'>Ansehen</option><option value='2'>Bearbeiten</option>"
-        "</select></label>"
+        f"<label>Vorlage<select name='template'>{_template_options('view')}</select></label>"
         "<button class='btn-accent' type='submit'><i class='bi bi-plus-lg'></i> Hinzufügen</button>"
         "</form>"
     ) if free_roles else "<div class='wc-hint'>Alle Rollen dieses Servers sind bereits eingetragen.</div>"
@@ -130,11 +176,19 @@ def render_access(*, guild, roles, pages, guild_perms: dict, csrf: str, access_m
         f"<b>{_esc(access_mode)}</b> – {_esc(_MODE_TEXT.get(access_mode, ''))}</p></div></div>"
         "<div class='card-x' style='margin-top:16px'>"
         f"<div class='section-title'>Rollen-Rechte · {_esc(guild.name)}</div>"
-        f"{stale_note}{matrix}</div>"
+        f"{_LEGEND}{stale_note}{matrix}</div>"
         "<div class='card-x' style='margin-top:16px'>"
-        f"<div class='section-title'>Rolle hinzufügen</div>{add_form}</div>"
-        "<script>function wcLv(s){s.className='wc-lv '+({0:'lv-none',1:'lv-view',2:'lv-edit'})[s.value];}</script>"
+        f"<div class='section-title'>Rolle hinzufügen</div>{add_form}{_template_help()}</div>"
+        "<script>function wcLv(s){s.className='wc-lv '+({none:'lv-none',view:'lv-view',operate:'lv-operate',"
+        "edit:'lv-edit'})[s.value];}</script>"
     )
+
+
+def _template_help() -> str:
+    items = "".join(f"<li><b>{_esc(t['label'])}</b> – {_esc(t['desc'])}</li>" for t in ROLE_TEMPLATES.values())
+    return (f"<details class='wc-tpl-help'><summary>Was setzen die Vorlagen?</summary><ul>{items}</ul>"
+            "<p class='wc-hint'>Vorlagen setzen nur die aktuell geladenen Seiten; danach lässt sich jede Stufe in der "
+            "Tabelle einzeln anpassen. Pro Rolle: Menü „Vorlage …“ in der Tabelle.</p></details>")
 
 
 def _fmt_ts(ts) -> str:

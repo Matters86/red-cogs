@@ -216,13 +216,12 @@ class Tickets(commands.Cog):
                 log.exception("Transcript %s: Datenlöschung fehlgeschlagen", path.name)
 
     def _register_dashboard(self, webcore):
-        webcore.register_page(
-            owner=self,
-            slug="tickets",
-            name="Tickets",
-            icon="bi-life-preserver",
-            handler=self.dashboard_page,
-        )
+        page = dict(owner=self, slug="tickets", name="Tickets", icon="bi-life-preserver", handler=self.dashboard_page)
+        try:
+            # Tagesgeschäft für die Stufe „Bedienen“: einzelne Tickets schließen.
+            webcore.register_page(**page, operate_forms={"ticket_close"})
+        except TypeError:  # ältere WebCore-Versionen ohne Stufe „Bedienen“
+            webcore.register_page(**page)
         if hasattr(webcore, "register_member_page"):  # ältere WebCore-Versionen ohne „Mein Bereich“
             webcore.register_member_page(
                 owner=self,

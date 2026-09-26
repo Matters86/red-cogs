@@ -83,6 +83,14 @@ Die Seite **Changelog** erscheint nach dem Laden automatisch im WebCore-Dashboar
 
 Die Server-Auswahl im Dashboard ist auf die Server beschränkt, die der eingeloggte User sehen darf.
 
+### Rechte im Dashboard
+
+| WebCore-Stufe | Darf |
+|---|---|
+| Ansehen | Einstellungen, Historie und Details ansehen |
+| **Bedienen** | zusätzlich **einzelne Changelogs löschen** (inkl. Discord-Nachricht) – Tagesgeschäft |
+| Bearbeiten | zusätzlich alle Einstellungen, Poster-/Ping-Rollen, Kategorien, Texte und die Freigabe der öffentlichen API |
+
 ## Öffentliche API für Launcher & Website
 
 Die Changelogs eines Servers lassen sich ohne Login als **JSON** oder **RSS 2.0** abrufen – z. B. für

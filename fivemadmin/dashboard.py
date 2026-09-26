@@ -9,7 +9,9 @@ Sperren · Panel-Rechte · Einstellungen.
 
 Rechte (alles serverseitig):
 
-* Server-Auswahl, Ansehen/Bearbeiten: ``webcore.visible_guilds`` (GET = Ansehen, POST = Bearbeiten).
+* Server-Auswahl: ``webcore.visible_guilds`` (GET = Ansehen, POST = Bearbeiten bzw. Bedienen).
+  WebCore-Stufe „Bedienen“ reicht für das Tagesgeschäft ``sso``/``lockdown``/``unban``
+  (``register_page(operate_forms=…)``), Panel-Rechte und Einstellungen brauchen „Bearbeiten“.
 * Zusätzlich je Aktion die fivemadmin-Rechte des Nutzers auf dem gewählten Server
   (``member_permissions``; Owner/Allowlist = alle Rechte) – gespiegelt von Befehl/Panel-Endpunkt:
 
@@ -320,7 +322,7 @@ def _render_live_card(ui, guild, actor, st, gconf, csrf, readonly) -> str:
         action = ui.actions(ui.button("Live-Panel öffnen", icon="bi-box-arrow-up-right", kind="ghost",
                                       href=st["public_url"] + "/", attrs={"target": "_blank", "rel": "noopener"}))
     elif readonly:
-        action = ui.callout("Anmelden per Dashboard braucht auf dieser Seite das Recht <b>Bearbeiten</b>. "
+        action = ui.callout("Anmelden per Dashboard braucht auf dieser Seite mindestens das Recht <b>Bedienen</b>. "
                             "Alternativ in Discord <code>[p]ap login</code> nutzen.", tone="info") + ui.actions(
             ui.button("Live-Panel öffnen", icon="bi-box-arrow-up-right", kind="ghost",
                       href=st["public_url"] + "/", attrs={"target": "_blank", "rel": "noopener"}))
@@ -668,7 +670,7 @@ def _render_settings(ui, guild, actor, st, csrf) -> str:
 # --------------------------------------------------------------------------- #
 async def _handle_post(cog, request):
     data = await request.post()
-    guilds = await _visible_guilds(request)  # POST -> nur Server mit "Bearbeiten"
+    guilds = await _visible_guilds(request)  # POST -> Server mit "Bearbeiten" (Tagesgeschäft: ≥ "Bedienen")
     guild = _pick_guild(guilds, data.get("guild"))
     if guild is None:
         return {"redirect": f"{BASE}?err=" + quote("Server nicht gefunden oder keine Bearbeitungsrechte")}

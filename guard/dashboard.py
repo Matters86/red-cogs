@@ -3,7 +3,8 @@
 Aufgaben (gleiches Muster wie poll/raidhelper):
 * GET                 -> Seite mit Reitern (siehe unten)
 * POST form=settings  -> Alle Einstellungen speichern (Post/Redirect/Get)
-* POST form=lockdown  -> Notmodus an-/ausschalten
+* POST form=lockdown  -> Notmodus an-/ausschalten (Tagesgeschäft: schon mit WebCore-Stufe „Bedienen“;
+                         ``settings`` braucht „Bearbeiten“)
 
 Aufbau mit dem UI-Baukasten von WebCore (``request.app["webcore"].ui``), kein
 eigenes CSS: Reiter Übersicht (Einrichtung, Notmodus-Schalter, Verlauf) ·
@@ -225,7 +226,7 @@ def _render_lockdown(ui, guild, conf, csrf) -> str:
         btn = ui.button("Notmodus jetzt aktivieren", icon="bi-lock", kind="danger", name="state", value="on",
                         confirm="Der Notmodus setzt sofort Slowmode in allen Textkanälen und pausiert ggf. Einladungen.")
     form = ui.form("/cogs/guard", text + ui.actions(btn), csrf=csrf,
-                   hidden={"form": "lockdown", "guild": guild.id})
+                   hidden={"form": "lockdown", "guild": guild.id}, operate=True)
     return ui.card("Notmodus (Lockdown)", form, icon="bi-lock", tone="bad" if active else None,
                    desc="Manuell ein- und ausschalten – unabhängig von der Raid-Erkennung.")
 

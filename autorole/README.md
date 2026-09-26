@@ -140,6 +140,13 @@ Ist `webcore` geladen, erscheint automatisch der Tab **Autorole**. Dort lassen s
 alles über Formulare (POST + CSRF), die direkt in die Bot-Konfiguration schreiben. Unter
 *Einstellungen* steht außerdem der Schalter **„Im Mitglieder-Bereich anzeigen“** (Standard: an).
 
+### Rechte im Dashboard
+
+Autorole hat **kein Tagesgeschäft**: Alles auf der Seite ist Rollen-Vergabe bzw. -Zuordnung
+(Beitrittsrollen, „Jetzt anwenden“ als Massenaktion, Rollen-Panels samt Posten – ein gepostetes Panel
+macht Rollen selbst vergebbar). Deshalb wirkt die WebCore-Stufe **Bedienen** hier wie *Ansehen*; zum
+Ändern braucht es **Bearbeiten** (zusätzlich gilt der Schutz vor Selbst-Hochstufung).
+
 ## Mein Bereich: „Rollen“ (für Mitglieder)
 
 Hat der Bot-Owner den Mitglieder-Bereich für den Server eingeschaltet (*Verwaltung → Zugriff & Rollen*

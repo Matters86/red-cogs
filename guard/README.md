@@ -91,6 +91,14 @@ Im WebCore-Dashboard unter **Guard** (`/cogs/guard`):
 - **Honeypot-Warntext** (Reiter „Honeypot“ → „Eigene Texte“) – beim Speichern eines geänderten Textes (oder einer anderen Sprache ohne eigenen Text) bearbeitet der Bot seine Warnnachricht im Honeypot-Kanal. Die Nachrichten-ID wird ab `honeypot create` gemerkt; bei älteren Kanälen sucht der Bot seine letzte eigene Nachricht unter den letzten 20 und postet sonst neu. Ein Kanalthema, das noch dem alten Text entspricht, wird mit angepasst. Fehlen Rechte oder ist der Kanal weg, erscheint eine Fehlermeldung – die Einstellungen sind trotzdem gespeichert.
 - **Verlauf** – die letzten Aktionen mit Zeit, Auslöser, Nutzer, Regel, Aktion und Punkten.
 
+### Rechte im Dashboard
+
+| WebCore-Stufe | Darf |
+|---|---|
+| Ansehen | alles schreibgeschützt ansehen |
+| **Bedienen** | zusätzlich den **Notmodus** (Lockdown) aktivieren und beenden – Not-Aus als Tagesgeschäft |
+| Bearbeiten | zusätzlich alle Einstellungen (Module, Schwellen, Eskalation, Kanäle, Whitelist, Texte) |
+
 ## Hinweise
 
 - **Standard-Aktion Honeypot = `softban`** (Kick samt Löschen der letzten Nachrichten – die schonendste wirksame Variante). Auf `ban`, `kick` oder `timeout` umstellbar per Befehl oder Dashboard.

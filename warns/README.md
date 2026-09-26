@@ -87,8 +87,15 @@ Seite **Verwarnungen** (Icon Achteck) im WebCore-Dashboard:
 - **Automatische Maßnahmen:** Schwellen für Timeout (mit Dauer), Kick und Bann; Warnung, wenn dem Bot Rechte fehlen.
 - **Einstellungen:** Log-Kanal, Mod-Rollen, Verfall, Standard-Punkte, Sprache, DM an/aus und DM-Text.
 
-Rechte: **Ansehen** zeigt Verlauf und Einstellungen schreibgeschützt; **Bearbeiten** erlaubt Verwarnen,
-Aufheben und Speichern – nur für den jeweiligen Server.
+### Rechte im Dashboard
+
+| WebCore-Stufe | Darf |
+|---|---|
+| Ansehen | Verlauf und Einstellungen schreibgeschützt ansehen |
+| **Bedienen** | zusätzlich **Mitglied verwarnen** und **Verwarnung aufheben** (Tagesgeschäft; Hierarchie-Prüfung wie beim Befehl) |
+| Bearbeiten | zusätzlich automatische Maßnahmen (Schwellen) und Einstellungen (Log-Kanal, Mod-Rollen, Verfall, DM …) speichern |
+
+Alles gilt nur für den jeweiligen Server.
 
 ## Datenschutz
 

@@ -77,6 +77,16 @@ Seite **Geplante Nachrichten** (`/cogs/scheduler`, Icon Uhr) – vollständig **
   (postet einmal in den Kanal, **ohne** Rollen-Ping, ändert nichts am Zeitplan).
 - **Einstellungen** – Zeitzone und Sprache.
 
+### Rechte im Dashboard
+
+| Stufe | Darf |
+|---|---|
+| Ansehen | alles sehen (Einträge, Zeitpläne, Status, Einstellungen), nichts ändern |
+| **Bedienen** | Tagesgeschäft: Nachrichten **planen**, **bearbeiten** (inkl. Vorschau), **testen**, **pausieren/fortsetzen**, **löschen** – als Rollen-Ping nur Rollen, die es auf dem Server schon gibt |
+| Bearbeiten | zusätzlich die Einstellungen **Zeitzone** und **Sprache** |
+
+Die Stufen vergibt der Bot-Owner unter *Verwaltung → Zugriff & Rollen* (je Server und Rolle); der Bot-Owner selbst darf immer alles.
+
 ## Datenspeicherung
 
 Pro Eintrag: Inhalt, Kanal, Zeitplan, Status und die Discord-ID der Person, die ihn angelegt/zuletzt bearbeitet

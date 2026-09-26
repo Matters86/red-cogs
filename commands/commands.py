@@ -49,6 +49,8 @@ class Commands(commands.Cog):
         self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
+        # Kein Tagesgeschäft (keine ``operate_forms``): Die Seite ist eine Übersicht; das einzige Formular
+        # (Befehle ein-/ausblenden) ist botweit und nur für den Bot-Owner -> „Bedienen“ wirkt wie „Ansehen“.
         webcore.register_page(
             owner=self,
             slug="commands",

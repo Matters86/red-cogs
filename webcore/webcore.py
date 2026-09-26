@@ -60,7 +60,7 @@ DISCORD_TOKEN = f"{DISCORD_API}/oauth2/token"
 # das verschlüsselte Cookie unbegrenzt – ein einmal abgegriffenes Cookie für immer.
 SESSION_MAX_AGE = 7 * 86400
 # Cache-Buster für /static/webcore.css (bei Theme-Änderungen erhöhen).
-ASSET_VERSION = "9"
+ASSET_VERSION = "10"
 # Rollen mit diesen Rechten darf nur vergeben (per Autorole/Ticket-Inhaberrolle …),
 # wer Owner/Allowlist oder Discord-Administrator ist – sonst könnte sich ein
 # Team-Mitglied mit Dashboard-Rechten selbst hochstufen.
@@ -112,7 +112,7 @@ def _fmt(n: int) -> str:
 class DashboardPage:
     """Eine vom Cog registrierte Dashboard-Seite (Team-Seite oder Mitgliederseite)."""
 
-    def __init__(self, owner, slug, name, handler, icon="bi-grid", description="", visible=None):
+    def __init__(self, owner, slug, name, handler, icon="bi-grid", description="", visible=None, operate_forms=()):
         self.owner = owner
         self.visible = visible  # optional: async (guild) -> bool (nur Mitgliederseiten)
         self.slug = slug
@@ -120,6 +120,23 @@ class DashboardPage:
         self.handler = handler
         self.icon = icon
         self.description = description
+        # Tagesgeschäft (Stufe „Bedienen“): Menge von form/action-Werten oder Callable (data) -> bool.
+        if callable(operate_forms):
+            self.operate_forms = operate_forms
+        elif isinstance(operate_forms, str):
+            self.operate_forms = frozenset({operate_forms}) if operate_forms else frozenset()
+        else:
+            self.operate_forms = frozenset(str(v) for v in (operate_forms or ()) if str(v))
+
+    @property
+    def supports_operate(self) -> bool:
+        """Hat die Seite überhaupt Tagesgeschäft? Sonst wirkt „Bedienen“ wie „Ansehen“."""
+        return bool(self.operate_forms)
+
+    @property
+    def operate_list(self) -> list:
+        """Formular-Werte für ``data-operate-forms`` (leer bei Callable)."""
+        return [] if callable(self.operate_forms) else sorted(self.operate_forms)
 
 
 class PublicApi:
@@ -246,6 +263,9 @@ class WebCore(commands.Cog):
     dann ``register_page(...)`` aufrufen.
     """
 
+    # Rechte-Stufen für Cogs (``webcore.OPERATE`` …) – nie feste Zahlen verwenden.
+    NONE, VIEW, OPERATE, EDIT = acl.NONE, acl.VIEW, acl.OPERATE, acl.EDIT
+
     def __init__(self, bot: Red):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=8472013561, force_registration=True)
@@ -298,16 +318,20 @@ class WebCore(commands.Cog):
     # ----------------------------------------------------------------- #
     #  Öffentliche API für andere Cogs
     # ----------------------------------------------------------------- #
-    def register_page(self, owner, slug: str, name: str, handler, icon: str = "bi-grid"):
+    def register_page(self, owner, slug: str, name: str, handler, icon: str = "bi-grid", operate_forms=()):
         """Fügt eine Dashboard-Seite hinzu.
 
-        owner   : der aufrufende Cog (für sauberes Entfernen beim Entladen)
-        slug    : URL-Teil, erreichbar unter /cogs/<slug>
-        name    : Anzeigename in der Navigation
-        handler : async def handler(request) -> {"title": str, "content": html_str}
-        icon    : Bootstrap-Icon-Klasse, z. B. "bi-stars"
+        owner         : der aufrufende Cog (für sauberes Entfernen beim Entladen)
+        slug          : URL-Teil, erreichbar unter /cogs/<slug>
+        name          : Anzeigename in der Navigation
+        handler       : async def handler(request) -> {"title": str, "content": html_str}
+        icon          : Bootstrap-Icon-Klasse, z. B. "bi-stars"
+        operate_forms : Tagesgeschäft für die Stufe „Bedienen“ – Werte des POST-Feldes ``form`` (falls
+                        vorhanden, sonst ``action``), z. B. ``{"event_action", "repost"}``, oder ein
+                        Callable ``(data: MultiDict) -> bool``. Leer = die Seite hat kein Tagesgeschäft,
+                        „Bedienen“ wirkt dort wie „Ansehen“. Nie Einstellungen/Rollen/Rechte!
         """
-        self.pages[slug] = DashboardPage(owner, slug, name, handler, icon)
+        self.pages[slug] = DashboardPage(owner, slug, name, handler, icon, operate_forms=operate_forms)
         log.info("Dashboard-Seite registriert: %s (von %s)", slug, owner.qualified_name)
 
     def register_member_page(self, owner, slug: str, name: str, handler, icon: str = "bi-grid",
@@ -777,9 +801,11 @@ class WebCore(commands.Cog):
 
         * Owner/Allowlist -> alle Server.
         * Sonst nur Server, in denen der User für die aktuelle Seite (``/cogs/<slug>``)
-          mindestens ``Ansehen`` hat – bei POST-Anfragen mindestens ``Bearbeiten``.
+          mindestens ``Ansehen`` hat – bei POST-Anfragen mindestens ``Bearbeiten``, bzw.
+          ``Bedienen``, wenn WebCore den POST als Tagesgeschäft eingestuft hat
+          (``request["wc_operate"]``, siehe ``register_page(operate_forms=…)``).
           Dadurch lehnen alle Cogs, die ihre Ziel-Guild gegen diese Liste prüfen,
-          Speichern ohne Bearbeiten-Recht automatisch ab.
+          Speichern ohne passendes Recht automatisch ab.
         """
         user = await self._get_user(request)
         amap = await self._access_map(user, request)
@@ -790,7 +816,10 @@ class WebCore(commands.Cog):
             return []
         slug = request.match_info.get("slug") if request.match_info else None
         if min_level is None:
-            min_level = acl.EDIT if request.method == "POST" else acl.VIEW
+            if request.method == "POST":
+                min_level = acl.OPERATE if request.get("wc_operate") else acl.EDIT
+            else:
+                min_level = acl.VIEW
         out = []
         for g in self.bot.guilds:
             levels = amap.get(g.id)
@@ -802,7 +831,11 @@ class WebCore(commands.Cog):
         return out
 
     async def page_level(self, request, guild) -> int:
-        """Öffentlich für Cogs: Stufe (0/1/2) des Users für die aktuelle Seite in ``guild``."""
+        """Öffentlich für Cogs: Stufe des Users für die aktuelle Seite in ``guild``.
+
+        ``acl.NONE`` (0), ``acl.VIEW`` (1), ``acl.OPERATE`` (2), ``acl.EDIT`` (3) – im Cog nie mit
+        festen Zahlen vergleichen, sondern ``can_operate``/``can_edit`` benutzen.
+        """
         user = await self._get_user(request)
         amap = await self._access_map(user, request)
         if amap is None:
@@ -811,6 +844,16 @@ class WebCore(commands.Cog):
             return acl.NONE
         slug = request.match_info.get("slug") if request.match_info else None
         return (amap.get(guild.id) or {}).get(slug, acl.NONE)
+
+    async def can_operate(self, request, guild) -> bool:
+        """Öffentlich für Cogs: darf der User auf der aktuellen Seite in ``guild`` das Tagesgeschäft
+        ausführen (Stufe ≥ Bedienen)? Owner/Allowlist/Server-Admin (Modus ``admin``) immer."""
+        return guild is not None and await self.page_level(request, guild) >= acl.OPERATE
+
+    async def can_edit(self, request, guild) -> bool:
+        """Öffentlich für Cogs: darf der User auf der aktuellen Seite in ``guild`` Einstellungen
+        ändern (Stufe Bearbeiten)?"""
+        return guild is not None and await self.page_level(request, guild) >= acl.EDIT
 
     async def can_grant_role(self, request, guild, role) -> bool:
         """Öffentlich für Cogs: darf der eingeloggte User ``role`` automatisch vergeben lassen?
@@ -862,12 +905,15 @@ class WebCore(commands.Cog):
         nav = []
         for p in sorted(self.pages.values(), key=lambda x: x.name.lower()):
             if full:
-                nav.append({"slug": p.slug, "name": p.name, "icon": p.icon, "readonly": False})
+                nav.append({"slug": p.slug, "name": p.name, "icon": p.icon, "readonly": False, "operate": False})
                 continue
             levels = [lv.get(p.slug, acl.NONE) for lv in (amap or {}).values()]
             best = max(levels) if levels else acl.NONE
             if best >= acl.VIEW:
-                nav.append({"slug": p.slug, "name": p.name, "icon": p.icon, "readonly": best < acl.EDIT})
+                # „Bedienen“ auf einer Seite ohne Tagesgeschäft wirkt wie „Ansehen“.
+                operate = best == acl.OPERATE and p.supports_operate
+                nav.append({"slug": p.slug, "name": p.name, "icon": p.icon,
+                            "readonly": best < acl.EDIT and not operate, "operate": operate})
         label, cls = self._role_label(user, full, amap)
         pguilds = await self._portal_scope(user, request) if user else []
         member_only = user is not None and not authorized and bool(pguilds)
@@ -902,6 +948,8 @@ class WebCore(commands.Cog):
             # daher überschreibt _page_ctx() diese Werte beim Rendern).
             "switcher": None,
             "readonly": False,
+            "operate": False,
+            "operate_forms": "",
             "switcher_guild_name": "",
             "toast_err": None,
             "member_preview": False,
@@ -912,6 +960,8 @@ class WebCore(commands.Cog):
         ctx = {
             "switcher": request.get("wc_switcher"),
             "readonly": bool(request.get("webcore_readonly")),
+            "operate": bool(request.get("webcore_operate")),
+            "operate_forms": ",".join(request.get("wc_operate_forms") or ()),
             "switcher_guild_name": request.get("wc_guild_name", ""),
             "member_preview": bool(request.get("wc_member_preview")),
         }
@@ -1376,12 +1426,23 @@ class WebCore(commands.Cog):
                     "Ungültiges oder fehlendes CSRF-Token. Bitte Seite neu laden und erneut absenden.",
                     status=400, active=slug,
                 )
-            # Zentrale Durchsetzung: Speichern nur mit "Bearbeiten" für den Ziel-Server.
-            edit_ids = {g.id for g in await self.visible_guilds(request, min_level=acl.EDIT)}
-            if not full and (not edit_ids or (gid is not None and gid not in edit_ids)):
-                await self._audit(request, user, page=slug, guild_id=gid, action=action,
-                                  result="Keine Bearbeitungsrechte", ok=False)
+            # Zentrale Durchsetzung: Tagesgeschäft (operate_forms) braucht mindestens „Bedienen“,
+            # alles andere „Bearbeiten“ – jeweils für den Ziel-Server.
+            is_operate = acl.is_operate_post(page.operate_forms, form)
+            request["wc_operate"] = is_operate
+            needed = acl.OPERATE if is_operate else acl.EDIT
+            allowed_ids = {g.id for g in await self.visible_guilds(request, min_level=needed)}
+            if not full and (not allowed_ids or (gid is not None and gid not in allowed_ids)):
+                levels = [lv.get(slug, acl.NONE) for g_id, lv in (amap or {}).items()
+                          if gid is None or g_id == gid]
+                have = max(levels) if levels else acl.NONE
                 back = f"/cogs/{slug}" + (f"?guild={gid}&" if gid else "?")
+                if have == acl.OPERATE and needed == acl.EDIT:
+                    await self._audit(request, user, page=slug, guild_id=gid, action=action,
+                                      result="Abgelehnt: Stufe Bedienen, Bearbeiten nötig", ok=False)
+                    raise web.HTTPFound(back + "err=" + "Daf%C3%BCr+brauchst+du+das+Recht+Bearbeiten")
+                await self._audit(request, user, page=slug, guild_id=gid, action=action,
+                                  result=f"Keine Bearbeitungsrechte (Stufe {acl.LEVEL_LABEL[have]})", ok=False)
                 raise web.HTTPFound(back + "ok=" + "Keine+Bearbeitungsrechte+f%C3%BCr+diesen+Server")
             request["webcore_csrf"] = token
             try:
@@ -1406,7 +1467,12 @@ class WebCore(commands.Cog):
             selected = await self._select_guild(request, view_guilds, f"/cogs/{slug}")
             self._set_switcher(request, view_guilds, selected, f"/cogs/{slug}")
             level = acl.EDIT if full else (amap.get(selected) or {}).get(slug, acl.NONE)
-            request["webcore_readonly"] = level < acl.EDIT
+            # „Bedienen“ ohne Tagesgeschäft auf dieser Seite wirkt wie „Ansehen“.
+            operate = level == acl.OPERATE and page.supports_operate
+            request["webcore_readonly"] = level < acl.EDIT and not operate
+            request["webcore_operate"] = operate
+            if operate:
+                request["wc_operate_forms"] = page.operate_list
             request["webcore_csrf"] = token
             try:
                 result = await page.handler(request)
@@ -1658,17 +1724,39 @@ class WebCore(commands.Cog):
             msg = "Gespeichert"
             async with self.config.role_perms() as role_perms:
                 gperms = role_perms.setdefault(str(guild.id), {})
-                if action == "add_role":
+                if action in ("add_role", "apply_template"):
                     rid = form.get("role_id")
                     role = guild.get_role(int(rid)) if rid and rid.isdigit() else None
+                    # Vorlage (neu) bzw. „Startwert“ älterer Formulare (1 = Ansehen, 2 = Bearbeiten).
+                    tkey = acl.resolve_template(form.get("template") or "")
+                    if tkey is None and action == "add_role" and "template" not in form:
+                        tkey = {"2": "edit"}.get(str(form.get("default") or ""), "view")
                     if role is None or role.is_default():
                         msg = "Rolle nicht gefunden"
+                    elif tkey is None:
+                        msg = "Vorlage nicht gefunden"
+                    elif action == "add_role" and str(role.id) in gperms:
+                        msg = f"Rolle {role.name} ist bereits eingetragen"
                     else:
-                        lvl = acl.parse_level(_int(form.get("default"), 1)) or acl.VIEW
-                        gperms[str(role.id)] = {slug: acl.NAME_BY_LEVEL[lvl] for slug in self.pages}
-                        msg = f"Rolle {role.name} hinzugefügt"
+                        entry = acl.apply_template(gperms.get(str(role.id)), tkey, self.pages)
+                        label = acl.ROLE_TEMPLATES[tkey]["label"]
+                        if entry:
+                            gperms[str(role.id)] = entry
+                        else:
+                            gperms.pop(str(role.id), None)
+                        if action == "add_role":
+                            msg = (f"Rolle {role.name} hinzugefügt (Vorlage {label})" if entry else
+                                   f"Vorlage {label} ergibt keine Rechte für die geladenen Seiten – "
+                                   f"Rolle {role.name} nicht hinzugefügt")
+                        else:
+                            msg = f"Vorlage {label} auf {role.name} angewendet"
                 elif action == "matrix":
                     remove = form.get("remove")
+                    bad = [k for k, v in form.items() if str(k).startswith("p:") and not acl.is_level_name(v)]
+                    if bad:
+                        # z. B. eine alte, noch offene Seite mit Zahlen-Werten – lieber nichts speichern.
+                        raise web.HTTPFound(f"/access?guild={guild.id}&err="
+                                            + quote_plus("Ungültige Stufe – bitte Seite neu laden"))
                     for rid in form.getall("roles", []):
                         if not str(rid).isdigit():
                             continue
@@ -1677,7 +1765,7 @@ class WebCore(commands.Cog):
                             continue
                         entry = {}
                         for slug in self.pages:
-                            lvl = acl.parse_level(_int(form.get(f"p:{rid}:{slug}"), 0))
+                            lvl = acl.parse_level(form.get(f"p:{rid}:{slug}") or "none")
                             if lvl > acl.NONE:
                                 entry[slug] = acl.NAME_BY_LEVEL[lvl]
                         # Rechte für aktuell nicht geladene Cogs beibehalten
@@ -1696,8 +1784,12 @@ class WebCore(commands.Cog):
                     msg = "Aufgeräumt"
                 if not gperms:
                     role_perms.pop(str(guild.id), None)
+            failed = msg in ("Rolle nicht gefunden", "Vorlage nicht gefunden") or "nicht hinzugefügt" in msg \
+                or "bereits eingetragen" in msg
             await self._audit(request, user, page="access", guild_id=guild.id, action=action, result=msg,
-                              ok=msg not in ("Rolle nicht gefunden",))
+                              ok=not failed)
+            if failed:
+                raise web.HTTPFound(f"/access?guild={guild.id}&err=" + quote_plus(msg))
             raise web.HTTPFound(f"/access?guild={guild.id}&ok=" + quote_plus(msg))
 
         selected = await self._select_guild(request, guilds, "/access")
@@ -1713,6 +1805,7 @@ class WebCore(commands.Cog):
             guild=guild, roles=roles, pages=pages,
             guild_perms=acl.guild_role_perms(role_perms, guild.id),
             csrf=token, access_mode=await self.config.access_mode(),
+            operate_pages={p.slug for p in self.pages.values() if p.supports_operate},
         )
         portal = await self.config.member_portal() or {}
         content += render_portal_card(
@@ -2271,14 +2364,17 @@ class WebCore(commands.Cog):
     @webcore.command(name="roleperm")
     @commands.guild_only()
     async def webcore_roleperm(self, ctx: commands.Context, role: discord.Role, seite: str, stufe: str):
-        """Dashboard-Recht einer Rolle setzen: <rolle> <seite|alle> <none|view|edit>.
+        """Dashboard-Recht einer Rolle setzen: <rolle> <seite|alle> <none|view|operate|edit>.
 
-        Beispiel: [p]webcore roleperm @Support tickets edit
+        Stufen: none (kein Zugriff), view/ansehen, operate/bedienen (Tagesgeschäft, keine
+        Einstellungen), edit/bearbeiten (alles).
+        Beispiel: [p]webcore roleperm @Support tickets bedienen
         Seiten-Namen = Teil der URL (/cogs/<seite>), z. B. tickets, poll, guard.
         """
+        if not acl.is_level_name(stufe):
+            return await ctx.send("Stufe muss `none`, `view`, `operate` oder `edit` sein "
+                                  "(deutsch: `ansehen`, `bedienen`, `bearbeiten`).")
         level = acl.parse_level(stufe)
-        if stufe.lower() not in ("none", "view", "edit"):
-            return await ctx.send("Stufe muss `none`, `view` oder `edit` sein.")
         if role.is_default():
             return await ctx.send("@everyone kann keine Dashboard-Rechte bekommen.")
         seite = seite.lower()
@@ -2291,8 +2387,53 @@ class WebCore(commands.Cog):
         async with self.config.role_perms() as role_perms:
             for slug in slugs:
                 acl.set_role_level(role_perms, ctx.guild.id, role.id, slug, level)
+        msg = f"{role.name}: {', '.join(slugs)} → {acl.LEVEL_LABEL[level]}"
+        await self._audit(None, self._cmd_user(ctx), page="access", guild_id=ctx.guild.id,
+                          action="roleperm (Befehl)", result=msg, ok=True)
+        hint = ""
+        if level == acl.OPERATE:
+            no_op = [s for s in slugs if not self.pages[s].supports_operate]
+            if no_op:
+                hint = (f"\nHinweis: {', '.join(no_op)} hat kein Tagesgeschäft – „Bedienen“ wirkt dort wie "
+                        "„Ansehen“.")
         await ctx.send(
-            f"{role.name}: {', '.join(slugs)} → **{acl.LEVEL_LABEL[level]}**.",
+            f"{role.name}: {', '.join(slugs)} → **{acl.LEVEL_LABEL[level]}**.{hint}",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @webcore.command(name="roletemplate")
+    @commands.guild_only()
+    async def webcore_roletemplate(self, ctx: commands.Context, role: discord.Role, *, vorlage: str):
+        """Rollen-Vorlage auf eine Rolle anwenden: <rolle> <vorlage>.
+
+        Vorlagen: Nur ansehen, Bedienen, Bearbeiten, Support, Moderator, Eventleitung, Admin.
+        Setzt die Stufen aller geladenen Seiten laut Vorlage (andere Einträge bleiben).
+        Beispiel: [p]webcore roletemplate @Support support
+        """
+        tkey = acl.resolve_template(vorlage)
+        if tkey is None:
+            names = ", ".join(f"`{t['label']}`" for t in acl.ROLE_TEMPLATES.values())
+            return await ctx.send(f"Unbekannte Vorlage. Verfügbar: {names}.")
+        if role.is_default():
+            return await ctx.send("@everyone kann keine Dashboard-Rechte bekommen.")
+        if not self.pages:
+            return await ctx.send("Es sind keine Dashboard-Seiten geladen.")
+        async with self.config.role_perms() as role_perms:
+            gperms = role_perms.setdefault(str(ctx.guild.id), {})
+            entry = acl.apply_template(gperms.get(str(role.id)), tkey, self.pages)
+            if entry:
+                gperms[str(role.id)] = entry
+            else:
+                gperms.pop(str(role.id), None)
+            if not gperms:
+                role_perms.pop(str(ctx.guild.id), None)
+        label = acl.ROLE_TEMPLATES[tkey]["label"]
+        await self._audit(None, self._cmd_user(ctx), page="access", guild_id=ctx.guild.id,
+                          action="roletemplate (Befehl)", result=f"Vorlage {label} auf {role.name}", ok=True)
+        parts = [f"{slug}={acl.LEVEL_LABEL[acl.parse_level(v)].lower()}"
+                 for slug, v in sorted(entry.items()) if slug in self.pages]
+        await ctx.send(
+            f"Vorlage **{label}** auf {role.name} angewendet: {', '.join(parts) or 'keine Rechte'}."[:1990],
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
@@ -2305,13 +2446,14 @@ class WebCore(commands.Cog):
             return await ctx.send(
                 "Auf diesem Server haben noch keine Rollen Dashboard-Rechte. "
                 "Einrichten im Dashboard unter **Zugriff & Rollen** oder mit "
-                f"`{ctx.clean_prefix}webcore roleperm <rolle> <seite|alle> <view|edit>`."
+                f"`{ctx.clean_prefix}webcore roleperm <rolle> <seite|alle> <view|operate|edit>` bzw. "
+                f"`{ctx.clean_prefix}webcore roletemplate <rolle> <vorlage>`."
             )
         lines = []
         for rid, entry in gperms.items():
             role = ctx.guild.get_role(int(rid)) if str(rid).isdigit() else None
             name = role.name if role else f"gelöschte Rolle ({rid})"
-            parts = [f"{slug}={'✏️' if acl.parse_level(v) == acl.EDIT else '👁'}" for slug, v in sorted(entry.items())]
+            parts = [f"{slug}={acl.LEVEL_LABEL[acl.parse_level(v)].lower()}" for slug, v in sorted(entry.items())]
             lines.append(f"{name}: {', '.join(parts) or '—'}")
         await ctx.send(box("\n".join(lines)[:1900], lang="yaml"))
 

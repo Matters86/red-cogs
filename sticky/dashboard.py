@@ -2,7 +2,9 @@
 
 Aufgaben:
 * GET  -> Seite rendern (Sticky-Liste, Editor, Einstellungen)
-* POST -> Formular speichern, danach Redirect (Post/Redirect/Get)
+* POST -> Formular speichern, danach Redirect (Post/Redirect/Get). ``save``/``toggle``/``delete``
+  (einzelne Stickies) sind Tagesgeschäft und gehen schon mit der WebCore-Stufe „Bedienen“;
+  ``settings`` braucht „Bearbeiten“.
 
 Aufbau mit dem UI-Baukasten von WebCore (``request.app["webcore"].ui``): Reiter
 Stickies · Editor · Einstellungen – kein eigenes CSS.

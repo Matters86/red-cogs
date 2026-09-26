@@ -58,8 +58,9 @@ Dashboard-Seiten zu registrieren. Neue Cogs erscheinen automatisch in der Naviga
 | `[p]webcore access <owner|admin|allowlist>` | Zugriffsmodus setzen |
 | `[p]webcore allow <user>` | User freigeben (volle Sicht) |
 | `[p]webcore deny <user>` | Freigabe entfernen |
-| `[p]webcore roleperm <rolle> <seite\|alle> <none\|view\|edit>` | Dashboard-Recht einer Rolle setzen (im Server ausführen) |
-| `[p]webcore roles` | Dashboard-Rechte der Rollen dieses Servers anzeigen |
+| `[p]webcore roleperm <rolle> <seite\|alle> <none\|view\|operate\|edit>` | Dashboard-Recht einer Rolle setzen (im Server ausführen); deutsch auch `ansehen`, `bedienen`, `bearbeiten` |
+| `[p]webcore roletemplate <rolle> <vorlage>` | Rollen-Vorlage anwenden: `Nur ansehen`, `Bedienen`, `Bearbeiten`, `Support`, `Moderator`, `Eventleitung`, `Admin` (im Server ausführen) |
+| `[p]webcore roles` | Dashboard-Rechte (Stufe je Seite) der Rollen dieses Servers anzeigen |
 | `[p]webcore portal <on\|off>` | „Mein Bereich“ für Mitglieder dieses Servers ein-/ausschalten (im Server ausführen) |
 | `[p]webcore auditchannel [#kanal]` | Audit-Log dieses Servers zusätzlich in einen Kanal posten; ohne Kanal = aus (im Server ausführen) |
 | `[p]webcore settings` | Aktuelle Einstellungen anzeigen (ohne Secret) |
@@ -71,14 +72,30 @@ Alle `webcore`-Befehle sind dem Bot-Owner vorbehalten.
 Im Dashboard unter **Verwaltung → Zugriff & Rollen** (nur Bot-Owner):
 
 1. Oben rechts den Server wählen.
-2. Unter „Rolle hinzufügen“ eine Discord-Rolle eintragen (Startwert *Ansehen* oder *Bearbeiten*).
-3. In der Matrix pro Seite festlegen: **—** (kein Zugriff), **Ansehen** oder **Bearbeiten** – speichern.
+2. Unter „Rolle hinzufügen“ eine Discord-Rolle und eine **Vorlage** wählen (siehe unten).
+3. In der Matrix pro Seite festlegen: **—** (kein Zugriff), **Ansehen**, **Bedienen** oder
+   **Bearbeiten** – speichern. Pro Rolle lässt sich über das Menü „Vorlage …“ (Zauberstab, mit
+   Bestätigung) jederzeit eine Vorlage erneut anwenden.
 
 | Stufe | Wirkung |
 |---|---|
 | — | Seite erscheint nicht in der Navigation, Aufruf wird abgelehnt (403). |
 | Ansehen | Seite öffnet sich schreibgeschützt (Hinweis „Nur Ansicht“, alle Formulare gesperrt). |
+| Bedienen | Tagesgeschäft der Seite (z. B. Ticket schließen, verwarnen, entbannen, Event-Aktionen), aber **keine Einstellungen**. Hinweis „Bedienen“, Navigation mit Badge „Bedienen“, alle anderen Formulare gesperrt. Seiten ohne Tagesgeschäft (in der Matrix „ohne Bedienen“) behandeln „Bedienen“ wie „Ansehen“. |
 | Bearbeiten | Alle Einstellungen und Aktionen dieser Seite – nur für **diesen Server**. |
+
+**Vorlagen** (setzen nur die aktuell geladenen Seiten; Einträge für entladene Cogs bleiben):
+
+| Vorlage | Stufen |
+|---|---|
+| Nur ansehen / Bedienen / Bearbeiten | alle Seiten auf diese Stufe |
+| Support | tickets = Bedienen · warnings, commands, serverstats = Ansehen · Rest — |
+| Moderator | tickets, warnings, guard, poll, sticky, fivemadmin = Bedienen · commands, serverstats, levels = Ansehen · Rest — |
+| Eventleitung | raidhelper, giveaways, scheduler, poll = Bedienen · serverstats = Ansehen · Rest — |
+| Admin | alle Seiten Bearbeiten |
+
+Gespeichert werden die Stufen als `"view"`, `"operate"`, `"edit"` – ältere Einträge (`view`/`edit`)
+gelten unverändert weiter.
 
 - Hat ein Mitglied mehrere Rollen, gilt je Seite die höchste Stufe. Rechte gelten immer nur für
   den Server, auf dem die Rolle eingetragen ist.
@@ -91,7 +108,10 @@ Im Dashboard unter **Verwaltung → Zugriff & Rollen** (nur Bot-Owner):
   „Zugriff & Rollen“, „Audit-Log“, „Bot-Status“, „Fehlerprotokoll“ und „Sichern & Wiederherstellen“
   bleiben dem Owner vorbehalten.
 - Wichtig: „Bearbeiten“ gibt **alle** Einstellungen einer Seite frei (bei Tickets z. B. auch die
-  Admin-Rollen des Ticketsystems). Vergib es nur an Rollen, denen du das zutraust.
+  Admin-Rollen des Ticketsystems). Vergib es nur an Rollen, denen du das zutraust – für das
+  Tagesgeschäft reicht meist „Bedienen“.
+- Abgelehnte Versuche (z. B. „Bedienen“ will Einstellungen speichern) erscheinen im Audit-Log mit
+  der Stufe des Nutzers; im Dashboard kommt der Hinweis „Dafür brauchst du das Recht Bearbeiten“.
 
 ## Audit-Log
 
@@ -337,7 +357,7 @@ automatisch. Zugriff im Handler: `ui = request.app["webcore"].ui`.
 | `ui.tab(key, titel, icon, inhalt, count=n)` | Reiter; mehrere hintereinander ergeben die Reiterleiste |
 | `ui.card(titel, inhalt, desc=…, icon=…, actions=…)` | Karte mit Überschrift und Kurzbeschreibung |
 | `ui.callout(text, tone=…)`, `ui.empty(icon, titel, text)` | Hinweisbox, leerer Zustand |
-| `ui.form(action, inhalt, csrf=…, hidden={…}, savebar=True)` | Formular inkl. CSRF; `savebar` zeigt bei Änderungen „Speichern/Verwerfen“; `confirm="…"` fragt vor dem Absenden; `enctype=` für Uploads |
+| `ui.form(action, inhalt, csrf=…, hidden={…}, savebar=True)` | Formular inkl. CSRF; `savebar` zeigt bei Änderungen „Speichern/Verwerfen“; `confirm="…"` fragt vor dem Absenden; `enctype=` für Uploads; `operate=True` markiert Tagesgeschäft (bleibt bei „Bedienen“ benutzbar) |
 | `ui.grid(ui.field(label, control, help=…), cols=2)` | Formularraster mit Hilfetexten |
 | `ui.switch`, `ui.switches(...)`, `ui.text_input`, `ui.number(…, unit="Sek.")`, `ui.textarea`, `ui.color_input` | Eingabefelder |
 | `ui.select(name, [(wert, label[, farbe])], selected, multiple=True)` | Auswahl; `multiple` wird zur durchsuchbaren Chip-Auswahl |
@@ -399,15 +419,19 @@ async def dashboard_page(self, request):
 
 `visible_guilds(request)` liefert für Owner/Allowlist-User alle Server, sonst nur die Server, auf
 denen der User für **diese Seite** mindestens *Ansehen* hat – bei **POST** mindestens
-*Bearbeiten*. Wer die Ziel-Guild eines Formulars gegen diese Liste prüft (so machen es alle Cogs
-im Repo), bekommt die Rollen-Rechte damit automatisch. Zusätzlich lehnt WebCore POSTs zentral ab,
-wenn das Feld `guild`/`guild_id` auf einen Server ohne Bearbeiten-Recht zeigt.
+*Bearbeiten*, bzw. mindestens *Bedienen*, wenn WebCore den POST als Tagesgeschäft eingestuft hat
+(`request["wc_operate"]`, siehe unten). Wer die Ziel-Guild eines Formulars gegen diese Liste prüft
+(so machen es alle Cogs im Repo), bekommt die Rollen-Rechte damit automatisch. Zusätzlich lehnt
+WebCore POSTs zentral ab, wenn das Feld `guild`/`guild_id` auf einen Server ohne passendes Recht zeigt.
 
 ### Weitere Helfer für Cogs
 
 | Aufruf | Zweck |
 |---|---|
-| `await webcore.page_level(request, guild)` | Stufe des Users auf dieser Seite: 0 = kein Zugriff, 1 = Ansehen, 2 = Bearbeiten |
+| `await webcore.page_level(request, guild)` | Stufe des Users auf dieser Seite: `webcore.NONE` 0, `webcore.VIEW` 1, `webcore.OPERATE` 2, `webcore.EDIT` 3 – nie mit festen Zahlen vergleichen, besser `can_operate`/`can_edit` |
+| `await webcore.can_operate(request, guild)` | Stufe ≥ Bedienen (Tagesgeschäft) – Owner/Allowlist/Server-Admin immer |
+| `await webcore.can_edit(request, guild)` | Stufe Bearbeiten (Einstellungen) |
+| `request.get("webcore_readonly")` / `request.get("webcore_operate")` | GET: Nur-Ansicht bzw. Bedienen-Modus der gewählten Seite/des Servers (für Oberfläche, z. B. Einstellungs-Reiter ausblenden) |
 | `await webcore.has_full_scope(request)` | Owner/Allowlist? – für botweite Einstellungen |
 | `await webcore.can_grant_role(request, guild, role)` | Darf der User diese Rolle automatisch vergeben lassen? (Schutz vor Selbst-Hochstufung) |
 
@@ -418,6 +442,40 @@ den Wechsler in der Kopfzeile.
 
 **Meldungen:** `?ok=<Text>` bzw. `?err=<Text>` in der Weiterleitung nach einem POST zeigt WebCore
 als Toast an (Hinweisbalken mit einer Klasse `…-flash` werden dann ausgeblendet).
+
+## Für Cog-Entwickler: Tagesgeschäft (`operate_forms`)
+
+Damit die Stufe **Bedienen** auf deiner Seite etwas darf, markierst du beim Registrieren die
+Formulare, die zum Tagesgeschäft gehören:
+
+```python
+webcore.register_page(owner=self, slug="raidhelper", name="Raidplaner", handler=self.dashboard_page,
+                      icon="bi-calendar-event", operate_forms={"event_action", "repost"})
+# oder mit eigener Entscheidung (data = MultiDict des POST):
+webcore.register_page(..., operate_forms=lambda data: data.get("form") == "ticket" and data.get("op") in {"close", "claim"})
+```
+
+- Gemeint sind die Werte des POST-Feldes `form` (falls vorhanden, sonst `action`). Bei mehreren
+  Werten müssen **alle** in der Menge stehen. Dein Handler muss nach **demselben Feld** verzweigen.
+- WebCore liest die POST-Daten vorab (`await request.post()` ist gecacht – auch Uploads/multipart
+  bleiben im Handler lesbar) und prüft zentral: *Bearbeiten* darf alles, *Bedienen* nur
+  Tagesgeschäft (sonst Toast „Dafür brauchst du das Recht Bearbeiten“ + Audit), *Ansehen* nichts.
+- Oberfläche: Bei *Bedienen* sperrt `webcore.js` alle POST-Formulare außer denen, deren
+  `form`/`action`-Wert in der Liste steht (bei `action`-Buttons pro Button) oder die
+  `data-wc-operate` tragen – `ui.form(..., operate=True)` setzt das. Bei einem Callable ist die
+  Liste leer, dann markiere die Formulare selbst. Das ist nur Komfort: entscheidend ist die
+  Server-Prüfung.
+- Zusätzliche eigene Prüfungen im Handler weiter mit `can_edit`/`can_operate`, nie mit Zahlen.
+
+**Regeln – Tagesgeschäft ist:** Aktionen an **einzelnen Einträgen/Inhalten**, z. B. Ticket
+schließen/übernehmen, Event posten/neu posten/absagen, Umfrage beenden, Mitglied verwarnen,
+Verwarnung zurücknehmen, FiveM-Spieler kicken/entbannen, Nachricht neu posten.
+
+**NIE Tagesgeschäft:** Einstellungen jeder Art (Kanäle, Texte, Limits, Sprache …), Rollen-Vergabe
+und -Zuordnung (Panel-/Beitritts-/Inhaber-/Belohnungsrollen), Rechte/Staff-Listen, alles, was zur
+**Selbst-Hochstufung** führen kann (z. B. XP/Level setzen → Belohnungsrollen, Rollen-Panels),
+**Massenaktionen** (alle löschen, alle zurücksetzen, Import) und Löschen ganzer Konfigurationen.
+Im Zweifel: *Bearbeiten* verlangen.
 
 ## Für Cog-Entwickler: Mitglieder-Seiten („Mein Bereich“)
 

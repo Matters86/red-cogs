@@ -5,6 +5,11 @@
   <div><strong>Nur Ansicht.</strong> Du kannst diese Seite für <strong>{{ switcher_guild_name }}</strong> ansehen, aber nichts ändern.</div>
 </div>
 {% endif %}
+{% if operate %}
+<div class="ro-banner op-banner"><i class="bi bi-hand-index-thumb"></i>
+  <div><strong>Bedienen:</strong> Du kannst Aktionen ausführen, aber keine Einstellungen ändern.</div>
+</div>
+{% endif %}
 {% if member_preview %}
 <div class="ro-banner"><i class="bi bi-eye"></i>
   <div><strong>Vorschau.</strong> „Mein Bereich“ ist auf <strong>{{ switcher_guild_name }}</strong> für Mitglieder ausgeschaltet – nur das Team sieht diese Seite.{% if is_full and switcher %} <a href="/access?guild={{ switcher.selected }}">Einschalten unter Zugriff &amp; Rollen</a>{% endif %}</div>

@@ -68,8 +68,15 @@ Seite **Gewinnspiele** (`/cogs/giveaways`, Icon Geschenk):
 - **Einstellungen** – Sprache, Zeitzone, Embed-Farbe, Aufbewahrung, Manager-Rollen, Schalter
   **„Im Mitglieder-Bereich anzeigen“** (Standard an).
 
-Rechte laufen über WebCore (*Verwaltung → Zugriff & Rollen*): „Ansehen“ zeigt alles schreibgeschützt,
-„Bearbeiten“ erlaubt alle Aktionen für diesen Server.
+### Rechte im Dashboard
+
+| Stufe | Darf |
+|---|---|
+| Ansehen | alles sehen (laufende/beendete Gewinnspiele, Teilnehmer, Einstellungen), nichts ändern |
+| **Bedienen** | Tagesgeschäft: Gewinnspiel **starten**, **beenden & auslosen**, **neu auslosen** (alle oder einzeln), **abbrechen**, beendete Einträge **entfernen** |
+| Bearbeiten | zusätzlich Einstellungen (Sprache, Zeitzone, Farbe, Aufbewahrung), **Manager-Rollen** und den Schalter „Im Mitglieder-Bereich anzeigen“ |
+
+Die Stufen vergibt der Bot-Owner unter *Verwaltung → Zugriff & Rollen* (je Server und Rolle); der Bot-Owner selbst darf immer alles.
 
 ## Mein Bereich: „Gewinnspiele“ (für Mitglieder)
 

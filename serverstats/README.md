@@ -60,7 +60,11 @@ Seite **Statistik** (Icon Diagramm) im WebCore-Dashboard, Server über den Wechs
 - **Reiter Einstellungen:** Aufbewahrung, **Zeitzone** (Freitext mit Vorschlagsliste gängiger Zonen, zeigt die
   aktuelle Uhrzeit dort), Sprache, ignorierte Kanäle; **Statistik zurücksetzen** (mit Bestätigung).
 
-Rechte: **Ansehen** zeigt alles inkl. CSV-Export, **Bearbeiten** erlaubt Einstellungen und Zurücksetzen.
+### Rechte im Dashboard
+
+ServerStats hat **kein Tagesgeschäft** – es gibt nur Einstellungen und „Statistik zurücksetzen“ (Massenaktion).
+Die WebCore-Stufe **Bedienen** wirkt hier wie **Ansehen** (alles inkl. CSV-Export sehen);
+**Bearbeiten** erlaubt Einstellungen und Zurücksetzen.
 
 ## Datenschutz
 Gespeichert werden nur **Tages-Summen je Kanal** – keine Nachrichteninhalte, keine Nutzer-IDs, keine Namen.

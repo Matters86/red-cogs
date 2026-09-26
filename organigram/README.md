@@ -58,6 +58,16 @@ Ist `webcore` geladen, erscheint automatisch der Tab **Organigramm**. Dort lasse
 Die Dashboard-Anbindung steckt in `cog_load`, `cog_unload` und dem
 `on_webcore_ready`-Listener (Standard-Muster dieses Repos).
 
+### Rechte im Dashboard
+
+| Stufe | Darf |
+|---|---|
+| Ansehen | alles sehen (Organigramme, Positionen, Vorschau, PNG herunterladen), nichts ändern |
+| **Bedienen** | Tagesgeschäft: ein Organigramm in einen Kanal **posten bzw. aktualisieren** |
+| Bearbeiten | zusätzlich Organigramme anlegen/umbenennen/löschen, Einstellungen (Muster, Modus, Farbe, Optionen) und **Positionen** (inkl. verknüpfter Rollen) |
+
+Die Stufen vergibt der Bot-Owner unter *Verwaltung → Zugriff & Rollen* (je Server und Rolle); der Bot-Owner selbst darf immer alles.
+
 ## Datenhaltung
 
 Gespeichert werden pro Server nur die Organigramm-Definitionen (Bezeichnungen,

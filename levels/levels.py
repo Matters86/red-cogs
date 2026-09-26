@@ -170,6 +170,8 @@ class Levels(commands.Cog):
         self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
+        # Bewusst ohne operate_forms: XP ändern (-> Belohnungsrollen), Rollen-Zuordnung und Abgleich sind kein
+        # Tagesgeschäft – die WebCore-Stufe „Bedienen“ wirkt auf dieser Seite wie „Ansehen“.
         webcore.register_page(owner=self, slug="levels", name="Level", icon="bi-trophy", handler=self.dashboard_page)
         if hasattr(webcore, "register_member_page"):  # ältere WebCore-Versionen ohne „Mein Bereich“
             webcore.register_member_page(

@@ -107,12 +107,17 @@ class RaidHelper(commands.Cog):
         self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
+        # Tagesgeschäft für die Rechte-Stufe „Bedienen“: Events anlegen/bearbeiten und die Event-Aktionen
+        # (schließen/öffnen/löschen/neu posten). Einstellungen, Texte, Spec-Icons, Launcher-API und der
+        # Mitglieder-Bereich-Schalter brauchen „Bearbeiten“. (Ältere WebCore-Versionen kennen das nicht.)
+        extra = {"operate_forms": {"create", "edit", "action"}} if hasattr(webcore, "OPERATE") else {}
         webcore.register_page(
             owner=self,
             slug="raidhelper",
             name="Raidplaner",
             icon="bi-calendar-event",
             handler=self.dashboard_page,
+            **extra,
         )
         # Mitglieder-Bereich („Mein Bereich“): kommende Raids ansehen und sich anmelden.
         if hasattr(webcore, "register_member_page"):  # ältere WebCore-Versionen ohne /me

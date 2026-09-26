@@ -127,8 +127,11 @@ class Scheduler(commands.Cog):
         self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
+        # Tagesgeschäft („Bedienen“): Einträge anlegen/bearbeiten/Vorschau (form=entry) sowie testen/pausieren/
+        # fortsetzen/löschen (form=action). Zeitzone und Sprache (form=settings) brauchen „Bearbeiten“.
+        extra = {"operate_forms": {"entry", "action"}} if hasattr(webcore, "OPERATE") else {}
         webcore.register_page(owner=self, slug="scheduler", name="Geplante Nachrichten", icon="bi-clock-history",
-                              handler=self.dashboard_page)
+                              handler=self.dashboard_page, **extra)
 
     async def dashboard_page(self, request):
         from .dashboard import dashboard_handler

@@ -7,6 +7,8 @@ Aufgaben (gleiches Muster wie tickets/dashboard.py):
 * POST form=create     -> Neue Umfrage anlegen und posten
 * POST form=action     -> Umfrage schließen/öffnen/löschen
 
+Rechte: ``create``/``action`` sind Tagesgeschäft (Stufe „Bedienen“ reicht), ``settings`` braucht „Bearbeiten“.
+
 Aufbau mit dem UI-Baukasten von WebCore (``request.app["webcore"].ui``) – kein
 eigenes CSS. Nutzereingaben werden mit ``html.escape`` abgesichert.
 """

@@ -40,7 +40,7 @@ async def main():
     # Matrix: Support -> tickets edit, poll view, rest none
     data = [("csrf_token", tok), ("form", "matrix"), ("guild", "1000"), ("roles", "1101")]
     for slug in wc.pages:
-        data.append((f"p:1101:{slug}", {"tickets": "2", "poll": "1"}.get(slug, "0")))
+        data.append((f"p:1101:{slug}", {"tickets": "edit", "poll": "view"}.get(slug, "none")))
     r = await client.post("/access", headers=owner, data=data, allow_redirects=False)
     perms = await wc.config.role_perms()
     assert perms == {"1000": {"1101": {"tickets": "edit", "poll": "view"}}}, perms

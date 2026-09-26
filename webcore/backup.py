@@ -5,7 +5,7 @@ Format::
     {"format": "red-cogs-backup", "version": 1, "created": "<ISO-8601 UTC>",
      "guild_id": 1000, "guild_name": "…",
      "cogs": {"<CogName>": {"identifier": "<config-identifier>", "guild": {…}, "global": {…}?}},
-     "webcore": {"role_perms": {"<role_id>": {"<slug>": "view"|"edit"}}, "member_portal": bool,
+     "webcore": {"role_perms": {"<role_id>": {"<slug>": "view"|"operate"|"edit"}}, "member_portal": bool,
                  "audit_channel": <channel_id>|null}?}
 
 * Exportiert wird generisch ``cog.config.guild(guild).all()`` jedes Cogs, der bei WebCore eine
@@ -342,7 +342,7 @@ async def plan_webcore(webcore, guild, section, *, same_guild: bool) -> dict:
     Server wird die Matrix vollständig auf den Stand der Sicherung gesetzt (Rollen, die dort fehlen,
     verlieren ihre Rechte); auf einem anderen Server bleiben Rollen, die nicht in der Sicherung stehen,
     unverändert. Rollen, die es auf dem Ziel-Server nicht gibt, ungültige Stufen (nur ``none``/``view``/
-    ``edit``) und unbekannte Seiten werden übersprungen und gemeldet; bei einer ungültigen Stufe bleibt
+    ``operate``/``edit``) und unbekannte Seiten werden übersprungen und gemeldet; bei einer ungültigen Stufe bleibt
     der bisherige Wert dieser Seite erhalten.
     """
     gid = str(guild.id)

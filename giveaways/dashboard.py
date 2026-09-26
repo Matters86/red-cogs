@@ -6,6 +6,8 @@
 * POST form=create   -> Gewinnspiel anlegen und posten (bei Fehler: Entwurf bleibt erhalten)
 * POST form=action   -> end · cancel · reroll · reroll_one · delete (alle mit Bestätigung im UI)
 
+Rechte: ``create``/``action`` sind Tagesgeschäft (Stufe „Bedienen“ reicht), ``settings`` braucht „Bearbeiten“.
+
 Nur UI-Kit, alle eigenen Werte mit ``html.escape``. Server nur über ``visible_guilds``.
 """
 

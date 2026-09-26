@@ -72,8 +72,22 @@ Ist `webcore` geladen, erscheint der Tab **Tickets**. Dort lassen sich pro Serve
   plus die Admin-Rollen; das Team darf sie auch übernehmen, sperren und schließen. Leer = globale
   Einstellungen. Tickets mit Grund heißen automatisch `<grund>-<nummer>` (Umlaute werden zu
   ae/oe/ue/ss).
+- **Offene Tickets** (Übersicht) – Nummer, Inhaber, Grund, Öffnungszeit und Übernahme; **Schließen** mit
+  Bestätigung wirkt wie der Button im Ticket (Transcript, Log, Inhaber-Rolle entfernen, archivieren bzw.
+  löschen). Existiert der Kanal nicht mehr, entfernt „Schließen“ nur den verwaisten Eintrag.
 - **Transcripts** – gespeicherte Ticket-Verläufe als eigene Seite öffnen.
 - **Statistik** – offene/geschlossene Tickets, Ø Laufzeit und Übernahmen je Support-Mitglied.
+
+### Rechte im Dashboard
+
+| WebCore-Stufe | Darf |
+|---|---|
+| Ansehen | alles ansehen, Transcripts öffnen |
+| **Bedienen** | zusätzlich **einzelne Tickets schließen** (Tagesgeschäft) |
+| Bearbeiten | zusätzlich Einstellungen, Rollen (Support/Admin/Inhaber …), Texte, Panels anlegen/bearbeiten/löschen und die Team-Zuordnung je Grund |
+
+Panels und Team-Zuordnung gelten als Einrichtung des Ticketsystems (Rollen, Fragen, Eingangskanäle) und
+brauchen deshalb *Bearbeiten*.
 
 ### Mitglieder-Bereich: „Meine Tickets“
 

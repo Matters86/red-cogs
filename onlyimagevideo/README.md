@@ -75,6 +75,10 @@ Die Seite **Nur Medien** erscheint nach dem Laden automatisch im WebCore-Dashboa
 - ein Einstellungs-Formular (Sprache, Kanäle, Ausnahme-Rollen, alle Schalter, Hinweisdauer, Hinweistext-Override),
 - eine Übersicht „Funktionsweise", die zeigt, was aktuell als Medium zählt.
 
+### Rechte im Dashboard
+
+Diese Seite hat **kein Tagesgeschäft**: Sie besteht nur aus Einstellungen (überwachte Kanäle, Ausnahme-Rollen, Schalter, Hinweistext). Deshalb wirkt die Stufe **Bedienen** hier wie **Ansehen** (alles sichtbar, nichts änderbar); zum Ändern braucht es **Bearbeiten**. Die Stufen vergibt der Bot-Owner unter *Verwaltung → Zugriff & Rollen* (je Server und Rolle); der Bot-Owner selbst darf immer alles.
+
 ## Datenspeicherung
 
 Es werden keine personenbezogenen Daten gespeichert – nur serverbezogene Einstellungen und ein Zähler gelöschter Nachrichten. Inhalte gelöschter Nachrichten werden nicht gespeichert.

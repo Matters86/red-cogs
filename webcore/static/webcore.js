@@ -1,11 +1,16 @@
 /* WebCore – Bedienlogik des Dashboards (ohne Abhängigkeiten).
    Reiter, Chip-Mehrfachauswahl, Speicherleiste, Bestätigungsdialog, Tabellenfilter,
-   Toasts und Nur-Ansicht-Modus. Alles progressiv: ohne JS funktionieren die Seiten weiter. */
+   Toasts, Nur-Ansicht- und Bedienen-Modus. Alles progressiv: ohne JS funktionieren die Seiten weiter. */
 (function () {
   "use strict";
   var content = document.getElementById("wc-content");
   var body = document.body;
   var READONLY = body.getAttribute("data-readonly") === "1";
+  // Stufe „Bedienen“: nur Tagesgeschäft-Formulare (form/action-Wert in data-operate-forms oder
+  // Formular mit data-wc-operate) bleiben benutzbar – der Server prüft trotzdem jeden POST.
+  var OPERATE = !READONLY && body.getAttribute("data-operate") === "1";
+  var OP_FORMS = (body.getAttribute("data-operate-forms") || "").split(",")
+    .map(function (x) { return x.trim(); }).filter(Boolean);
 
   function $$(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
@@ -47,6 +52,37 @@
       f.setAttribute("data-wc-locked", "1");
       $$("input,select,textarea,button", f).forEach(function (x) { if (x.type !== "hidden") x.disabled = true; });
       f.addEventListener("submit", function (e) { e.preventDefault(); toast("Nur Ansicht – dir fehlt die Berechtigung zum Bearbeiten.", true); });
+    });
+  }
+
+  /* -------------------------------------------------------------- Bedienen */
+  function isSubmit(x) { return (x.tagName === "BUTTON" && (x.type || "submit") === "submit") || (x.tagName === "INPUT" && (x.type === "submit" || x.type === "image")); }
+  function opAllowed(v) { return OP_FORMS.indexOf(v) > -1; }
+  function opLockForm(f) {
+    f.setAttribute("data-wc-locked", "1");
+    Array.prototype.forEach.call(f.elements, function (x) { if (x.type !== "hidden") x.disabled = true; });
+    f.addEventListener("submit", function (e) { e.preventDefault(); toast("Dafür brauchst du das Recht Bearbeiten.", true); });
+  }
+  if (OPERATE && content) {
+    $$("form", content).forEach(function (f) {
+      if ((f.getAttribute("method") || "get").toLowerCase() !== "post") return;
+      if (f.hasAttribute("data-wc-operate")) return;
+      var els = Array.prototype.slice.call(f.elements);
+      var key = els.some(function (x) { return x.name === "form" && x.value; }) ? "form" : "action";
+      var fixed = els.filter(function (x) { return x.name === key && !isSubmit(x) && x.value; });
+      var btns = els.filter(function (x) { return x.name === key && isSubmit(x); });
+      if (fixed.length) {
+        // Formular-Typ steht fest (verstecktes Feld): ganz frei oder ganz gesperrt.
+        if (!fixed.every(function (x) { return opAllowed(x.value); })) return opLockForm(f);
+        btns.forEach(function (b) { if (!opAllowed(b.value)) { b.disabled = true; b.setAttribute("data-wc-op-locked", "1"); } });
+        return;
+      }
+      // Aktion kommt vom geklickten Button: nur erlaubte Buttons aktiv lassen.
+      var ok = btns.filter(function (b) { return opAllowed(b.value); });
+      if (!ok.length) return opLockForm(f);
+      els.forEach(function (x) {
+        if (isSubmit(x) && ok.indexOf(x) === -1) { x.disabled = true; x.setAttribute("data-wc-op-locked", "1"); }
+      });
     });
   }
 
@@ -198,7 +234,7 @@
   }
   function initSavebars() {
     if (READONLY) return;
-    $$("form[data-wc-savebar]").forEach(function (f) {
+    $$("form[data-wc-savebar]:not([data-wc-locked])").forEach(function (f) {
       f._wcInitial = serialize(f);
       f.addEventListener("input", function () { check(f); });
       f.addEventListener("change", function () { check(f); });

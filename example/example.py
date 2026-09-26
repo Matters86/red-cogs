@@ -36,14 +36,23 @@ class Example(commands.Cog):
             name="Example",
             icon="bi-stars",
             handler=self.dashboard_page,
+            # Rechte-Stufe „Bedienen“ (Tagesgeschäft): Die Notiz hier ist eine Einstellung, darum braucht jeder
+            # POST „Bearbeiten“. Hat dein Cog Aktionen an EINZELNEN Einträgen (z. B. Event schließen, Nachricht
+            # neu posten, Eintrag löschen), markiere deren Formulare als Tagesgeschäft – Werte des POST-Feldes
+            # ``form`` (falls vorhanden, sonst ``action``); der Handler muss nach genau diesem Feld verzweigen:
+            #   operate_forms={"event_action", "repost"},
+            # Im Markup: ``ui.form(..., hidden={"form": "event_action", ...})`` oder ``ui.form(..., operate=True)``.
+            # NIE Tagesgeschäft: Einstellungen, Texte, Rollen-Zuordnung, Massenaktionen (siehe webcore/README.md).
+            # Für ältere WebCore-Versionen: nur übergeben, wenn ``hasattr(webcore, "OPERATE")``.
         )
 
     async def dashboard_page(self, request):
         """Vorlage für neue Cogs – das empfohlene Muster in kurz:
 
         * Server NUR über ``webcore.visible_guilds(request)`` auflösen (nie ``self.bot.guilds``).
-          Die Liste ist seitenbewusst: GET = Server mit „Ansehen“, POST = mit „Bearbeiten“
-          (Rollen-Rechte aus „Zugriff & Rollen“).
+          Die Liste ist seitenbewusst: GET = Server mit „Ansehen“, POST = mit „Bearbeiten“ bzw. mit
+          „Bedienen“ bei Tagesgeschäft-Formularen (``operate_forms``, Rollen-Rechte aus „Zugriff & Rollen“).
+          Für die Oberfläche: ``await webcore.can_edit(request, guild)`` / ``can_operate(...)``.
         * Den gewählten Server liest man aus ``?guild=`` – WebCore setzt ihn automatisch und
           zeigt den globalen Server-Wechsler; ein eigenes Dropdown ist nicht nötig.
         * Jedes Formular: ``csrf_token`` + ``guild`` mitsenden, danach PRG mit ``?ok=<Text>``

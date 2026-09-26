@@ -6,6 +6,7 @@
 * POST form=action       -> test · pause · resume · delete
 * POST form=settings     -> Zeitzone, Sprache
 
+Rechte: ``entry``/``action`` sind Tagesgeschäft (Stufe „Bedienen“ reicht), ``settings`` braucht „Bearbeiten“.
 Nur UI-Kit, alle Werte mit ``html.escape``. Server nur über ``visible_guilds``.
 """
 

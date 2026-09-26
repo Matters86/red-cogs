@@ -48,3 +48,13 @@ Checkbox), `ui.number` (Zahl mit Einheit), `ui.select` (mit `multiple=True` als 
 `ui.tab` (Reiter), `ui.table`/`ui.row` (Tabellen, `search=True` für Filter), `ui.callout`,
 `ui.empty`, `ui.badge` und `ui.button(..., kind="danger", confirm="…")` für Aktionen mit Rückfrage.
 Vorbild für eine größere Seite: `tickets/dashboard.py`.
+
+### Rechte im Dashboard
+
+Die Notiz ist eine Einstellung – Speichern braucht **Bearbeiten**, **Bedienen** wirkt hier wie **Ansehen**.
+Für eigene Cogs: Aktionen an einzelnen Einträgen (z. B. Event schließen, neu posten, Eintrag löschen) als
+Tagesgeschäft markieren – `register_page(..., operate_forms={"event_action", "repost"})` (Werte des
+POST-Feldes `form`, sonst `action`), im Markup `ui.form(..., hidden={"form": "event_action"})` oder
+`ui.form(..., operate=True)`. Einstellungen, Texte, Rollen-Zuordnung und Massenaktionen nie. Der Hinweis
+steht kommentiert in `example.py` (`_register_dashboard`); Details: `webcore/README.md` →
+„Für Cog-Entwickler: Tagesgeschäft (`operate_forms`)“.

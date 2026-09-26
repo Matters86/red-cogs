@@ -55,6 +55,10 @@ Ist `webcore` geladen, erscheint automatisch der Tab **Befehle**. Dort gibt es:
 - pro Zeile bzw. pro Cog einen Schalter zum Aus-/Einblenden,
 - Links für „ausgeblendete anzeigen" und „Markdown-Export".
 
+### Rechte im Dashboard
+
+Diese Seite hat **kein Tagesgeschäft**: Sie ist eine Übersicht; „Mitglied prüfen“ und Filter funktionieren schon mit **Ansehen**. Befehle ein-/ausblenden gilt botweit und ist dem Bot-Owner vorbehalten. Deshalb wirkt die Stufe **Bedienen** hier wie **Ansehen** (alles sichtbar, nichts änderbar); zum Ändern braucht es **Bearbeiten**. Die Stufen vergibt der Bot-Owner unter *Verwaltung → Zugriff & Rollen* (je Server und Rolle); der Bot-Owner selbst darf immer alles.
+
 ## Wie die Rechte interpretiert werden
 
 - Die **Stufen-Spalten** stammen aus Reds Privileg-Modell (`PrivilegeLevel`): NONE → *Jeder*,

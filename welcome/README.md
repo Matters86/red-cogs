@@ -91,8 +91,13 @@ Seite **Willkommen** (Icon Tür) im WebCore-Dashboard, Server über den Wechsler
 - **„Testnachricht posten“** speichert und postet die Nachricht mit dir als Beispiel in den eingestellten
   Kanal (DM-Reiter: „Test-DM an mich senden“). Gepingt wird beim Test niemand.
 
-Rechte: **Ansehen** zeigt alles schreibgeschützt (Live-Vorschau nur mit gespeicherten Werten);
-**Bearbeiten** erlaubt Speichern, Tests und die Live-Vorschau mit ungespeicherten Werten.
+### Rechte im Dashboard
+
+| WebCore-Stufe | Darf |
+|---|---|
+| Ansehen | alles schreibgeschützt ansehen (Bild-Vorschau nur mit gespeicherten Werten) |
+| **Bedienen** | zusätzlich **Testnachricht posten** bzw. **Test-DM an mich senden** – mit den *gespeicherten* Einstellungen, ohne etwas zu speichern (eigene Karte „Testen“ in jedem Reiter) |
+| Bearbeiten | zusätzlich Speichern (auch „Speichern + Test“) und die Live-Vorschau mit ungespeicherten Werten (die Hintergrundbild-URL lädt der Bot – deshalb nur mit *Bearbeiten*) |
 
 ## Datenschutz
 

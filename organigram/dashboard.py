@@ -6,6 +6,8 @@ Aufbau:
          „Vorschau & Posten“). Zusätzlich Bild-Endpunkte ``?preview=<id>`` und
          ``?download=<id>``, die direkt ein PNG zurückgeben (Live-Vorschau / Export).
 * POST -> Formular verarbeiten, danach Redirect (Post/Redirect/Get).
+  Rechte: ``form=post`` (Posten/Aktualisieren) ist Tagesgeschäft (Stufe „Bedienen“ reicht), alle anderen
+  Formulare (Organigramme, Positionen, Einstellungen) brauchen „Bearbeiten“.
 
 Oberfläche über den UI-Baukasten von WebCore (``request.app["webcore"].ui``) –
 kein eigenes CSS.

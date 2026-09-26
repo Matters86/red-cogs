@@ -3,12 +3,15 @@
 * GET  ``/cogs/welcome?guild=<id>``                 -> Seite (Reiter Willkommen, Abschied, DM, Bild)
 * GET  ``/cogs/welcome?guild=<id>&preview=card[…]`` -> PNG-Vorschau des Willkommensbildes. Mit
   „Bearbeiten“ dürfen ungespeicherte Werte als Query mitkommen (``bg``, ``accent``, ``tc``, ``url``,
-  ``headline``) – so aktualisiert sich die Vorschau live; mit „Ansehen“ gelten die gespeicherten Werte.
+  ``headline``) – so aktualisiert sich die Vorschau live; sonst (Ansehen/Bedienen) gelten die
+  gespeicherten Werte (die Bild-URL lädt der Bot – deshalb nur mit „Bearbeiten“).
 * POST ``form=welcome|leave|dm|card`` -> speichern; ``do=test`` postet danach eine Testnachricht mit
   dem angemeldeten Dashboard-User als Beispiel. Danach Redirect (Post/Redirect/Get) mit Toast.
+* POST ``form=test`` + ``kind=welcome|leave|dm`` -> Testnachricht mit den **gespeicherten**
+  Einstellungen, ohne zu speichern (Tagesgeschäft – schon mit der Stufe „Bedienen“).
 
-Nur UI-Kit von WebCore, kein eigenes CSS. Rechte: Server über ``visible_guilds`` (GET = Ansehen,
-POST = Bearbeiten); WebCore lehnt POSTs ohne Bearbeiten-Recht zusätzlich zentral ab.
+Nur UI-Kit von WebCore, kein eigenes CSS. Rechte: Server über ``visible_guilds``; WebCore prüft
+POSTs zentral: ``test`` ab „Bedienen“, alles andere (Speichern) braucht „Bearbeiten“.
 """
 
 from __future__ import annotations
@@ -25,7 +28,6 @@ from aiohttp import web
 from .strings import LANGUAGES, t
 
 SLUG = "welcome"
-EDIT = 2
 
 _KIND_LABEL = {"welcome": "Willkommen", "leave": "Abschied", "dm": "DM"}
 _ERR_TEXT = {
@@ -88,6 +90,24 @@ def _example(guild):
                                  guild=guild, bot=False, created_at=None, display_avatar=None)
 
 
+async def _can_edit(request, guild) -> bool:
+    """Darf der User Einstellungen ändern (WebCore-Stufe „Bearbeiten“)?"""
+    webcore = request.app["webcore"]
+    can_edit = getattr(webcore, "can_edit", None)
+    if can_edit is not None:
+        return await can_edit(request, guild)
+    return not request.get("webcore_readonly")  # ältere WebCore-Versionen: nur Ansehen/Bearbeiten
+
+
+async def _operate_only(request, guild) -> bool:
+    """Stufe „Bedienen“ (Tagesgeschäft, aber keine Einstellungen)?"""
+    webcore = request.app["webcore"]
+    can_operate = getattr(webcore, "can_operate", None)
+    if can_operate is None:
+        return False
+    return await can_operate(request, guild) and not await _can_edit(request, guild)
+
+
 def _channel_items(guild):
     return [(c.id, f"#{c.name}") for c in guild.text_channels]
 
@@ -113,9 +133,8 @@ async def _preview(cog, request):
     if guild is None:
         raise web.HTTPNotFound(text="Server nicht gefunden")
     conf = await cog.config.guild(guild).all()
-    webcore = request.app["webcore"]
     q = request.query
-    if await webcore.page_level(request, guild) >= EDIT:
+    if await _can_edit(request, guild):
         # Ungespeicherte Formularwerte nur mit Bearbeiten-Recht (die URL wird vom Bot geladen).
         if valid_color(q.get("bg")):
             conf["card_bg_color"] = valid_color(q.get("bg"))
@@ -148,7 +167,12 @@ async def _render(cog, request):
     conf = await cog.config.guild(guild).all()
     csrf = request.get("webcore_csrf", "")
     readonly = bool(request.get("webcore_readonly"))
+    can_edit = await _can_edit(request, guild)
+    operate_only = await _operate_only(request, guild)
     example = await _dashboard_member(request, guild) or _example(guild)
+
+    def test(kind):
+        return _test_form(ui, guild, kind, csrf) if operate_only else ""
 
     picker = ""
     if not request.get("wc_switcher"):
@@ -182,11 +206,13 @@ async def _render(cog, request):
 
     body = (
         ui.tab("willkommen", "Willkommen", "bi-door-open",
-               check_html("welcome") + _kind_form(ui, cog, guild, conf, "welcome", csrf, example, readonly))
+               check_html("welcome") + test("welcome")
+               + _kind_form(ui, cog, guild, conf, "welcome", csrf, example, readonly))
         + ui.tab("abschied", "Abschied", "bi-door-closed",
-                 check_html("leave") + _kind_form(ui, cog, guild, conf, "leave", csrf, example, readonly))
-        + ui.tab("dm", "DM", "bi-envelope", _kind_form(ui, cog, guild, conf, "dm", csrf, example, readonly))
-        + ui.tab("bild", "Bild", "bi-image", check_html("card") + _card_form(ui, guild, conf, csrf, readonly))
+                 check_html("leave") + test("leave") + _kind_form(ui, cog, guild, conf, "leave", csrf, example, readonly))
+        + ui.tab("dm", "DM", "bi-envelope", test("dm") + _kind_form(ui, cog, guild, conf, "dm", csrf, example, readonly))
+        + ui.tab("bild", "Bild", "bi-image",
+                 check_html("card") + test("card") + _card_form(ui, guild, conf, csrf, not can_edit))
     )
     return {"title": "Willkommen", "content": picker + head + body}
 
@@ -310,6 +336,21 @@ def _kind_form(ui, cog, guild, conf, kind, csrf, example, readonly) -> str:
                    hidden={"form": kind, "guild": guild.id}, savebar=True)
 
 
+def _test_form(ui, guild, kind, csrf) -> str:
+    """Test ohne Speichern (Tagesgeschäft, Stufe „Bedienen“) – nutzt die gespeicherten Einstellungen."""
+    label = "Test-DM an mich senden" if kind == "dm" else "Testnachricht posten"
+    desc = {"welcome": "Postet die gespeicherte Willkommensnachricht mit dir als Beispiel in den eingestellten Kanal.",
+            "leave": "Postet die gespeicherte Abschiedsnachricht mit dir als Beispiel in den eingestellten Kanal.",
+            "dm": "Schickt dir die gespeicherte DM.",
+            "card": "Postet die gespeicherte Willkommensnachricht mit Bild und dir als Beispiel in den eingestellten "
+                    "Kanal."}[kind]
+    form = ui.form(f"/cogs/{SLUG}", ui.actions(ui.button(label, icon="bi-send", kind="ghost")), csrf=csrf,
+                   hidden={"form": "test", "kind": "welcome" if kind == "card" else kind, "guild": guild.id},
+                   operate=True)
+    return ui.card("Testen", form, icon="bi-send",
+                   desc=desc + " Einstellungen ändern kann nur, wer auf dieser Seite <b>Bearbeiten</b> hat.")
+
+
 def _card_form(ui, guild, conf, csrf, readonly) -> str:
     from .welcome import MAX_HEADLINE, MAX_URL
 
@@ -380,6 +421,13 @@ async def _handle_post(cog, request):
         return {"redirect": f"/cogs/{SLUG}?err=" + quote_plus("Server nicht gefunden oder keine Bearbeitungsrechte")}
     form = data.get("form")
     gconf = cog.config.guild(guild)
+
+    if form == "test":
+        # Tagesgeschäft: nur testen, nichts speichern (gespeicherte Einstellungen).
+        kind = data.get("kind")
+        if kind not in KINDS:
+            return _redirect(guild.id, err="Unbekannte Nachricht")
+        return await _test(cog, request, guild, kind, "")
 
     if form in KINDS:
         kind = form
@@ -452,15 +500,19 @@ async def _handle_post(cog, request):
 
 
 async def _test(cog, request, guild, kind, saved: str):
+    """Testnachricht/-DM; ``saved`` = Präfix der Meldung (leer beim Test ohne Speichern)."""
+    def msg(text):
+        return f"{saved} – {text}" if saved else text
+
     member = await _dashboard_member(request, guild)
     conf = await cog.config.guild(guild).all()
     if kind == "dm":
         if member is None:
-            return _redirect(guild.id, err=f"{saved} – Test-DM nicht möglich: du bist kein Mitglied dieses Servers")
+            return _redirect(guild.id, err=msg("Test-DM nicht möglich: du bist kein Mitglied dieses Servers"))
         ok = await cog.send_dm(member, conf)
         if ok:
-            return _redirect(guild.id, ok=f"{saved} – Test-DM gesendet")
-        return _redirect(guild.id, err=f"{saved} – Test-DM nicht zugestellt (DMs geschlossen?)")
+            return _redirect(guild.id, ok=msg("Test-DM gesendet"))
+        return _redirect(guild.id, err=msg("Test-DM nicht zugestellt (DMs geschlossen?)"))
     try:
         ok, err = await cog.post(member or _example(guild), kind, conf, ping=False)
     except discord.DiscordException:
@@ -468,5 +520,5 @@ async def _test(cog, request, guild, kind, saved: str):
     if ok:
         ch = cog._resolve_channel(guild, conf[f"{kind}_channel"])
         where = f" in #{ch.name}" if ch is not None else ""
-        return _redirect(guild.id, ok=f"{saved} – Testnachricht gepostet{where}")
-    return _redirect(guild.id, err=f"{saved} – Test fehlgeschlagen: {_ERR_TEXT.get(err, err)}")
+        return _redirect(guild.id, ok=msg(f"Testnachricht gepostet{where}"))
+    return _redirect(guild.id, err=msg(f"Test fehlgeschlagen: {_ERR_TEXT.get(err, err)}"))

@@ -124,12 +124,16 @@ class Poll(commands.Cog):
         self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
+        # Tagesgeschäft („Bedienen“): Umfrage anlegen sowie schließen/öffnen/löschen. Einstellungen,
+        # Manager-Rollen, Texte und der Mitglieder-Bereich-Schalter brauchen „Bearbeiten“.
+        extra = {"operate_forms": {"create", "action"}} if hasattr(webcore, "OPERATE") else {}
         webcore.register_page(
             owner=self,
             slug="poll",
             name="Umfragen",
             icon="bi-bar-chart-line",
             handler=self.dashboard_page,
+            **extra,
         )
         if hasattr(webcore, "register_member_page"):  # ältere WebCore-Versionen ohne „Mein Bereich“
             webcore.register_member_page(

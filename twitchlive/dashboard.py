@@ -5,8 +5,9 @@
 * POST -> Aktion ausführen, danach Redirect mit ``?ok=``/``?err=`` (Toast)
 
 Nur UI-Kit (``request.app["webcore"].ui``), kein eigenes CSS. Rechte: Server ausschließlich über
-``webcore.visible_guilds`` (GET = Ansehen, POST = Bearbeiten), Live-Rolle zusätzlich über
-``webcore.can_grant_role``, botweite Werte (Intervall, „Jetzt abfragen“) nur mit ``has_full_scope``.
+``webcore.visible_guilds`` (GET = Ansehen, POST = Bearbeiten; ``action=test``/``toggle`` sind Tagesgeschäft,
+dort reicht „Bedienen“), Live-Rolle zusätzlich über ``webcore.can_grant_role``, botweite Werte
+(Intervall, „Jetzt abfragen“) nur mit ``has_full_scope``.
 Zugangsdaten werden nie angezeigt – nur „gesetzt/nicht gesetzt“.
 """
 

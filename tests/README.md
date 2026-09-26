@@ -57,6 +57,9 @@ Red-Instanz im System-Temp an und löscht sie am Ende wieder.
 | `lv_test.py` | levels: XP/Cooldown/Levelkurve, Voice-XP-Regeln, Level-Up-Meldung, Belohnungen mit Hierarchie/Selbst-Hochstufung, Rangkarte, Rangliste, Befehle, Team-Dashboard, `/me/level`, Datenlöschung |
 | `gv_test.py` | giveaways: Teilnahme-Regeln, persistente Views nach Neustart, faire gewichtete Auslosung, Nachholen nach Downtime, Reroll/Ende/Abbruch, Ping nur Gewinner, Rechte, Dashboard, `/me/gewinnspiele`, Datenlöschung |
 | `sc_test.py` | scheduler: nächster Termin für alle Typen inkl. Sommerzeitwechsel Europe/Berlin und Monatsende, Downtime-Regel (< 10 min), Auto-Pause nach 5 Fehlern, allowed_mentions nur Ping-Rolle, Dashboard-Formulare/Vorschau, Befehle, Rechte |
+| `op_test.py` | WebCore: Rechte-Stufe „Bedienen“ – `operate_forms` (Menge/Callable), zentrale POST-Prüfung mit Toast + Audit, `visible_guilds`/`can_operate`/`can_edit`, Banner/Badge/`data-operate`, JS-Sperre (optional Playwright), Rollen-Vorlagen, Befehle, Backup mit `operate` |
+| `opa_test.py` | „Bedienen“ in tickets (Ticket schließen), warns, guard, fivemadmin, welcome (Test ohne Speichern), sticky, changelog – erlaubt und wirksam bzw. abgelehnt; autorole/levels/serverstats ohne Tagesgeschäft |
+| `opb_test.py` | „Bedienen“ in raidhelper, poll, giveaways, scheduler, twitchlive, organigram – erlaubt und wirksam bzw. abgelehnt; autoroom/onlyimagevideo/commands/example ohne Tagesgeschäft; ältere WebCore; JS-Sperre |
 
 ## Live-Test mit echtem Bot
 

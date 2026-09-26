@@ -14,7 +14,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <link href="/static/webcore.css?v={{ asset_version }}" rel="stylesheet">
 </head>
-<body class="{% if readonly %}wc-readonly{% endif %}" data-readonly="{{ '1' if readonly else '0' }}">
+<body class="{% if readonly %}wc-readonly{% elif operate %}wc-operate{% endif %}" data-readonly="{{ '1' if readonly else '0' }}"{% if operate %} data-operate="1" data-operate-forms="{{ operate_forms }}"{% endif %}>
   <aside class="sidebar" id="sidebar" aria-label="Navigation">
     <div class="sb-head">
       {% if bot_avatar %}<img src="{{ bot_avatar }}" alt="">{% else %}<span class="sb-logo"><i class="bi bi-robot"></i></span>{% endif %}
@@ -32,7 +32,7 @@
           {% for p in nav_pages %}
             <a class="nav-link {% if active_page == p.slug %}active{% endif %}" href="/cogs/{{ p.slug }}">
               <i class="bi {{ p.icon }}"></i> {{ p.name }}
-              {% if p.readonly %}<span class="nav-badge" title="Nur Ansicht">Ansicht</span>{% endif %}
+              {% if p.readonly %}<span class="nav-badge" title="Nur Ansicht">Ansicht</span>{% elif p.operate %}<span class="nav-badge op" title="Bedienen: Aktionen ja, Einstellungen nein">Bedienen</span>{% endif %}
             </a>
           {% endfor %}
         {% endif %}

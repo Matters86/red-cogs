@@ -89,12 +89,16 @@ class Organigram(commands.Cog):
 
     def _register_dashboard(self, webcore):
         try:
+            # Tagesgeschäft („Bedienen“): nur Posten/Aktualisieren (form=post). Organigramme, Positionen und
+            # Einstellungen anlegen/ändern/löschen brauchen „Bearbeiten“ (Positionen = Rollen-Zuordnung).
+            extra = {"operate_forms": {"post"}} if hasattr(webcore, "OPERATE") else {}
             webcore.register_page(
                 owner=self,
                 slug="organigram",
                 name="Organigramm",
                 handler=self.dashboard_page,
                 icon="bi-diagram-3",
+                **extra,
             )
         except Exception:
             log.exception("Dashboard-Seite konnte nicht registriert werden.")

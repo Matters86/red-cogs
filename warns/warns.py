@@ -144,13 +144,13 @@ class Warns(commands.Cog):
         self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
-        webcore.register_page(
-            owner=self,
-            slug="warnings",
-            name="Verwarnungen",
-            icon="bi-exclamation-octagon",
-            handler=self.dashboard_page,
-        )
+        page = dict(owner=self, slug="warnings", name="Verwarnungen", icon="bi-exclamation-octagon",
+                    handler=self.dashboard_page)
+        try:
+            # Tagesgeschäft für die Stufe „Bedienen“: Mitglied verwarnen, Verwarnung aufheben.
+            webcore.register_page(**page, operate_forms={"warn", "revoke"})
+        except TypeError:  # ältere WebCore-Versionen ohne Stufe „Bedienen“
+            webcore.register_page(**page)
 
     async def dashboard_page(self, request):
         return await dashboard_handler(self, request)

@@ -84,7 +84,12 @@ Seite **Level** (Icon Pokal) im WebCore-Dashboard:
   Nachricht, Cooldown, Voice-XP, ausgeschlossene Kanäle/Rollen, Level-Up-Meldung; XP-Multiplikatoren.
 - **XP anpassen:** Mitglied (ID, Erwähnung oder eindeutiger Name), geben/abziehen/setzen/zurücksetzen – mit Bestätigung.
 
-Rechte: **Ansehen** = alles schreibgeschützt, **Bearbeiten** = alle Einstellungen dieses Servers.
+### Rechte im Dashboard
+
+Levels hat **kein Tagesgeschäft**: XP geben/abziehen/setzen führt über Belohnungsrollen zur
+Selbst-Hochstufung, Belohnungen/Multiplikatoren sind Rollen-Zuordnung und „Jetzt für alle abgleichen“ ist
+eine Massenaktion. Die WebCore-Stufe **Bedienen** wirkt hier deshalb wie **Ansehen** (alles
+schreibgeschützt); **Bearbeiten** = alle Einstellungen und Aktionen dieses Servers.
 
 ### Mein Bereich → „Mein Level“
 Mitglieder sehen unter `/me/level` ihren **Rang**, **Level**, einen **Fortschrittsbalken**, ihre **Rangkarte**

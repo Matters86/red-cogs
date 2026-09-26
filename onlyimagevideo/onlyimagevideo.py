@@ -72,6 +72,8 @@ class OnlyImageVideo(commands.Cog):
         self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
+        # Kein Tagesgeschäft (keine ``operate_forms``): Die Seite hat nur Einstellungen (Kanäle, Ausnahmen,
+        # Texte) -> alles braucht „Bearbeiten“, „Bedienen“ wirkt hier wie „Ansehen“.
         webcore.register_page(
             owner=self,
             slug="onlyimagevideo",

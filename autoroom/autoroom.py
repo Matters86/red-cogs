@@ -71,6 +71,8 @@ class AutoRoom(commands.Cog):
         self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
+        # Kein Tagesgeschäft (keine ``operate_forms``): Die Seite konfiguriert nur Quell-Kanäle und
+        # Zugriffsregeln, aktive Räume sind reine Anzeige -> alles braucht „Bearbeiten“, „Bedienen“ = „Ansehen“.
         webcore.register_page(
             owner=self,
             slug="autoroom",

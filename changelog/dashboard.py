@@ -6,6 +6,9 @@ Aufgaben (gleiches Muster wie poll/dashboard.py):
 * POST form=settings  -> Einstellungen speichern (Post/Redirect/Get)
 * POST form=action    -> Changelog löschen (optional inkl. Discord-Nachricht)
 
+Rechte: „einzelnen Changelog löschen“ ist Tagesgeschäft (WebCore-Stufe „Bedienen“, siehe
+``is_operate_post``); Einstellungen brauchen „Bearbeiten“.
+
 Oberfläche über den UI-Baukasten von WebCore (``request.app["webcore"].ui``) –
 kein eigenes CSS. Nutzereingaben werden mit ``html.escape`` abgesichert. Die
 Server-Auswahl ist auf die für den eingeloggten User sichtbaren Server beschränkt
@@ -28,6 +31,20 @@ _OVERRIDE_LABELS = {
     "embed_title": ("Embed-Titel", "Platzhalter <code>{title}</code> = Titel aus dem Formular."),
     "footer": ("Fußzeile", "Platzhalter <code>{author}</code> = Name der postenden Person."),
 }
+
+
+def _values(data, key) -> list:
+    getall = getattr(data, "getall", None)
+    if getall is not None:
+        return list(getall(key, []))
+    value = data.get(key)
+    return [] if value is None else [value]
+
+
+def is_operate_post(data) -> bool:
+    """Tagesgeschäft für ``register_page(operate_forms=…)``: nur „einzelnen Changelog löschen“
+    (genau ``form=action`` + ``action=delete``) – alles andere braucht „Bearbeiten“."""
+    return _values(data, "form") == ["action"] and _values(data, "action") == ["delete"]
 
 
 def _esc(value) -> str:
@@ -309,7 +326,7 @@ def _render_history(ui, guild, entries, csrf) -> str:
             ui.button("", icon="bi-trash", kind="danger", small=True, name="action", value="delete",
                       confirm=f"Changelog {eid} wirklich löschen? Die Nachricht in Discord wird ebenfalls entfernt.",
                       attrs={"title": "Löschen"}),
-            csrf=csrf, hidden={"form": "action", "guild": guild.id, "entry_id": eid},
+            csrf=csrf, hidden={"form": "action", "guild": guild.id, "entry_id": eid}, operate=True,
         )
         rows.append(ui.row(
             f"<div class='wc-cell-title'>{_esc(r.get('category_emoji', ''))} "

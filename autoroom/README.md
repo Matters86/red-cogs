@@ -86,6 +86,10 @@ Ist `webcore` geladen, erscheint automatisch der Tab **Autovoiceroom**. Dort las
 
 alles über Formulare (POST + CSRF), die direkt in die Bot-Konfiguration schreiben.
 
+### Rechte im Dashboard
+
+Diese Seite hat **kein Tagesgeschäft**: Sie konfiguriert nur Quell-Kanäle und den Zugriff auf private Räume (Kanal-/Quellen-Konfiguration), die aktiven Räume sind reine Anzeige. Deshalb wirkt die Stufe **Bedienen** hier wie **Ansehen** (alles sichtbar, nichts änderbar); zum Ändern braucht es **Bearbeiten**. Die Stufen vergibt der Bot-Owner unter *Verwaltung → Zugriff & Rollen* (je Server und Rolle); der Bot-Owner selbst darf immer alles.
+
 ## Hinweise
 
 - Mitglieder mit **Administrator**-Recht sehen private Räume ohnehin immer; die `access`-Option

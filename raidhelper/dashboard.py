@@ -10,6 +10,9 @@ Aufgaben (gleiches Muster wie tickets/dashboard.py):
 * POST form=action        -> Event schließen/öffnen/löschen/neu posten (``RaidHelper.repost_event``)
 * POST form=icons         -> Spec-Icons hochladen/entfernen (nur Bot-Owner)
 
+Rechte: ``create``/``edit``/``action`` sind Tagesgeschäft (Stufe „Bedienen“ reicht, siehe
+``register_page(operate_forms=…)``), ``settings`` braucht „Bearbeiten“, ``icons`` den Bot-Owner.
+
 Die Mitglieder-Seite „Raids“ (``/me/raids``) liegt in ``member.py``, die öffentliche API in ``public.py``.
 
 Aufbau mit dem UI-Baukasten von WebCore (``request.app["webcore"].ui``) – kein
@@ -813,7 +816,7 @@ async def _handle_post(cog, request):
         return await _post_edit(cog, request, guild, data)
 
     if form == "action" and data.get("action") == "repost":
-        # Gleiche Rechte wie die anderen Event-Aktionen (POST = Server mit „Bearbeiten“),
+        # Gleiche Rechte wie die anderen Event-Aktionen (Tagesgeschäft: Server mit mind. „Bedienen“),
         # gleiche Prüf-/Post-Logik wie beim Anlegen (``RaidHelper.repost_event``).
         from .raidhelper import EventInputError  # zur Laufzeit (vermeidet Import-Zyklus)
         try:

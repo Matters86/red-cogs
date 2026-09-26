@@ -17,7 +17,7 @@ from discord import app_commands
 from redbot.core import Config, commands
 from redbot.core.bot import Red
 
-from .dashboard import dashboard_handler
+from .dashboard import dashboard_handler, is_operate_post
 from .embed import build_changelog_embed, has_any_section
 from .modal import ChangelogModal
 from .public import public_handler
@@ -106,13 +106,12 @@ class Changelog(commands.Cog):
         self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
-        webcore.register_page(
-            owner=self,
-            slug="changelog",
-            name="Changelog",
-            icon="bi-megaphone",
-            handler=self.dashboard_page,
-        )
+        page = dict(owner=self, slug="changelog", name="Changelog", icon="bi-megaphone", handler=self.dashboard_page)
+        try:
+            # Tagesgeschäft für die Stufe „Bedienen“: einzelnen Changelog löschen (form=action, action=delete).
+            webcore.register_page(**page, operate_forms=is_operate_post)
+        except TypeError:  # ältere WebCore-Versionen ohne Stufe „Bedienen“
+            webcore.register_page(**page)
         if hasattr(webcore, "register_public_api"):  # ältere WebCore-Versionen ohne öffentliche API
             webcore.register_public_api(owner=self, slug="changelog", handler=self.public_api)
 

@@ -178,13 +178,12 @@ class Welcome(commands.Cog):
         self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
-        webcore.register_page(
-            owner=self,
-            slug="welcome",
-            name="Willkommen",
-            icon="bi-door-open",
-            handler=self.dashboard_page,
-        )
+        page = dict(owner=self, slug="welcome", name="Willkommen", icon="bi-door-open", handler=self.dashboard_page)
+        try:
+            # Tagesgeschäft für die Stufe „Bedienen“: Testnachricht/-DM mit den gespeicherten Einstellungen.
+            webcore.register_page(**page, operate_forms={"test"})
+        except TypeError:  # ältere WebCore-Versionen ohne Stufe „Bedienen“
+            webcore.register_page(**page)
 
     async def dashboard_page(self, request):
         return await dashboard_handler(self, request)

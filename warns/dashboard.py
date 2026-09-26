@@ -6,7 +6,9 @@
 
 Verwarnen im Dashboard: Moderator ist der angemeldete Dashboard-User; es gelten dieselben
 Prüfungen wie beim Befehl (kein Bot/Owner/Server-Owner/man selbst, Rollen-Hierarchie gegenüber
-dem Moderator) – das Recht dazu kommt aus WebCore („Bearbeiten“ auf dieser Seite).
+dem Moderator) – das Recht dazu kommt aus WebCore: ``warn``/``revoke`` sind Tagesgeschäft
+(ab Stufe „Bedienen“), ``actions``/``settings`` brauchen „Bearbeiten“ (zentral geprüft über
+``register_page(operate_forms=…)``).
 """
 
 from __future__ import annotations
@@ -223,8 +225,8 @@ def _warn_form(ui, guild, conf, csrf, readonly) -> str:
         f"<option value='{_esc(m.display_name)} ({m.id})'></option>" for m in members) + "</datalist>"
     note = ""
     if readonly:
-        note = ui.callout("Du hast auf dieser Seite nur <b>Ansehen</b> – verwarnen erfordert <b>Bearbeiten</b>.",
-                          tone="info")
+        note = ui.callout("Du hast auf dieser Seite nur <b>Ansehen</b> – verwarnen und aufheben erfordert "
+                          "mindestens <b>Bedienen</b>.", tone="info")
     expiry = f"{conf['expiry_days']} Tage" if conf["expiry_days"] else "nie"
     body = ui.grid(
         ui.field("Mitglied", ui.text_input("member", "", placeholder="Name, @Erwähnung oder ID",

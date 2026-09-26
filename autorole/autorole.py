@@ -103,6 +103,8 @@ class Autorole(commands.Cog):
         self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
+        # Bewusst ohne operate_forms: alles hier ist Rollen-Vergabe/-Zuordnung bzw. Massenaktion –
+        # die WebCore-Stufe „Bedienen“ wirkt auf dieser Seite wie „Ansehen“.
         webcore.register_page(
             owner=self,
             slug="autorole",

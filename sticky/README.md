@@ -71,6 +71,14 @@ Ist `webcore` geladen, erscheint automatisch der Tab **Sticky**. Dort lassen sic
 alles über Formulare (POST + CSRF), die direkt in die Bot-Konfiguration schreiben und die
 Sticky anschließend sofort neu posten.
 
+### Rechte im Dashboard
+
+| WebCore-Stufe | Darf |
+|---|---|
+| Ansehen | alles schreibgeschützt ansehen |
+| **Bedienen** | zusätzlich einzelne Stickies **anlegen/bearbeiten** („Speichern & posten“), **pausieren/aktivieren** und **löschen** (Tagesgeschäft) |
+| Bearbeiten | zusätzlich die Server-Einstellungen (Sprache, Cooldown, andere Bots ignorieren) |
+
 ## Hinweise
 
 - **Kein Message-Content-Intent nötig**: der Cog reagiert nur auf das Ereignis „neue Nachricht im

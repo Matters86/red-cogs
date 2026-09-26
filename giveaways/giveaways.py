@@ -156,8 +156,11 @@ class Giveaways(commands.Cog):
         self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
+        # Tagesgeschäft („Bedienen“): Gewinnspiel starten sowie beenden/neu auslosen/abbrechen/Eintrag entfernen.
+        # Einstellungen, Manager-Rollen und der Mitglieder-Bereich-Schalter brauchen „Bearbeiten“.
+        extra = {"operate_forms": {"create", "action"}} if hasattr(webcore, "OPERATE") else {}
         webcore.register_page(owner=self, slug="giveaways", name="Gewinnspiele", icon="bi-gift",
-                              handler=self.dashboard_page)
+                              handler=self.dashboard_page, **extra)
         if hasattr(webcore, "register_member_page"):
             webcore.register_member_page(
                 owner=self, slug="gewinnspiele", name="Gewinnspiele", icon="bi-gift",

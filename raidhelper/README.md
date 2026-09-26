@@ -101,7 +101,16 @@ Die Seite **Raidplaner** erscheint nach dem Laden automatisch im WebCore-Dashboa
 
 Zusätzlich registriert der Cog die Mitglieder-Seite **Raids** (`/me/raids`) – siehe „Anmeldung über die Website“.
 
-Wer die Seite **bearbeiten** darf (Bot-Owner oder eine Rolle mit „Bearbeiten“ unter *Zugriff & Rollen*), kann Events anlegen und ändern – nur auf den Servern, für die das Recht gilt. „Ansehen“ zeigt alles schreibgeschützt.
+### Rechte im Dashboard
+
+| Stufe | Darf |
+|---|---|
+| Ansehen | alles sehen (Events, Roster, Einstellungen), nichts ändern |
+| **Bedienen** | Tagesgeschäft: Events **anlegen** und **bearbeiten**, **schließen/öffnen**, **löschen**, **neu posten** |
+| Bearbeiten | zusätzlich Einstellungen (Sprache, Kanal, Zeitzone, Erinnerungen, Aufräumen), eigene Texte, Freigabe für Launcher & Website und den Schalter „Im Mitglieder-Bereich anzeigen“ |
+
+Spec-Icons gelten botweit und bleiben dem Bot-Owner vorbehalten. Rechte gelten nur auf den Servern,
+für die sie vergeben sind. Die Stufen vergibt der Bot-Owner unter *Verwaltung → Zugriff & Rollen* (je Server und Rolle); der Bot-Owner selbst darf immer alles.
 
 ### Neues Event
 

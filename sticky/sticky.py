@@ -89,13 +89,12 @@ class Sticky(commands.Cog):
         self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
-        webcore.register_page(
-            owner=self,
-            slug="sticky",
-            name="Sticky",
-            icon="bi-pin-angle",
-            handler=self.dashboard_page,
-        )
+        page = dict(owner=self, slug="sticky", name="Sticky", icon="bi-pin-angle", handler=self.dashboard_page)
+        try:
+            # Tagesgeschäft für die Stufe „Bedienen“: einzelne Stickies anlegen/bearbeiten, pausieren, löschen.
+            webcore.register_page(**page, operate_forms={"save", "toggle", "delete"})
+        except TypeError:  # ältere WebCore-Versionen ohne Stufe „Bedienen“
+            webcore.register_page(**page)
 
     async def dashboard_page(self, request):
         return await dashboard_handler(self, request)

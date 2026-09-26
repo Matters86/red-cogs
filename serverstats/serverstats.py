@@ -168,6 +168,8 @@ class ServerStats(commands.Cog):
         self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
+        # Bewusst ohne operate_forms: nur Einstellungen und „Zurücksetzen“ (Massenaktion) – die WebCore-Stufe
+        # „Bedienen“ wirkt auf dieser Seite wie „Ansehen“.
         webcore.register_page(owner=self, slug="serverstats", name="Statistik", icon="bi-graph-up",
                               handler=self.dashboard_page)
 

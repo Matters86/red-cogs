@@ -113,20 +113,22 @@ Teleport, Geld, Items …), inklusive App/PWA und Bridge-Endpunkten.
 **Anmelden im Live-Panel (Single Sign-on):** Der Button erzeugt für den im Dashboard angemeldeten
 Discord-Nutzer einen Einmal-Login (5 Min. gültig) – genau wie `[p]ap login` – und leitet direkt auf
 `<Panel-URL>/?login=…` weiter. Voraussetzungen: Panel-URL gesetzt, Panel-Rechte auf dem gewählten
-Server und auf der Dashboard-Seite das Recht *Bearbeiten* (die Anmeldung ist ein Formular-POST mit
-CSRF-Schutz). Mit nur *Ansehen* erscheint ein Hinweis auf `[p]ap login`.
+Server und auf der Dashboard-Seite mindestens das Recht *Bedienen* (die Anmeldung ist ein Formular-POST
+mit CSRF-Schutz). Mit nur *Ansehen* erscheint ein Hinweis auf `[p]ap login`.
 
-**Rechte:** Wer die Seite überhaupt sieht bzw. bearbeiten darf, legt der Bot-Owner unter
-*Verwaltung → Zugriff & Rollen* fest (WebCore-Rollen-Rechte, pro Server). **Zusätzlich** prüft jede
-Aktion serverseitig dieselben Rechte wie der passende Befehl bzw. Live-Panel-Endpunkt:
+**Rechte im Dashboard:** Wer die Seite sieht und was er dort darf, legt der Bot-Owner unter
+*Verwaltung → Zugriff & Rollen* fest (WebCore-Rollen-Rechte, pro Server): *Ansehen* = nur lesen,
+**Bedienen** = Tagesgeschäft (Im Live-Panel anmelden, Not-Aus, Entbannen), *Bearbeiten* = zusätzlich
+Panel-Rechte und Einstellungen. **Zusätzlich** prüft jede Aktion serverseitig dieselben Rechte wie der
+passende Befehl bzw. Live-Panel-Endpunkt:
 
-| Aktion | Nötig (neben WebCore-„Bearbeiten“) |
-|---|---|
-| Entbannen | Panel-Recht *Bannen* (Preset `moderator` oder `admin`) – wie `[p]ap unban` |
-| Lockdown an/aus | Discord-Administrator des Servers – wie `[p]ap lockdown` |
-| Panel-Rechte ändern | Discord-Administrator des Servers – wie `[p]ap roles`; zusätzlich kann niemand ein Preset vergeben oder entziehen, das mehr Rechte hat als er selbst |
-| Einstellungen | nur Bot-Owner/Allowlist, weil sie **botweit** gelten |
-| Im Live-Panel anmelden | irgendein Panel-Recht auf dem Server – wie `[p]ap login` |
+| Aktion | WebCore-Stufe | Zusätzlich nötig |
+|---|---|---|
+| Im Live-Panel anmelden | Bedienen | irgendein Panel-Recht auf dem Server – wie `[p]ap login` |
+| Entbannen | Bedienen | Panel-Recht *Bannen* (Preset `moderator` oder `admin`) – wie `[p]ap unban` |
+| Lockdown an/aus (Not-Aus) | Bedienen | Discord-Administrator des Servers – wie `[p]ap lockdown` |
+| Panel-Rechte ändern | Bearbeiten | Discord-Administrator des Servers – wie `[p]ap roles`; zusätzlich kann niemand ein Preset vergeben oder entziehen, das mehr Rechte hat als er selbst |
+| Einstellungen | Bearbeiten | nur Bot-Owner/Allowlist, weil sie **botweit** gelten |
 
 **Sichtbarkeit wie im Live-Panel:** Die Sperrliste sieht nur, wer das Panel-Recht *Bannen* hat,
 die letzten Aufträge nur, wer *Audit* hat (Preset `admin`), und die Rollen-/Personen-Zuordnungen nur

@@ -88,6 +88,16 @@ Die Seite **Umfragen** erscheint nach dem Laden automatisch im WebCore-Dashboard
 - eine Ergebnis-Ansicht pro Umfrage (Balken; bei nicht-anonymen Umfragen mit Namensliste je Option),
 - unter *Einstellungen* den Schalter **„Im Mitglieder-Bereich anzeigen“** (Standard: an).
 
+### Rechte im Dashboard
+
+| Stufe | Darf |
+|---|---|
+| Ansehen | alles sehen (Umfragen, Ergebnisse, Einstellungen), nichts ändern |
+| **Bedienen** | Tagesgeschäft: Umfrage **anlegen & posten**, **schließen/öffnen**, **löschen** |
+| Bearbeiten | zusätzlich Einstellungen (Sprache, Erstellrechte, max. Optionen, Standardwerte), **Manager-Rollen**, eigene Texte und den Schalter „Im Mitglieder-Bereich anzeigen“ |
+
+Die Stufen vergibt der Bot-Owner unter *Verwaltung → Zugriff & Rollen* (je Server und Rolle); der Bot-Owner selbst darf immer alles.
+
 ## Mein Bereich: „Umfragen“ (für Mitglieder)
 
 Hat der Bot-Owner den Mitglieder-Bereich für den Server eingeschaltet (*Verwaltung → Zugriff & Rollen*

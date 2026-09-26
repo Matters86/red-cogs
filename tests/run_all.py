@@ -42,6 +42,9 @@ SUITES = [
     ("lv_test", "levels: XP/Cooldown/Kurve, Voice-XP, Level-Up-Meldung, Belohnungen, Rangkarte, Rangliste, Befehle, Dashboard, /me/level, Datenlöschung"),
     ("gv_test", "giveaways: Teilnahme-Regeln, persistente Buttons, faire Auslosung, Downtime-Nachholen, Reroll/Ende/Abbruch, Rechte, Dashboard, /me/gewinnspiele"),
     ("sc_test", "scheduler: nächster Termin (alle Typen, Sommerzeit, Monatsende), Downtime-Regel, Auto-Pause, allowed_mentions, Dashboard, Befehle"),
+    ("op_test", "WebCore: Stufe „Bedienen“ (operate_forms, POST-Prüfung, visible_guilds, Oberfläche/JS-Sperre), Rollen-Vorlagen, Befehle, Sicherung"),
+    ("opa_test", "Bedienen/Tagesgeschäft: tickets (Schließen), warns, guard, fivemadmin, welcome (Test ohne Speichern), sticky, changelog; autorole/levels/serverstats ohne Bedienen"),
+    ("opb_test", "Bedienen/Tagesgeschäft: raidhelper, poll, giveaways, scheduler, twitchlive, organigram; autoroom/onlyimagevideo/commands/example ohne Bedienen"),
 ]
 
 # Dateien in tests/, die keine Suite sind

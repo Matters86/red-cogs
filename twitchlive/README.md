@@ -114,8 +114,15 @@ Mit geladenem `webcore` erscheint die Seite **Twitch-Live**:
 - **Twitch-Zugang:** nur „gesetzt / nicht gesetzt“, API-Status, letzte/nächste Abfrage und die
   Einrichtungs-Anleitung. Bot-Owner können hier das Intervall ändern und eine Abfrage anstoßen.
 
-Rechte: Die Seite folgt den WebCore-Rollen-Rechten (*Ansehen* = schreibgeschützt, *Bearbeiten* =
-alle Einstellungen dieses Servers). Die Live-Rolle kann ein Team-Mitglied nur auf Rollen unter
+### Rechte im Dashboard
+
+| Stufe | Darf |
+|---|---|
+| Ansehen | alles sehen (Streamer, Vorschau, Einstellungen, API-Status), nichts ändern |
+| **Bedienen** | Tagesgeschäft: **Testmeldung posten** und Streamer **pausieren/fortsetzen** |
+| Bearbeiten | zusätzlich Streamer **hinzufügen, ändern, entfernen**, Einstellungen (Standardkanal, Text, Stream-Ende, Sprache), **Live-Rolle** und Verknüpfungen, Freigabe für Launcher & Website |
+
+Die Stufen vergibt der Bot-Owner unter *Verwaltung → Zugriff & Rollen* (je Server und Rolle); der Bot-Owner selbst darf immer alles. Die Live-Rolle kann ein Team-Mitglied nur auf Rollen unter
 seiner höchsten Rolle ohne Verwaltungsrechte setzen. Intervall und „Jetzt abfragen“ gelten botweit
 und sind dem Bot-Owner vorbehalten. Zugangsdaten werden nur per Befehl gesetzt.
 

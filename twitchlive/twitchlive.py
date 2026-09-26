@@ -211,12 +211,17 @@ class TwitchLive(commands.Cog):
         self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
+        # Tagesgeschäft („Bedienen“): Testmeldung posten und Streamer pausieren/fortsetzen. Streamer
+        # hinzufügen/ändern/entfernen (Quellen), Einstellungen, Live-Rolle und Verknüpfungen, öffentliche API
+        # und Twitch-Zugang brauchen „Bearbeiten“ (bzw. den Bot-Owner).
+        extra = {"operate_forms": {"test", "toggle"}} if hasattr(webcore, "OPERATE") else {}
         webcore.register_page(
             owner=self,
             slug="twitchlive",
             name="Twitch-Live",
             icon="bi-twitch",
             handler=self.dashboard_page,
+            **extra,
         )
         # Öffentliche API für Launcher/Websites (pro Server im Dashboard freizugeben, Standard aus).
         if hasattr(webcore, "register_public_api"):  # ältere WebCore-Versionen ohne öffentliche API

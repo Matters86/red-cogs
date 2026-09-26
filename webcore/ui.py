@@ -139,12 +139,16 @@ def columns(*blocks: str, cols: int = 2) -> str:
 # --------------------------------------------------------------------------- #
 def form(action: str, body: str, *, csrf: str, hidden: dict | None = None, savebar: bool = False,
          confirm: str | None = None, id: str | None = None, cls: str = "", method: str = "post",
-         enctype: str | None = None) -> str:
+         enctype: str | None = None, operate: bool = False) -> str:
     """POST-Formular inkl. CSRF-Token. ``savebar=True`` zeigt bei Änderungen die Speicherleiste.
-    Für Datei-Uploads ``enctype="multipart/form-data"`` setzen."""
+    Für Datei-Uploads ``enctype="multipart/form-data"`` setzen.
+    ``operate=True`` markiert das Formular als Tagesgeschäft (``data-wc-operate``): bei der Stufe
+    „Bedienen“ bleibt es benutzbar. Nur eine Oberflächen-Hilfe – serverseitig entscheidet allein
+    ``register_page(..., operate_forms=…)``."""
     fields = [f"<input type='hidden' name='csrf_token' value='{esc(csrf)}'>"] if method == "post" else []
     fields += [f"<input type='hidden' name='{esc(k)}' value='{esc(v)}'>" for k, v in (hidden or {}).items() if v is not None]
-    attrs = {"id": id, "enctype": enctype, "data-wc-savebar": "1" if savebar else None, "data-confirm": confirm}
+    attrs = {"id": id, "enctype": enctype, "data-wc-savebar": "1" if savebar else None, "data-confirm": confirm,
+             "data-wc-operate": "1" if operate else None}
     return (
         f"<form class='wc-form{(' ' + cls) if cls else ''}' method='{method}' action='{esc(action)}'{_attrs(attrs)}>"
         + "".join(fields) + body + "</form>"

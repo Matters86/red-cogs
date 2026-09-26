@@ -7,12 +7,18 @@ Drei Aufgaben:
 
 Aufbau mit dem UI-Baukasten von WebCore (``request.app["webcore"].ui``): Reiter
 Übersicht · Panels · Einstellungen · Texte · Transcripts – kein eigenes CSS.
+
+Rechte: ``form=ticket_close`` (einzelnes Ticket schließen) ist Tagesgeschäft und geht schon mit der
+WebCore-Stufe „Bedienen“; alle anderen Formulare (Einstellungen, Panels, Team-Zuordnung) brauchen
+„Bearbeiten“ – das prüft WebCore zentral anhand von ``register_page(operate_forms=…)``.
 """
 
 from __future__ import annotations
 
 import html
 import uuid
+from datetime import datetime
+from urllib.parse import quote_plus
 
 from aiohttp import web
 
@@ -124,7 +130,7 @@ async def _render(cog, request):
     ])
 
     body = (
-        ui.tab("uebersicht", "Übersicht", "bi-speedometer2", await _render_overview(ui, cog, guild, conf))
+        ui.tab("uebersicht", "Übersicht", "bi-speedometer2", await _render_overview(ui, cog, guild, conf, csrf))
         + ui.tab("panels", "Panels", "bi-window-stack", _render_panels(ui, guild, conf, text_items, csrf), count=len(panels))
         + _render_settings(ui, guild, conf, role_items, text_items, cat_items, forum_items, csrf)
         + ui.tab("transcripts", "Transcripts", "bi-journal-text", _render_transcripts(ui, guild, conf), count=len(transcripts))
@@ -151,7 +157,7 @@ def _setup_checks(guild, conf) -> list[tuple[str, str]]:
     return out
 
 
-async def _render_overview(ui, cog, guild, conf) -> str:
+async def _render_overview(ui, cog, guild, conf, csrf) -> str:
     checks = _setup_checks(guild, conf)
     if checks:
         check_html = "".join(ui.callout(text, tone=tone) for tone, text in checks)
@@ -180,7 +186,68 @@ async def _render_overview(ui, cog, guild, conf) -> str:
                             _esc(tr.get("closed") or "—"), ">" + btn))
     recent_card = ui.card("Zuletzt geschlossen", ui.table(["#", "Inhaber", "Geschlossen", ">"], rrows,
                           empty_text="Noch keine geschlossenen Tickets."), icon="bi-clock-history")
-    return setup + ui.columns(claim_card, recent_card)
+    return setup + _render_open_tickets(ui, guild, conf, csrf) + ui.columns(claim_card, recent_card)
+
+
+def _fmt_iso(value) -> str:
+    """ISO-Zeitstempel (UTC) -> ``TT.MM.JJJJ HH:MM``."""
+    try:
+        return datetime.fromisoformat(str(value)).strftime("%d.%m.%Y %H:%M")
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _render_open_tickets(ui, guild, conf, csrf) -> str:
+    """Offene Tickets mit „Schließen“ (Tagesgeschäft – schon mit „Bedienen“ möglich)."""
+    open_items = sorted(((cid, r) for cid, r in (conf.get("tickets") or {}).items() if r.get("status") == "open"),
+                        key=lambda kv: kv[1].get("num") or 0)
+    rows = []
+    for cid, rec in open_items[:100]:
+        num = rec.get("num")
+        ch = _ticket_channel(guild, cid)
+        owner = guild.get_member(rec.get("owner_id")) if rec.get("owner_id") else None
+        owner_name = owner.display_name if owner is not None else f"ID {rec.get('owner_id') or '—'}"
+        claimer = guild.get_member(rec.get("claimed_by")) if rec.get("claimed_by") else None
+        claimed = (ui.badge(claimer.display_name, "ok") if claimer is not None
+                   else (ui.badge("übernommen", "ok") if rec.get("claimed_by") else ui.badge("frei", "warn")))
+        where = f"#{ch.name}" if ch is not None else "Kanal fehlt"
+        confirm = (f"Ticket #{num} schließen? Das Transcript wird gespeichert und "
+                   + ("der Kanal gelöscht." if conf.get("delete_on_close") else "das Ticket archiviert.")
+                   if ch is not None else
+                   f"Der Kanal von Ticket #{num} existiert nicht mehr – Eintrag aus der Liste entfernen?")
+        close = ui.form(
+            "/cogs/tickets",
+            ui.button("Schließen", icon="bi-lock", kind="danger", small=True),
+            csrf=csrf, hidden={"form": "ticket_close", "guild": guild.id, "channel_id": cid},
+            confirm=confirm, operate=True,
+        )
+        rows.append(ui.row(
+            f"<span class='mono'>#{_esc(num)}</span>",
+            f"<div class='wc-cell-title'>{_esc(owner_name)}</div><div class='wc-cell-sub'>{_esc(where)}</div>",
+            _esc(rec.get("reason_label") or "—"),
+            f"<span class='mono'>{_esc(_fmt_iso(rec.get('created_at')))}</span>",
+            claimed,
+            f"><div class='wc-row-actions'>{close}</div>",
+        ))
+    more = ""
+    if len(open_items) > 100:
+        more = ui.callout(f"Es werden 100 von {len(open_items)} offenen Tickets gezeigt.", tone="info")
+    return ui.card(
+        "Offene Tickets",
+        ui.table(["#", "Inhaber", "Grund", "Geöffnet (UTC)", "Übernommen", ">"], rows,
+                 empty_text="Keine offenen Tickets.", search=len(rows) > 8,
+                 search_placeholder="Nummer, Inhaber, Grund …", id="tk-open") + more,
+        icon="bi-envelope-open",
+        desc="Schließen wirkt wie der Button im Ticket: Transcript, Log, Inhaber-Rolle entfernen, "
+             "archivieren bzw. löschen.",
+    )
+
+
+def _ticket_channel(guild, cid):
+    if not str(cid).isdigit():
+        return None
+    getter = getattr(guild, "get_channel_or_thread", None) or guild.get_channel
+    return getter(int(cid))
 
 
 def _render_panels(ui, guild, conf, text_items, csrf) -> str:
@@ -469,6 +536,9 @@ async def _handle_post(cog, request):
 
     gconf = cog.config.guild(guild)
 
+    if form == "ticket_close":
+        return await _close_from_dashboard(cog, request, guild, data.get("channel_id"))
+
     if form == "settings":
         lang = data.get("language") or "de"
         await gconf.language.set(lang if lang in LANGUAGES else "de")
@@ -599,6 +669,52 @@ async def _handle_post(cog, request):
         raise web.HTTPFound(f"/cogs/tickets?guild={guild.id}&ok=Panel+gelöscht")
 
     raise web.HTTPFound(f"/cogs/tickets?guild={guild.id}")
+
+
+class _DashboardCloser:
+    """Schließende Person, wenn der Dashboard-User (z. B. Bot-Owner) kein Mitglied des Servers ist."""
+
+    def __init__(self, uid: int, name: str):
+        self.id = uid
+        self.name = name
+        self.display_name = name
+        self.mention = f"<@{uid}>"
+
+    def __str__(self):
+        return self.name
+
+
+async def _close_from_dashboard(cog, request, guild, raw_cid):
+    """Einzelnes Ticket schließen (Tagesgeschäft) – dieselbe Logik wie der „Schließen“-Button."""
+    back = f"/cogs/tickets?guild={guild.id}"
+    cid = str(raw_cid or "").strip()
+    if not cid.isdigit():
+        raise web.HTTPFound(back + "&err=" + quote_plus("Ticket nicht gefunden"))
+    gconf = cog.config.guild(guild)
+    conf = await gconf.all()
+    record = (conf.get("tickets") or {}).get(cid)
+    if not record:
+        raise web.HTTPFound(back + "&err=" + quote_plus("Ticket nicht gefunden"))
+    num = record.get("num")
+    if record.get("status") != "open":
+        raise web.HTTPFound(back + "&err=" + quote_plus(f"Ticket #{num} ist bereits geschlossen"))
+    channel = _ticket_channel(guild, cid)
+    if channel is None:
+        # Kanal wurde in Discord von Hand gelöscht -> verwaisten Eintrag entfernen.
+        async with gconf.tickets() as tickets:
+            tickets.pop(cid, None)
+        raise web.HTTPFound(back + "&ok=" + quote_plus(f"Ticket #{num}: Kanal existiert nicht mehr – Eintrag entfernt"))
+    webcore = request.app["webcore"]
+    getter = getattr(webcore, "current_user", None) or webcore._get_user
+    user = await getter(request) or {}
+    uid = int(user.get("id") or 0)
+    closer = guild.get_member(uid) if uid else None
+    if closer is None:
+        closer = _DashboardCloser(uid, f"{user.get('name') or 'Dashboard'} (Dashboard)")
+    closed = await cog._close_ticket(guild, channel, record, closer, conf)
+    if not closed:
+        raise web.HTTPFound(back + "&err=" + quote_plus(f"Ticket #{num} ist bereits geschlossen"))
+    raise web.HTTPFound(back + "&ok=" + quote_plus(f"Ticket #{num} geschlossen"))
 
 
 def _parse_reasons(raw: str) -> list[dict]:
