@@ -14,6 +14,7 @@ from redbot.core.utils.chat_formatting import pagify
 
 from . import games
 from .dashboard import dashboard_handler
+from .member import member_handler
 from .embed import build_event_embed, signup_counts
 from .strings import DEFAULT_LANGUAGE, LANGUAGES, t
 from .views import (
@@ -38,6 +39,20 @@ RECURRENCE_DELTA = {
 }
 # Aufräumen alter Events: höchstens so oft je Server (Sekunden).
 CLEANUP_INTERVAL = 3600
+# Eingabe-Grenzen (Befehl + Dashboard). Titel = Discord-Embed-Titel; die Beschreibung
+# kappt build_event_embed ohnehin bei 1400 Zeichen (Platz für das Roster im 6000er-Limit).
+TITLE_MAX = 256
+DESCRIPTION_MAX = 1400
+LIMIT_MAX = 1000  # max. Teilnehmer / Rollen-Limit
+
+
+class EventInputError(Exception):
+    """Ungültige Event-Eingabe. ``key``/``kwargs`` -> ``strings.t`` (Befehl und Dashboard)."""
+
+    def __init__(self, key: str, **kwargs):
+        super().__init__(key)
+        self.key = key
+        self.kwargs = kwargs
 
 
 class RaidHelper(commands.Cog):
@@ -59,6 +74,7 @@ class RaidHelper(commands.Cog):
             counter=0,
             stats={"events": 0, "attended": {}},
             cleanup_days=30,        # abgeschlossene Events nach N Tagen löschen (0 = aus)
+            member_page=True,       # Seite „Raids“ im WebCore-Mitglieder-Bereich (/me/raids) anbieten
         )
         # Gemerkte Spec je Nutzer und Spiel/Klasse (serverübergreifend).
         self.config.register_user(remember={})
@@ -66,6 +82,8 @@ class RaidHelper(commands.Cog):
         self.config.register_global(spec_emojis={})
         # Aufräumen alter Events höchstens stündlich je Server (nur im RAM).
         self._last_cleanup: dict[int, float] = {}
+        # Dashboard: Formulareingaben nach einem Fehler (nur im RAM, kurzlebig).
+        self._dash_drafts: dict[str, tuple[float, dict]] = {}
 
     # ----------------------------------------------------------------- #
     #  Dashboard-Anbindung (1:1-Muster aus example/tickets)
@@ -94,9 +112,23 @@ class RaidHelper(commands.Cog):
             icon="bi-calendar-event",
             handler=self.dashboard_page,
         )
+        # Mitglieder-Bereich („Mein Bereich“): kommende Raids ansehen und sich anmelden.
+        if hasattr(webcore, "register_member_page"):  # ältere WebCore-Versionen ohne /me
+            webcore.register_member_page(
+                owner=self,
+                visible=lambda g: self.config.guild(g).member_page(),
+                slug="raids",
+                name="Raids",
+                icon="bi-calendar-event",
+                handler=self.member_page,
+                description="Kommende Raids ansehen und dich anmelden",
+            )
 
     async def dashboard_page(self, request):
         return await dashboard_handler(self, request)
+
+    async def member_page(self, request):
+        return await member_handler(self, request)
 
     # ----------------------------------------------------------------- #
     #  Datenschutz (Red-API)
@@ -309,6 +341,191 @@ class RaidHelper(commands.Cog):
         return event
 
     # ----------------------------------------------------------------- #
+    #  Eingaben prüfen – gemeinsam für Befehle und Dashboard
+    # ----------------------------------------------------------------- #
+    @staticmethod
+    def _now() -> int:
+        return int(datetime.now(tz=timezone.utc).timestamp())
+
+    @staticmethod
+    def _clean_title(title) -> str:
+        # Zeilenumbrüche zeigt ein Embed-Titel nicht an -> Leerzeichen; sonst unverändert.
+        title = str(title or "").replace("\r", " ").replace("\n", " ").strip()
+        if not title:
+            raise EventInputError("create_empty_title")
+        if len(title) > TITLE_MAX:
+            raise EventInputError("create_title_long", max=TITLE_MAX)
+        return title
+
+    @staticmethod
+    def _clean_description(description) -> str | None:
+        text = str(description or "").replace("\r\n", "\n").strip()
+        if len(text) > DESCRIPTION_MAX:
+            raise EventInputError("create_desc_long", max=DESCRIPTION_MAX)
+        return text or None
+
+    @staticmethod
+    def _clean_limit(value, key: str, **kw) -> int | None:
+        """Zahl oder leer. ``0``/negativ/leer = kein Limit (wie ``[p]raid maxsignups 0``)."""
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        try:
+            n = int(str(value).strip())
+        except ValueError:
+            raise EventInputError(key, max=LIMIT_MAX, **kw) from None
+        if n > LIMIT_MAX:
+            raise EventInputError(key, max=LIMIT_MAX, **kw)
+        return n if n > 0 else None
+
+    @classmethod
+    def _clean_role_limits(cls, game_id: str, limits: dict | None, *, base: dict | None = None) -> dict:
+        """Rollen-Limits prüfen. ``base`` + ``limits`` (Wert leer/0 entfernt die Rolle)."""
+        valid = games.role_order(game_id)
+        out = dict(base or {})
+        for role, value in (limits or {}).items():
+            role = str(role).lower()
+            if role not in valid:
+                raise EventInputError("rolelimit_bad_role", role=role, roles=", ".join(valid))
+            label = games.role_meta(game_id, role).get("label", role)
+            n = cls._clean_limit(value, "create_bad_rolelimit", label=label)
+            if n:
+                out[role] = n
+            else:
+                out.pop(role, None)
+        return out
+
+    @staticmethod
+    def _clean_recurrence(value) -> str | None:
+        value = str(value or "").strip().lower()
+        if value in ("", "none", "off", "aus"):
+            return None
+        if value in RECURRENCE_DELTA:
+            return value
+        raise EventInputError("recurrence_bad", value=value, allowed=", ".join(["none", *RECURRENCE_DELTA]))
+
+    @staticmethod
+    def _check_post_perms(guild, channel) -> None:
+        """Kann der Bot in ``channel`` ein Event posten (sehen, senden, Embeds)?"""
+        me = getattr(guild, "me", None)
+        if me is None or not hasattr(channel, "permissions_for"):
+            return
+        perms = channel.permissions_for(me)
+        if not (perms.view_channel and perms.send_messages and perms.embed_links):
+            raise EventInputError("create_no_perms", channel=f"#{channel.name}")
+
+    def _parse_when(self, date_s, time_s, tz_name: str) -> int:
+        ts = self._parse_dt(str(date_s or "").strip(), str(time_s or "").strip(), tz_name)
+        if ts is None:
+            raise EventInputError("create_bad_date")
+        return ts
+
+    async def create_event_from_input(self, guild, *, author_id, date_s, time_s, title,
+                                      game=None, channel=None, description=None, max_signups=None,
+                                      role_limits=None, recurrence=None,
+                                      deadline_date=None, deadline_time=None) -> dict:
+        """Event aus Nutzereingaben prüfen, anlegen und posten.
+
+        Einziger Weg für ``[p]raid create``/``quickcreate`` **und** das Dashboard – beide
+        posten dadurch identisch. ``channel`` = Kanal-Objekt oder ``None`` (Anmelde-Kanal).
+        Datum/Uhrzeit gelten in der Server-Zeitzone. Wirft :class:`EventInputError`.
+        """
+        conf = await self.config.guild(guild).all()
+        game_id = game or conf["default_game"]
+        if games.get_game(game_id) is None:
+            raise EventInputError("create_bad_game", game=game_id,
+                                  games=", ".join(g for g, _ in games.list_games()))
+        title = self._clean_title(title)
+        description = self._clean_description(description)
+        max_signups = self._clean_limit(max_signups, "create_bad_max")
+        role_limits = self._clean_role_limits(game_id, role_limits)
+        recurrence = self._clean_recurrence(recurrence)
+        ch = channel or (guild.get_channel(conf["signup_channel"]) if conf["signup_channel"] else None)
+        if not isinstance(ch, discord.TextChannel) or getattr(ch.guild, "id", guild.id) != guild.id:
+            raise EventInputError("create_no_channel")
+        self._check_post_perms(guild, ch)
+        start_ts = self._parse_when(date_s, time_s, conf["timezone"])
+        if start_ts <= self._now():
+            raise EventInputError("create_past")
+        deadline_ts = start_ts
+        if str(deadline_date or "").strip() or str(deadline_time or "").strip():
+            deadline_ts = self._parse_when(deadline_date, deadline_time, conf["timezone"])
+            if deadline_ts > start_ts:
+                raise EventInputError("deadline_after_start")
+        return await self.create_event(
+            guild, game=game_id, title=title, description=description,
+            leader_id=author_id, channel_id=ch.id, start_ts=start_ts, deadline_ts=deadline_ts,
+            max_signups=max_signups, role_limits=role_limits, recurrence=recurrence,
+        )
+
+    _EDITABLE = ("title", "description", "start_ts", "deadline_ts", "max_signups",
+                 "role_limits", "role_limit_patch", "recurrence")
+
+    async def update_event(self, guild, event_id: str, **changes) -> tuple[dict, dict]:
+        """Event ändern und die Discord-Nachricht bearbeiten (keine neue Nachricht).
+
+        Gemeinsame Logik für die ``[p]raid``-Bearbeitungsbefehle und das Dashboard.
+        Erlaubte Schlüssel: ``title``, ``description``, ``start_ts``, ``deadline_ts``
+        (``None`` = Event-Start), ``max_signups``, ``role_limits`` (ersetzt alle),
+        ``role_limit_patch`` (einzelne Rollen, 0 = entfernen), ``recurrence``.
+
+        Terminwechsel: nur für nicht abgeschlossene Events und nur in die Zukunft; die
+        Erinnerungs-Flags werden zurückgesetzt, ein Standard-Anmeldeschluss (= Start)
+        wandert mit, ein eigener wird um dieselbe Spanne verschoben.
+        Rückgabe ``(event, before)``. Wirft :class:`EventInputError`.
+        """
+        unknown = set(changes) - set(self._EDITABLE)
+        if unknown:
+            raise TypeError(f"update_event: unbekannte Felder {sorted(unknown)}")
+        async with self.config.guild(guild).events() as events:
+            cur = events.get(event_id)
+            if not isinstance(cur, dict):
+                raise EventInputError("not_found", id=event_id)
+            before = dict(cur)
+            new = dict(cur)
+            game_id = cur.get("game") or games.DEFAULT_GAME
+            if "title" in changes:
+                new["title"] = self._clean_title(changes["title"])
+            if "description" in changes:
+                new["description"] = self._clean_description(changes["description"])
+            if "max_signups" in changes:
+                new["max_signups"] = self._clean_limit(changes["max_signups"], "create_bad_max")
+            if "role_limits" in changes:
+                new["role_limits"] = self._clean_role_limits(game_id, changes["role_limits"])
+            if "role_limit_patch" in changes:
+                new["role_limits"] = self._clean_role_limits(
+                    game_id, changes["role_limit_patch"], base=new.get("role_limits") or {})
+            if "recurrence" in changes:
+                new["recurrence"] = self._clean_recurrence(changes["recurrence"])
+
+            old_start = int(cur.get("start_ts") or 0)
+            start = old_start
+            if "start_ts" in changes and int(changes["start_ts"]) != old_start:
+                if cur.get("completed"):
+                    raise EventInputError("edit_completed", id=event_id)
+                start = int(changes["start_ts"])
+                if start <= self._now():
+                    raise EventInputError("create_past")
+                new["start_ts"] = start
+                new["reminders_sent"] = []
+            if "deadline_ts" in changes:
+                deadline = changes["deadline_ts"]
+                deadline = int(deadline) if deadline else start
+                if deadline > start:
+                    raise EventInputError("deadline_after_start")
+                new["deadline_ts"] = deadline
+            elif start != old_start:
+                old_deadline = cur.get("deadline_ts")
+                if not old_deadline or int(old_deadline) == old_start:
+                    new["deadline_ts"] = start
+                else:
+                    new["deadline_ts"] = int(old_deadline) + (start - old_start)
+            events[event_id] = new
+            snapshot = dict(new)
+        if snapshot != before:
+            await self.refresh_event_message(guild, snapshot)
+        return snapshot, before
+
+    # ----------------------------------------------------------------- #
     #  Interaktionen (Anmeldung) – persistent über custom_id
     # ----------------------------------------------------------------- #
     @commands.Cog.listener()
@@ -385,106 +602,166 @@ class RaidHelper(commands.Cog):
             if e.get("status") == "signed" and e.get("role") == role
         )
 
-    async def _apply_signup(self, interaction, event_id, class_id, spec_id, *, ephemeral_edit=False):
-        guild = interaction.guild
-        lang = await self._lang(guild)
-        member = interaction.user
-        uid = str(member.id)
+    # ----------------------------------------------------------------- #
+    #  Anmeldung – EINE Logik für Discord-Buttons und Mitglieder-Seite (/me/raids)
+    # ----------------------------------------------------------------- #
+    async def set_signup(self, guild, event_id, member, *, class_id=None, spec_id=None,
+                         status: str = "signed", validate: bool = False,
+                         respond=None) -> tuple[bool, str, dict]:
+        """Anmelden / Spec wechseln (``status="signed"``) oder Status setzen (bench/late/…).
 
+        Prüft wie die Buttons: Event vorhanden, Anmeldung offen (``_signup_open``: geschlossen,
+        Anmeldeschluss), Gesamt-Limit (nur beim Neueintritt ins Roster) und Rollen-Limit (beim
+        Eintritt in eine Rolle). Bei Erfolg: Config schreiben, Spec merken (nur ``signed``) und die
+        Discord-Nachricht aktualisieren.
+
+        ``validate=True`` prüft Klasse/Spec zusätzlich gegen die Spiel-Vorlage (Web-Eingaben).
+        ``respond`` = optionales ``async (ok, key, kwargs)``, das direkt nach der Prüfung bzw. dem
+        Schreiben und **vor** dem Aktualisieren der Nachricht läuft (Discord verlangt eine Antwort
+        binnen 3 s). Rückgabe ``(ok, key, kwargs)`` für ``strings.t(lang, key, **kwargs)``.
+        """
+        uid = str(member.id)
+        if status != "signed":
+            return await self._set_status(guild, event_id, member, status, respond)
+
+        result = None
+        snapshot = None
         async with self.config.guild(guild).events() as events:
             event = events.get(event_id)
             if event is None:
-                msg = t(lang, "unknown_event")
-                return await self._respond(interaction, msg, ephemeral_edit)
-            open_, reason = self._signup_open(event)
-            if not open_:
-                return await self._respond(interaction, t(lang, reason), ephemeral_edit)
+                result = (False, "unknown_event", {})
+            else:
+                open_, reason = self._signup_open(event)
+                game_id = event["game"]
+                if not open_:
+                    result = (False, reason, {})
+                elif validate and (not class_id or not spec_id
+                                   or not games.is_valid(game_id, class_id, spec_id)):
+                    result = (False, "unknown_pick", {})
+            if result is None:
+                role = games.spec_role(game_id, class_id, spec_id)
+                prev = event["signups"].get(uid)
+                was_in_roster = bool(prev and prev.get("status") == "signed")
 
-            game_id = event["game"]
-            role = games.spec_role(game_id, class_id, spec_id)
-            prev = event["signups"].get(uid)
-            was_in_roster = bool(prev and prev.get("status") == "signed")
-
-            # Limits nur prüfen, wenn neu in diese Rolle (nicht beim reinen Spec-Wechsel innerhalb gleicher Rolle).
-            entering = (not was_in_roster) or (prev and prev.get("role") != role)
-            if entering:
-                total, roster = signup_counts(event)
-                cap = event.get("max_signups")
-                if cap and not was_in_roster and roster >= int(cap):
-                    return await self._respond(interaction, t(lang, "event_full", max=cap), ephemeral_edit)
-                rlimit = (event.get("role_limits") or {}).get(role)
-                if rlimit and self._count_role(event, role) >= int(rlimit):
-                    label = games.role_meta(game_id, role).get("label", role)
-                    return await self._respond(interaction, t(lang, "role_full", label=label, max=rlimit), ephemeral_edit)
-
-            event["signups"][uid] = {
-                "name": member.display_name,
-                "class": class_id,
-                "spec": spec_id,
-                "role": role,
-                "status": "signed",
-                "at": (prev or {}).get("at") or int(datetime.now(tz=timezone.utc).timestamp()),
-            }
-            events[event_id] = event
-            snapshot = dict(event)
+                # Limits nur prüfen, wenn neu in diese Rolle (nicht beim reinen Spec-Wechsel innerhalb gleicher Rolle).
+                entering = (not was_in_roster) or (prev and prev.get("role") != role)
+                if entering:
+                    total, roster = signup_counts(event)
+                    cap = event.get("max_signups")
+                    rlimit = (event.get("role_limits") or {}).get(role)
+                    if cap and not was_in_roster and roster >= int(cap):
+                        result = (False, "event_full", {"max": cap})
+                    elif rlimit and self._count_role(event, role) >= int(rlimit):
+                        label = games.role_meta(game_id, role).get("label", role)
+                        result = (False, "role_full", {"label": label, "max": rlimit})
+            if result is None:
+                event["signups"][uid] = {
+                    "name": member.display_name,
+                    "class": class_id,
+                    "spec": spec_id,
+                    "role": role,
+                    "status": "signed",
+                    "at": (prev or {}).get("at") or int(datetime.now(tz=timezone.utc).timestamp()),
+                }
+                events[event_id] = event
+                snapshot = dict(event)
+                result = (True, "spec_changed" if was_in_roster else "signed", {
+                    "spec": games.spec_label(game_id, class_id, spec_id),
+                    "cls": games.class_label(game_id, class_id),
+                    "role": games.role_meta(game_id, role).get("label", role),
+                })
 
         # Erst antworten, dann die Event-Nachricht aktualisieren: Discord verlangt eine
         # Antwort binnen 3 s – fetch+edit davor ließ die Interaktion unter Last scheitern.
-        cls_l = games.class_label(game_id, class_id)
-        spec_l = games.spec_label(game_id, class_id, spec_id)
-        role_l = games.role_meta(game_id, role).get("label", role)
-        key = "spec_changed" if was_in_roster else "signed"
-        await self._respond(interaction, t(lang, key, spec=spec_l, cls=cls_l, role=role_l), ephemeral_edit)
-        await self._remember_spec(member.id, game_id, class_id, spec_id)
-        await self.refresh_event_message(guild, snapshot)
+        if respond is not None:
+            await respond(*result)
+        if snapshot is not None:
+            await self._remember_spec(member.id, game_id, class_id, spec_id)
+            await self.refresh_event_message(guild, snapshot)
+        return result
 
-    async def _apply_status(self, interaction, event_id, status):
-        guild = interaction.guild
-        lang = await self._lang(guild)
-        member = interaction.user
+    async def _set_status(self, guild, event_id, member, status, respond) -> tuple[bool, str, dict]:
         uid = str(member.id)
         if status not in STATUS_BUTTONS:
-            return await interaction.response.send_message(t(lang, "unknown_pick"), ephemeral=True)
-
+            result = (False, "unknown_pick", {})
+            if respond is not None:
+                await respond(*result)
+            return result
+        snapshot = None
         async with self.config.guild(guild).events() as events:
             event = events.get(event_id)
             if event is None:
-                return await interaction.response.send_message(t(lang, "unknown_event"), ephemeral=True)
-            open_, reason = self._signup_open(event)
-            if not open_:
-                return await interaction.response.send_message(t(lang, reason), ephemeral=True)
-            prev = event["signups"].get(uid) or {}
-            event["signups"][uid] = {
-                "name": member.display_name,
-                "class": prev.get("class"),
-                "spec": prev.get("spec"),
-                "role": prev.get("role"),
-                "status": status,
-                "at": prev.get("at") or int(datetime.now(tz=timezone.utc).timestamp()),
-            }
-            events[event_id] = event
-            snapshot = dict(event)
+                result = (False, "unknown_event", {})
+            else:
+                open_, reason = self._signup_open(event)
+                if not open_:
+                    result = (False, reason, {})
+                else:
+                    prev = event["signups"].get(uid) or {}
+                    event["signups"][uid] = {
+                        "name": member.display_name,
+                        "class": prev.get("class"),
+                        "spec": prev.get("spec"),
+                        "role": prev.get("role"),
+                        "status": status,
+                        "at": prev.get("at") or int(datetime.now(tz=timezone.utc).timestamp()),
+                    }
+                    events[event_id] = event
+                    snapshot = dict(event)
+                    lang = await self._lang(guild)
+                    result = (True, "moved_status", {"status": t(lang, f"status_{status}")})
+        if respond is not None:
+            await respond(*result)
+        if snapshot is not None:
+            await self.refresh_event_message(guild, snapshot)
+        return result
 
-        await interaction.response.send_message(
-            t(lang, "moved_status", status=t(lang, f"status_{status}")), ephemeral=True
-        )
-        await self.refresh_event_message(guild, snapshot)
+    async def remove_signup(self, guild, event_id, member, *, respond=None) -> tuple[bool, str, dict]:
+        """Abmelden (wie der Button „Abmelden“ – auch bei geschlossener Anmeldung erlaubt)."""
+        uid = str(member.id)
+        snapshot = None
+        async with self.config.guild(guild).events() as events:
+            event = events.get(event_id)
+            if event is None:
+                result = (False, "unknown_event", {})
+            elif uid not in event["signups"]:
+                result = (False, "not_signed", {})
+            else:
+                del event["signups"][uid]
+                events[event_id] = event
+                snapshot = dict(event)
+                result = (True, "left", {})
+        if respond is not None:
+            await respond(*result)
+        if snapshot is not None:
+            await self.refresh_event_message(guild, snapshot)
+        return result
+
+    # ----- Button-Handler: nur noch Antwort-Weg, Logik oben ---------------- #
+    async def _apply_signup(self, interaction, event_id, class_id, spec_id, *, ephemeral_edit=False):
+        lang = await self._lang(interaction.guild)
+
+        async def respond(_ok, key, kwargs):
+            await self._respond(interaction, t(lang, key, **kwargs), ephemeral_edit)
+
+        await self.set_signup(interaction.guild, event_id, interaction.user,
+                              class_id=class_id, spec_id=spec_id, respond=respond)
+
+    async def _apply_status(self, interaction, event_id, status):
+        lang = await self._lang(interaction.guild)
+
+        async def respond(_ok, key, kwargs):
+            await interaction.response.send_message(t(lang, key, **kwargs), ephemeral=True)
+
+        await self.set_signup(interaction.guild, event_id, interaction.user, status=status, respond=respond)
 
     async def _leave(self, interaction, event_id):
-        guild = interaction.guild
-        lang = await self._lang(guild)
-        uid = str(interaction.user.id)
-        async with self.config.guild(guild).events() as events:
-            event = events.get(event_id)
-            if event is None:
-                return await interaction.response.send_message(t(lang, "unknown_event"), ephemeral=True)
-            if uid not in event["signups"]:
-                return await interaction.response.send_message(t(lang, "not_signed"), ephemeral=True)
-            del event["signups"][uid]
-            events[event_id] = event
-            snapshot = dict(event)
-        await interaction.response.send_message(t(lang, "left"), ephemeral=True)
-        await self.refresh_event_message(guild, snapshot)
+        lang = await self._lang(interaction.guild)
+
+        async def respond(_ok, key, kwargs):
+            await interaction.response.send_message(t(lang, key, **kwargs), ephemeral=True)
+
+        await self.remove_signup(interaction.guild, event_id, interaction.user, respond=respond)
 
     async def _respond(self, interaction, text, ephemeral_edit):
         """Antwortet ephemer – bei Spec-Auswahl wird die Auswahl-Nachricht ersetzt."""
@@ -721,28 +998,35 @@ class RaidHelper(commands.Cog):
             return await ctx.send(t(await self._lang(ctx.guild), "no_permission"))
         await self._create_flow(ctx, date, time, title, game=game, channel=channel)
 
+    async def _send_input_error(self, ctx, lang, err: EventInputError):
+        await ctx.send(t(lang, err.key, p=ctx.clean_prefix, **err.kwargs))
+
     async def _create_flow(self, ctx, date, time, title, game, channel):
         guild = ctx.guild
         lang = await self._lang(guild)
-        conf = await self.config.guild(guild).all()
-        game_id = game or conf["default_game"]
-        if games.get_game(game_id) is None:
-            avail = ", ".join(g for g, _ in games.list_games())
-            return await ctx.send(t(lang, "create_bad_game", game=game_id, games=avail))
-        ch = channel or (guild.get_channel(conf["signup_channel"]) if conf["signup_channel"] else None)
-        if not isinstance(ch, discord.TextChannel):
-            return await ctx.send(t(lang, "create_no_channel", p=ctx.clean_prefix))
-        start_ts = self._parse_dt(date, time, conf["timezone"])
-        if start_ts is None:
-            return await ctx.send(t(lang, "create_bad_date"))
-        if start_ts <= int(datetime.now(tz=timezone.utc).timestamp()):
-            return await ctx.send(t(lang, "create_past"))
-        event = await self.create_event(
-            guild, game=game_id, title=title, description=None,
-            leader_id=ctx.author.id, channel_id=ch.id, start_ts=start_ts,
-        )
-        link = f"https://discord.com/channels/{guild.id}/{ch.id}/{event['message_id']}" if event.get("message_id") else f"#{ch.name}"
+        try:
+            event = await self.create_event_from_input(
+                guild, author_id=ctx.author.id, date_s=date, time_s=time, title=title,
+                game=game, channel=channel,
+            )
+        except EventInputError as err:
+            return await self._send_input_error(ctx, lang, err)
+        ch = guild.get_channel(event["channel_id"])
+        link = (f"https://discord.com/channels/{guild.id}/{event['channel_id']}/{event['message_id']}"
+                if event.get("message_id") else f"#{getattr(ch, 'name', event['channel_id'])}")
         await ctx.send(t(lang, "created", link=link))
+
+    async def _edit_flow(self, ctx, event_id: str, ok_msg, **changes):
+        """Gemeinsamer Rahmen der Bearbeitungsbefehle: Rechte, update_event, Antwort."""
+        guild = ctx.guild
+        lang = await self._lang(guild)
+        if not await self._is_manager(ctx.author):
+            return await ctx.send(t(lang, "no_permission"))
+        try:
+            event, _before = await self.update_event(guild, event_id, **changes)
+        except EventInputError as err:
+            return await self._send_input_error(ctx, lang, err)
+        await ctx.send(ok_msg(lang, event))
 
     @raid.command(name="list")
     async def raid_list(self, ctx):
@@ -879,138 +1163,87 @@ class RaidHelper(commands.Cog):
         await ctx.send(file=file)
 
     # ----- Event nachträglich konfigurieren --------------------------- #
+    # Alle Befehle laufen über update_event() – dieselbe Logik wie „Bearbeiten“ im Dashboard.
+    @raid.command(name="title")
+    async def raid_title(self, ctx, event_id: str, *, title: str):
+        """Titel eines Events ändern."""
+        await self._edit_flow(ctx, event_id, lambda lang, e: t(lang, "edited", id=e["id"]), title=title)
+
+    @raid.command(name="time")
+    async def raid_time(self, ctx, event_id: str, date: str, time: str):
+        """Termin verschieben.  Beispiel: [p]raid time rh-0001 14.06.2026 20:30"""
+        lang = await self._lang(ctx.guild)
+        if not await self._is_manager(ctx.author):
+            return await ctx.send(t(lang, "no_permission"))
+        tz_name = await self.config.guild(ctx.guild).timezone()
+        try:
+            start_ts = self._parse_when(date, time, tz_name)
+        except EventInputError as err:
+            return await self._send_input_error(ctx, lang, err)
+        await self._edit_flow(
+            ctx, event_id,
+            lambda lang, e: t(lang, "time_set", id=e["id"], time=f"<t:{e['start_ts']}:F>"),
+            start_ts=start_ts,
+        )
+
     @raid.command(name="description")
     async def raid_description(self, ctx, event_id: str, *, text: str = ""):
         """Beschreibung eines Events setzen (leer lassen = entfernen)."""
-        guild = ctx.guild
-        lang = await self._lang(guild)
-        if not await self._is_manager(ctx.author):
-            return await ctx.send(t(lang, "no_permission"))
-        event = await self._get_event(guild, event_id)
-        if event is None:
-            return await ctx.send(t(lang, "not_found", id=event_id))
-        new_desc = text.strip() or None
-        async with self.config.guild(guild).events() as events:
-            cur = events.get(event_id)
-            if cur is None:
-                return await ctx.send(t(lang, "not_found", id=event_id))
-            cur["description"] = new_desc
-            events[event_id] = cur
-            snapshot = dict(cur)
-        await self.refresh_event_message(guild, snapshot)
-        await ctx.send(t(lang, "description_set" if new_desc else "description_cleared", id=event_id))
+        await self._edit_flow(
+            ctx, event_id,
+            lambda lang, e: t(lang, "description_set" if e.get("description") else "description_cleared", id=e["id"]),
+            description=text,
+        )
 
     @raid.command(name="deadline")
     async def raid_deadline(self, ctx, event_id: str, date: str, time: str):
         """Anmeldeschluss setzen.  Beispiel: [p]raid deadline rh-0001 13.06.2026 19:30"""
-        guild = ctx.guild
-        lang = await self._lang(guild)
+        lang = await self._lang(ctx.guild)
         if not await self._is_manager(ctx.author):
             return await ctx.send(t(lang, "no_permission"))
-        event = await self._get_event(guild, event_id)
-        if event is None:
-            return await ctx.send(t(lang, "not_found", id=event_id))
-        tz_name = await self.config.guild(guild).timezone()
-        deadline_ts = self._parse_dt(date, time, tz_name)
-        if deadline_ts is None:
-            return await ctx.send(t(lang, "create_bad_date"))
-        async with self.config.guild(guild).events() as events:
-            cur = events.get(event_id)
-            if cur is None:
-                return await ctx.send(t(lang, "not_found", id=event_id))
-            cur["deadline_ts"] = deadline_ts
-            events[event_id] = cur
-            snapshot = dict(cur)
-        await self.refresh_event_message(guild, snapshot)
-        await ctx.send(t(lang, "deadline_set", id=event_id, time=f"<t:{deadline_ts}:f>"))
+        tz_name = await self.config.guild(ctx.guild).timezone()
+        try:
+            deadline_ts = self._parse_when(date, time, tz_name)
+        except EventInputError as err:
+            return await self._send_input_error(ctx, lang, err)
+        await self._edit_flow(
+            ctx, event_id,
+            lambda lang, e: t(lang, "deadline_set", id=e["id"], time=f"<t:{e['deadline_ts']}:f>"),
+            deadline_ts=deadline_ts,
+        )
 
     @raid.command(name="recurrence")
     async def raid_recurrence(self, ctx, event_id: str, value: str):
         """Wiederholung setzen: none, daily, weekly, biweekly."""
-        guild = ctx.guild
-        lang = await self._lang(guild)
-        if not await self._is_manager(ctx.author):
-            return await ctx.send(t(lang, "no_permission"))
-        event = await self._get_event(guild, event_id)
-        if event is None:
-            return await ctx.send(t(lang, "not_found", id=event_id))
-        value = value.lower()
-        if value in ("none", "off", "aus"):
-            new_rec = None
-        elif value in RECURRENCE_DELTA:
-            new_rec = value
-        else:
-            allowed = ", ".join(["none", *RECURRENCE_DELTA])
-            return await ctx.send(t(lang, "recurrence_bad", value=value, allowed=allowed))
-        async with self.config.guild(guild).events() as events:
-            cur = events.get(event_id)
-            if cur is None:
-                return await ctx.send(t(lang, "not_found", id=event_id))
-            cur["recurrence"] = new_rec
-            events[event_id] = cur
-            snapshot = dict(cur)
-        await self.refresh_event_message(guild, snapshot)
-        await ctx.send(
-            t(lang, "recurrence_set", id=event_id, value=new_rec)
-            if new_rec else t(lang, "recurrence_cleared", id=event_id)
+        await self._edit_flow(
+            ctx, event_id,
+            lambda lang, e: (t(lang, "recurrence_set", id=e["id"], value=e["recurrence"])
+                             if e.get("recurrence") else t(lang, "recurrence_cleared", id=e["id"])),
+            recurrence=value,
         )
 
     @raid.command(name="maxsignups")
     async def raid_maxsignups(self, ctx, event_id: str, count: int):
         """Maximale Anmeldungen setzen (0 oder weniger = unbegrenzt)."""
-        guild = ctx.guild
-        lang = await self._lang(guild)
-        if not await self._is_manager(ctx.author):
-            return await ctx.send(t(lang, "no_permission"))
-        event = await self._get_event(guild, event_id)
-        if event is None:
-            return await ctx.send(t(lang, "not_found", id=event_id))
-        new_max = count if count > 0 else None
-        async with self.config.guild(guild).events() as events:
-            cur = events.get(event_id)
-            if cur is None:
-                return await ctx.send(t(lang, "not_found", id=event_id))
-            cur["max_signups"] = new_max
-            events[event_id] = cur
-            snapshot = dict(cur)
-        await self.refresh_event_message(guild, snapshot)
-        await ctx.send(
-            t(lang, "maxsignups_set", id=event_id, max=new_max)
-            if new_max else t(lang, "maxsignups_cleared", id=event_id)
+        await self._edit_flow(
+            ctx, event_id,
+            lambda lang, e: (t(lang, "maxsignups_set", id=e["id"], max=e["max_signups"])
+                             if e.get("max_signups") else t(lang, "maxsignups_cleared", id=e["id"])),
+            max_signups=count,
         )
 
     @raid.command(name="rolelimit")
     async def raid_rolelimit(self, ctx, event_id: str, role: str, count: int):
         """Rollen-Limit setzen (0 oder weniger = Limit entfernen)."""
-        guild = ctx.guild
-        lang = await self._lang(guild)
-        if not await self._is_manager(ctx.author):
-            return await ctx.send(t(lang, "no_permission"))
-        event = await self._get_event(guild, event_id)
-        if event is None:
-            return await ctx.send(t(lang, "not_found", id=event_id))
-        game_id = event["game"]
         role = role.lower()
-        valid_roles = games.role_order(game_id)
-        if role not in valid_roles:
-            return await ctx.send(t(lang, "rolelimit_bad_role", role=role, roles=", ".join(valid_roles)))
-        label = games.role_meta(game_id, role).get("label", role)
-        async with self.config.guild(guild).events() as events:
-            cur = events.get(event_id)
-            if cur is None:
-                return await ctx.send(t(lang, "not_found", id=event_id))
-            limits = cur.setdefault("role_limits", {})
-            if count > 0:
-                limits[role] = count
-            else:
-                limits.pop(role, None)
-            events[event_id] = cur
-            snapshot = dict(cur)
-        await self.refresh_event_message(guild, snapshot)
-        await ctx.send(
-            t(lang, "rolelimit_set", id=event_id, label=label, max=count)
-            if count > 0 else t(lang, "rolelimit_cleared", id=event_id, label=label)
-        )
+
+        def ok_msg(lang, e):
+            label = games.role_meta(e.get("game") or games.DEFAULT_GAME, role).get("label", role)
+            limit = (e.get("role_limits") or {}).get(role)
+            return (t(lang, "rolelimit_set", id=e["id"], label=label, max=limit)
+                    if limit else t(lang, "rolelimit_cleared", id=e["id"], label=label))
+
+        await self._edit_flow(ctx, event_id, ok_msg, role_limit_patch={role: count})
 
     # ----------------------------------------------------------------- #
     #  Befehle: Einstellungen

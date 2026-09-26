@@ -32,6 +32,9 @@ Danach `webcore` einrichten (siehe [`webcore/README.md`](webcore/README.md)).
 | [`raidhelper`](raidhelper/) | Mehrsprachiger Raid-Planer: Anmeldung per Button, Roster, Erinnerungen, Wiederholung, CSV-Export und Dashboard. |
 | [`sticky`](sticky/) | Hält eine Nachricht am unteren Ende eines Kanals fest – mit Webhook-Modus, Platzhaltern und Dashboard. |
 | [`tickets`](tickets/) | Mehrsprachiges Ticketsystem mit Panels, Team-Zuordnung je Grund, Transcripts und Dashboard. |
+| [`twitchlive`](twitchlive/) | Twitch-Live-Benachrichtigungen: genau eine Meldung pro Stream mit Vorschaubild, Rollen-Ping, eigener Nachricht, „war live“-Bearbeitung nach Stream-Ende, optionaler Live-Rolle und Dashboard. |
+| [`warns`](warns/) | Verwarnsystem mit Punkten, Verfall, automatischen Maßnahmen (inkl. Hierarchie-Schutz), DM und Log sowie Dashboard. Hinweis: Reds eingebauten Cog `warnings` vorher entladen (`[p]unload warnings`). |
+| [`welcome`](welcome/) | Willkommens- und Abschiedsnachrichten, Willkommensbild mit Avatar, Willkommens-DM und Dashboard mit Live-Vorschau. |
 
 ## Wie das Dashboard funktioniert
 
@@ -39,6 +42,29 @@ Danach `webcore` einrichten (siehe [`webcore/README.md`](webcore/README.md)).
 Seiten über `register_page(...)` und taucht dann automatisch in der Navigation auf. Lädt man
 einen Cog wieder aus, verschwindet seine Seite ebenso automatisch. Das vollständige Muster steht
 in `example/example.py`.
+
+## Mitglieder-Bereich & Launcher-API
+
+Neben den Team-Seiten bietet WebCore zwei Zugänge für alle anderen:
+
+- **Mein Bereich (`/me`)** – normale Server-Mitglieder melden sich per Discord an und sehen nur ihre
+  eigenen Daten: **Raids** (anmelden, Status ändern, abmelden), **Umfragen** (abstimmen),
+  **Rollen** (Self-Service-Rollen wie an den Panels) und **Meine Tickets** (eigene Tickets und
+  Transcripts, optional neues Ticket öffnen). Pro Server einschaltbar (`[p]webcore portal on` bzw.
+  *Zugriff & Rollen*); jede Modul-Seite lässt sich zusätzlich im jeweiligen Dashboard ausblenden.
+- **Öffentliche API (`/api/public/…`)** – ohne Login, mit CORS und Rate-Limit, z. B. die
+  **Changelog-API** (`/api/public/changelog/<server-id>` als JSON bzw. `/rss`) für einen
+  Spiele-Launcher oder die eigene Website.
+
+Details, Einrichtung und die Regeln für Cog-Entwickler stehen in [`webcore/README.md`](webcore/README.md)
+(„Mein Bereich“, „Mitglieder-Seiten“, „öffentliche API“), die Changelog-API in
+[`changelog/README.md`](changelog/README.md).
+
+## Tests & CI
+
+Unter [`tests/`](tests/) liegen automatische Tests für alle Cogs (echter WebCore und echte Cogs,
+Discord als Fake) – lokal mit `python tests/run_all.py`; eine GitHub Action führt sie zusammen mit
+`compileall` und `pyflakes` bei jedem Push und Pull-Request aus. Details: [`tests/README.md`](tests/README.md).
 
 ## Workflow pro neuem Cog (Definition of Done)
 

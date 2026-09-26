@@ -20,6 +20,7 @@ from redbot.core.bot import Red
 from .dashboard import dashboard_handler
 from .embed import build_changelog_embed, has_any_section
 from .modal import ChangelogModal
+from .public import public_handler
 from .strings import DEFAULT_LANGUAGE, LANGUAGES, t
 
 log = logging.getLogger("red.red-cogs.changelog")
@@ -67,6 +68,7 @@ class Changelog(commands.Cog):
             messages={},            # Text-Overrides (OVERRIDABLE_KEYS)
             entries={},             # id -> Changelog-Datensatz
             counter=0,
+            public_api=False,       # öffentliche JSON/RSS-API für Launcher & Website (Standard aus)
         )
 
     # ----------------------------------------------------------------- #
@@ -111,9 +113,14 @@ class Changelog(commands.Cog):
             icon="bi-megaphone",
             handler=self.dashboard_page,
         )
+        if hasattr(webcore, "register_public_api"):  # ältere WebCore-Versionen ohne öffentliche API
+            webcore.register_public_api(owner=self, slug="changelog", handler=self.public_api)
 
     async def dashboard_page(self, request):
         return await dashboard_handler(self, request)
+
+    async def public_api(self, request):
+        return await public_handler(self, request)
 
     # ----------------------------------------------------------------- #
     #  Hilfsfunktionen

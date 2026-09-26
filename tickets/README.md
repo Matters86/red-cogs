@@ -75,6 +75,31 @@ Ist `webcore` geladen, erscheint der Tab **Tickets**. Dort lassen sich pro Serve
 - **Transcripts** – gespeicherte Ticket-Verläufe als eigene Seite öffnen.
 - **Statistik** – offene/geschlossene Tickets, Ø Laufzeit und Übernahmen je Support-Mitglied.
 
+### Mitglieder-Bereich: „Meine Tickets“
+
+Hat der Bot-Owner in WebCore **Mein Bereich** für den Server eingeschaltet, finden normale Mitglieder
+dort die Seite **Meine Tickets** (`/me/tickets`):
+
+- **Offen** – eigene offene Tickets mit Grund, Öffnungszeitpunkt, Status (wartet / in Bearbeitung /
+  gesperrt) und Button „In Discord öffnen“.
+- **Verlauf** – eigene geschlossene Tickets; „Verlauf ansehen“ öffnet das Transcript in derselben
+  Darstellung wie im Team-Dashboard.
+- **Neues Ticket** – die Panels, die das Mitglied in Discord sehen kann (gepostet, Kanal lesbar), mit
+  ihren Gründen und Fragen als Formular. Das Ticket entsteht über **dieselbe Logik wie der Discord-Button**
+  (gleiches Limit „max. offene Tickets pro Nutzer“, gleiche Sperre gegen Doppelklicks, gleiche Kanäle,
+  Rollen, Pings und Log-Einträge); danach gibt es einen Link zum neuen Kanal.
+
+Angezeigt werden nur Tickets, die das Mitglied **erstellt** hat oder zu denen es per `[p]ticket add`
+**hinzugefügt** wurde (wird ab dieser Version gespeichert, `[p]ticket remove` entfernt es wieder).
+Fremde Ticket- oder Transcript-Nummern in der Adresse ergeben „nicht gefunden“.
+
+Im Team-Dashboard unter **Einstellungen → Mitglieder-Bereich** (beide Standard **an**):
+
+| Schalter | Wirkung |
+|---|---|
+| Im Mitglieder-Bereich anzeigen | Aus: die Seite zeigt nur „auf diesem Server nicht verfügbar“, Transcripts sind gesperrt. |
+| Tickets über die Website öffnen erlauben | Aus: kein Reiter „Neues Ticket“, Anfragen werden abgelehnt. |
+
 Hinweis: Read-only **View-Rollen** wirken vor allem im **Kategorie-Modus**. In Threads/Foren wird
 der Zugriff über Thread-Mitgliedschaft bzw. Kanalrechte gesteuert (Support-Rollen brauchen dort
 ggf. die Berechtigung, private Threads zu sehen).

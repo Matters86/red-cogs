@@ -18,7 +18,8 @@ Organisatoren legen ein Event an, der Bot postet ein **Embed mit Live-Roster** i
 - **Drei WoW-Vorlagen**: Retail (13 Klassen), Classic/Vanilla (9), WotLK/Cata (10) – mit **deutschen** Klassen- und Spec-Namen.
 - **Spec-Icons** – eigene Icons je Spezialisierung, botweit als Application-Emojis, bequem per Dashboard hochladbar; erscheinen im Spec-Auswahlmenü und im Roster.
 - **Mehrsprachig** – Deutsch als Standard, pro Server umschaltbar (aktuell `de`, `en`).
-- **Dashboard** – Events und Einstellungen vollständig über das WebCore-Dashboard verwaltbar.
+- **Dashboard** – Events direkt im WebCore-Dashboard anlegen und bearbeiten, dazu Roster und alle Einstellungen.
+- **Anmeldung über die Website** – Mitglieder sehen unter „Mein Bereich → Raids“ die kommenden Events und melden sich dort an (gleiche Regeln wie die Buttons).
 
 ## Installation
 
@@ -50,7 +51,7 @@ Verwaltung (`raid`) erfordert eine Manager-Rolle, „Server verwalten" oder Bot-
 | Befehl | Beschreibung |
 |---|---|
 | `[p]raid create <datum> <zeit> <titel>` | Event im Standard-Kanal/-Spiel anlegen |
-| `[p]raid quickcreate <spiel> <datum> <zeit> [#kanal] <titel>` | Event mit Spiel und Kanal direkt anlegen |
+| `[p]raid quickcreate <spiel> <#kanal> <datum> <zeit> <titel>` | Event mit Spiel und Kanal direkt anlegen |
 | `[p]raid list` | Alle Events des Servers auflisten |
 | `[p]raid close <id>` | Anmeldung schließen |
 | `[p]raid reopen <id>` | Anmeldung wieder öffnen |
@@ -58,6 +59,13 @@ Verwaltung (`raid`) erfordert eine Manager-Rolle, „Server verwalten" oder Bot-
 | `[p]raid add <id> <mitglied> <klasse> <spec>` | Mitglied manuell eintragen |
 | `[p]raid remove <id> <mitglied>` | Mitglied aus einem Event entfernen |
 | `[p]raid export <id>` | Anmeldungen als CSV exportieren |
+| `[p]raid title <id> <titel>` | Titel ändern |
+| `[p]raid time <id> <datum> <zeit>` | Termin verschieben (nur in die Zukunft; Erinnerungen werden neu gesendet, ein Standard-Anmeldeschluss wandert mit) |
+| `[p]raid description <id> [text]` | Beschreibung setzen (ohne Text = entfernen) |
+| `[p]raid deadline <id> <datum> <zeit>` | Anmeldeschluss setzen (muss vor dem Start liegen) |
+| `[p]raid recurrence <id> <none\|daily\|weekly\|biweekly>` | Wiederholung setzen |
+| `[p]raid maxsignups <id> <anzahl>` | Maximale Anmeldungen (`0` = unbegrenzt) |
+| `[p]raid rolelimit <id> <rolle> <anzahl>` | Limit pro Rolle – `tank`, `healer`, `mdps`, `rdps` (`0` = kein Limit) |
 
 Einstellungen (`raidset`) erfordern „Server verwalten" oder Admin.
 
@@ -84,10 +92,37 @@ Spiel-IDs: `wow_retail`, `wow_classic`, `wow_wotlk`.
 Die Seite **Raidplaner** erscheint nach dem Laden automatisch im WebCore-Dashboard unter `/cogs/raidhelper`. Dort gibt es:
 
 - Statistik-Kacheln (kommende Events, Anmeldungen gesamt, Standard-Spiel),
-- ein Einstellungs-Formular (Sprache, Standard-Spiel, Anmelde-Kanal, Zeitzone, Erinnerungen, Aufräumen, Text-Overrides),
-- eine Event-Tabelle mit Aktionen (Schließen/Öffnen/Löschen),
+- den Reiter **Neues Event** – Event anlegen und sofort posten (siehe unten),
+- eine Event-Tabelle mit Aktionen (Roster, **Bearbeiten**, Schließen/Öffnen, Löschen),
 - eine Roster-Ansicht pro Event,
+- ein Einstellungs-Formular (Sprache, Standard-Spiel, Anmelde-Kanal, Zeitzone, Erinnerungen, Mitglieder-Bereich, Aufräumen, Text-Overrides),
 - eine **Spec-Icon-Verwaltung** mit Datei-Upload und Vorschau der aktuellen Icons.
+
+Zusätzlich registriert der Cog die Mitglieder-Seite **Raids** (`/me/raids`) – siehe „Anmeldung über die Website“.
+
+Wer die Seite **bearbeiten** darf (Bot-Owner oder eine Rolle mit „Bearbeiten“ unter *Zugriff & Rollen*), kann Events anlegen und ändern – nur auf den Servern, für die das Recht gilt. „Ansehen“ zeigt alles schreibgeschützt.
+
+### Neues Event
+
+Alle Optionen von `[p]raid create`/`quickcreate` und den Einstellungsbefehlen in einem Formular:
+
+| Feld | Bedeutung |
+|---|---|
+| Titel, Beschreibung | Titel max. 256 Zeichen, Beschreibung max. 1400 (Discord-Formatierung erlaubt) |
+| Spiel / Vorlage | Klassen, Specs und Rollen (vorbelegt: Standard-Spiel) |
+| Anmelde-Kanal | Vorbelegt: Standard-Anmelde-Kanal. Der Bot braucht dort „Kanal ansehen“, „Nachrichten senden“ und „Links einbetten“ |
+| Datum, Uhrzeit | Kalender-/Uhrzeit-Auswahl; gilt in der **Server-Zeitzone** (wird mit aktuellem UTC-Versatz angezeigt). In Discord sieht jedes Mitglied die Zeit in seiner eigenen Zeitzone |
+| Anmeldeschluss | Optional, muss vor dem Start liegen (leer = bis zum Start) |
+| Wiederholung | Einmalig, täglich, wöchentlich, alle zwei Wochen |
+| Maximale Anmeldungen, Rollen-Limits | Leer oder 0 = unbegrenzt |
+
+Erinnerungen (60 und 15 Minuten vorher) gelten für alle Events des Servers und werden unter „Einstellungen“ geschaltet.
+
+Das Dashboard nutzt **dieselbe Funktion wie `[p]raid create`**: gleiche Prüfungen, fortlaufende Event-ID, Nachricht mit Anmelde-Buttons. Raidleitung wird, wer das Event im Dashboard anlegt. Fehler (Datum in der Vergangenheit, Kanal ohne Bot-Rechte, ungültige Limits …) erscheinen als rote Meldung, die Eingaben bleiben im Formular erhalten. Nach dem Anlegen springt die Seite zum Reiter „Events“.
+
+### Event bearbeiten
+
+„Bearbeiten“ in der Event-Tabelle ändert Titel, Beschreibung, Termin, Anmeldeschluss, Wiederholung und Limits – wie die Befehle `[p]raid title/time/description/deadline/recurrence/maxsignups/rolelimit`. Die vorhandene Discord-Nachricht wird bearbeitet, Anmeldungen bleiben erhalten. Spiel und Kanal lassen sich nachträglich nicht ändern; bei abgeschlossenen Events ist der Termin gesperrt. Wird der Termin verschoben, werden die Erinnerungen neu gesendet.
 
 ### Alte Events aufräumen
 
@@ -97,6 +132,36 @@ Im Reiter **Einstellungen → Aufräumen** (oder per `[p]raidset cleanup <tage>`
 - bei Wiederholungen bleibt das jeweils letzte Event der Serie immer erhalten – Serien laufen weiter;
 - nur die gespeicherten Daten werden entfernt, die Nachricht in Discord bleibt stehen. Ein Klick auf ihre Buttons antwortet dann (nur für den Klickenden sichtbar) mit „Dieses Event existiert nicht mehr.“;
 - die Teilnahme-Statistik bleibt erhalten.
+
+## Anmeldung über die Website
+
+Mitglieder können sich auch im Browser anmelden – über **„Mein Bereich“** von WebCore, Seite **Raids**
+(`/me/raids`). Voraussetzungen:
+
+1. Der Bot-Owner schaltet den Mitglieder-Bereich für den Server ein: *Verwaltung → Zugriff & Rollen* →
+   Karte „Mitglieder-Bereich“ (oder im Server `[p]webcore portal on`).
+2. Im Raidplaner unter *Einstellungen → Mitglieder-Bereich* ist **„Im Mitglieder-Bereich anzeigen“** an
+   (Standard). Ausgeschaltet sehen Mitglieder nur einen Hinweis, Aktionen werden abgelehnt.
+
+Was Mitglieder dort sehen und tun können:
+
+- **Kommende Events als Karten** – nur Events in Kanälen, die sie in Discord **sehen dürfen**
+  (Kanalrecht „Kanal ansehen“); abgeschlossene Events und andere Server erscheinen nicht.
+  Je Karte: Titel, Spiel, Termin in der Server-Zeitzone plus „in 3 Tagen“, gekürzte Beschreibung,
+  Belegung (Roster gesamt als Balken, je Rolle mit Limit, Bank/Spät/Vielleicht/Abwesend), Status
+  *offen / voll / geschlossen / Anmeldeschluss vorbei*, der **eigene Status** hervorgehoben und ein
+  Link **„In Discord öffnen“**. Wer noch nicht angemeldet ist, meldet sich direkt auf der Karte an.
+- **Detailansicht** (`?event=<id>`) mit komplettem Roster (eigener Eintrag markiert) und allen Aktionen:
+  **anmelden** bzw. **Spec wechseln** (eine Auswahl „Klasse & Spezialisierung“, Specs nach Klasse
+  gruppiert, zuletzt gewählte Spec markiert – funktioniert ohne JavaScript), **Status** Bank / Spät /
+  Vielleicht / Abwesend und **abmelden** (mit Rückfrage).
+- Es gelten **exakt dieselben Regeln wie bei den Buttons** – beide nutzen dieselbe Funktion: geschlossen
+  und Anmeldeschluss sperren Anmeldung und Status (Abmelden bleibt möglich), Gesamt- und Rollen-Limits,
+  Spec-Gedächtnis. Zusätzlich wird die Auswahl gegen die Spiel-Vorlage geprüft. Die Meldung erscheint
+  als Hinweis oben rechts, mit demselben Text wie in Discord, und die **Event-Nachricht in Discord wird
+  sofort aktualisiert**.
+- Geändert werden nur die eigenen Daten; fremde Server oder Events in nicht sichtbaren Kanälen werden
+  serverseitig abgelehnt. WebCore begrenzt Mitglieder-Aktionen auf 30 pro Minute.
 
 ## Spec-Icons
 

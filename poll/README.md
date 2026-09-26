@@ -85,8 +85,25 @@ Die Seite **Umfragen** erscheint nach dem Laden automatisch im WebCore-Dashboard
 - ein Einstellungs-Formular (Sprache, Erstellrechte, max. Optionen, Standard für Mehrfach/anonym, Manager-Rollen, Text-Overrides),
 - ein Formular **„Neue Umfrage"** (Frage, Optionen, Kanal, Laufzeit, Mehrfach/anonym) – postet die Umfrage direkt in den gewählten Kanal,
 - eine Umfragen-Tabelle mit Aktionen (Schließen/Öffnen/Löschen),
-- eine Ergebnis-Ansicht pro Umfrage (Balken; bei nicht-anonymen Umfragen mit Namensliste je Option).
+- eine Ergebnis-Ansicht pro Umfrage (Balken; bei nicht-anonymen Umfragen mit Namensliste je Option),
+- unter *Einstellungen* den Schalter **„Im Mitglieder-Bereich anzeigen“** (Standard: an).
+
+## Mein Bereich: „Umfragen“ (für Mitglieder)
+
+Hat der Bot-Owner den Mitglieder-Bereich für den Server eingeschaltet (*Verwaltung → Zugriff & Rollen*
+bzw. `[p]webcore portal on`), finden normale Mitglieder unter **Mein Bereich → Umfragen** (`/me/umfragen`):
+
+- **Laufend:** alle offenen Umfragen aus Kanälen, die sie in Discord lesen können – als Karten mit
+  Ergebnis-Balken (wie im Embed) und einem großen Button je Option. Abstimmen, Stimme ändern und
+  zurückziehen funktioniert **genau wie mit den Discord-Buttons** (gleiche Funktion im Code:
+  Einzelauswahl ersetzt bzw. zieht per erneutem Klick zurück, Mehrfachauswahl schaltet je Option;
+  geschlossene/beendete Umfragen lehnen ab). Die Umfrage-Nachricht in Discord aktualisiert sich sofort.
+- **Beendet:** Umfragen, die in den letzten 14 Tagen geschlossen wurden oder abgelaufen sind, mit Endergebnis (🏆).
+- Namen von Abstimmenden werden nie gezeigt (wie im Embed), nur die eigene Stimme ist markiert.
+  Ungepostete Umfragen und Umfragen in Kanälen ohne Leserecht bleiben unsichtbar und lassen sich auch
+  per manipuliertem Formular nicht abstimmen.
+- Der Schalter „Im Mitglieder-Bereich anzeigen“ in den Einstellungen blendet die Seite pro Server aus.
 
 ## Datenspeicherung
 
-Pro Umfrage werden Frage, Optionen und Stimmen gespeichert; je Stimme die Discord-ID, der Anzeigename und die gewählten Optionen. Bei anonymen Umfragen werden Namen nirgends angezeigt. Daten werden beim Löschen einer Umfrage, beim Entfernen des Cogs oder beim Verlassen des Servers entfernt.
+Pro Umfrage werden Frage, Optionen, Stimmen und der Zeitpunkt des Schließens (`closed_ts`, für „Beendet“ im Mitglieder-Bereich) gespeichert; je Stimme die Discord-ID, der Anzeigename und die gewählten Optionen. Bei anonymen Umfragen werden Namen nirgends angezeigt. Daten werden beim Löschen einer Umfrage, beim Entfernen des Cogs oder beim Verlassen des Servers entfernt.

@@ -14,6 +14,7 @@ from redbot.core.bot import Red
 from redbot.core.utils.chat_formatting import pagify
 
 from .dashboard import dashboard_handler
+from .member import member_page_handler
 from .embed import build_poll_embed, result_text, vote_counts
 from .strings import DEFAULT_LANGUAGE, LANGUAGES, t
 from .views import CID_VOTE, MAX_OPTION_BUTTONS, build_poll_view
@@ -72,6 +73,7 @@ class Poll(commands.Cog):
             default_multiple=False,
             default_anonymous=False,
             max_options=10,
+            member_page=True,           # Seite „Umfragen“ in „Mein Bereich“ anzeigen
             messages={},                # Text-Overrides (OVERRIDABLE_KEYS)
             polls={},                   # poll_id -> Umfrage-Datensatz
             counter=0,
@@ -129,9 +131,22 @@ class Poll(commands.Cog):
             icon="bi-bar-chart-line",
             handler=self.dashboard_page,
         )
+        if hasattr(webcore, "register_member_page"):  # ältere WebCore-Versionen ohne „Mein Bereich“
+            webcore.register_member_page(
+                owner=self,
+                visible=lambda g: self.config.guild(g).member_page(),
+                slug="umfragen",
+                name="Umfragen",
+                icon="bi-bar-chart",
+                description="An laufenden Umfragen teilnehmen",
+                handler=self.member_page,
+            )
 
     async def dashboard_page(self, request):
         return await dashboard_handler(self, request)
+
+    async def member_page(self, request):
+        return await member_page_handler(self, request)
 
     # ----------------------------------------------------------------- #
     #  Helfer
@@ -259,22 +274,27 @@ class Poll(commands.Cog):
         polls = await self.config.guild(guild).polls()
         return polls.get(poll_id)
 
-    async def _apply_vote(self, interaction: discord.Interaction, poll_id: str, idx: int):
-        guild = interaction.guild
-        lang = await self._lang(guild)
-        member = interaction.user
-        uid = str(member.id)
+    async def cast_vote(self, guild, member, poll_id: str, idx: int) -> tuple[str, dict, dict | None]:
+        """Gemeinsame Abstimm-Logik für die Discord-Buttons und „Mein Bereich → Umfragen“.
 
+        Prüft (unbekannte Umfrage, geschlossen/beendet, ungültige Option) und setzt die
+        Stimme exakt wie der Button: Einfachwahl = wählen/ändern, erneuter Klick auf die
+        eigene Option zieht zurück; Mehrfachwahl = Option an-/abwählen.
+
+        Rückgabe: ``(text_key, text_kwargs, snapshot)`` – ``snapshot`` ist der neue
+        Umfrage-Stand (Nachricht danach aktualisieren) oder ``None``, wenn nichts
+        geändert wurde (dann ist ``text_key`` eine Fehlermeldung).
+        """
+        uid = str(member.id)
         async with self.config.guild(guild).polls() as polls:
             poll = polls.get(poll_id)
             if poll is None:
-                return await interaction.response.send_message(t(lang, "unknown_poll"), ephemeral=True)
+                return "unknown_poll", {}, None
             if poll.get("closed") or poll.get("ended"):
-                key = "vote_ended" if poll.get("ended") else "vote_closed"
-                return await interaction.response.send_message(t(lang, key), ephemeral=True)
+                return ("vote_ended" if poll.get("ended") else "vote_closed"), {}, None
             options = poll.get("options") or []
             if idx < 0 or idx >= len(options):
-                return await interaction.response.send_message(t(lang, "unknown_option"), ephemeral=True)
+                return "unknown_option", {}, None
 
             entry = poll["votes"].get(uid) or {"name": member.display_name, "choices": []}
             entry["name"] = member.display_name
@@ -303,12 +323,17 @@ class Poll(commands.Cog):
             polls[poll_id] = poll
             snapshot = dict(poll)
 
-        # Erst antworten (3-s-Fenster), dann die Umfrage-Nachricht aktualisieren.
         key = {"added": "vote_added", "removed": "vote_removed", "changed": "vote_changed"}[action]
-        await interaction.response.send_message(
-            t(lang, key, option=options[idx]), ephemeral=True
-        )
-        await self.refresh_poll_message(guild, snapshot)
+        return key, {"option": options[idx]}, snapshot
+
+    async def _apply_vote(self, interaction: discord.Interaction, poll_id: str, idx: int):
+        guild = interaction.guild
+        lang = await self._lang(guild)
+        key, kwargs, snapshot = await self.cast_vote(guild, interaction.user, poll_id, idx)
+        # Erst antworten (3-s-Fenster), dann die Umfrage-Nachricht aktualisieren.
+        await interaction.response.send_message(t(lang, key, **kwargs), ephemeral=True)
+        if snapshot is not None:
+            await self.refresh_poll_message(guild, snapshot)
 
     # ----------------------------------------------------------------- #
     #  Hintergrund: Auto-Ende + Ergebnis-Ansage
@@ -350,6 +375,7 @@ class Poll(commands.Cog):
                 return
             fresh["ended"] = True
             fresh["closed"] = True
+            fresh.setdefault("closed_ts", int(datetime.now(tz=timezone.utc).timestamp()))
             announce = not fresh.get("announced")
             if announce:
                 fresh["announced"] = True
@@ -496,11 +522,14 @@ class Poll(commands.Cog):
             if not await self._can_manage_poll(ctx.author, poll):
                 return await ctx.send(t(lang, "no_permission_manage"))
             poll["closed"] = closed
-            if not closed:
+            if closed:
+                poll["closed_ts"] = int(datetime.now(tz=timezone.utc).timestamp())
+            else:
                 # Wieder öffnen: Auto-Ende-Marker und Zeitlimit zurücksetzen.
                 poll["ended"] = False
                 poll["announced"] = False
                 poll["end_ts"] = None
+                poll.pop("closed_ts", None)
             polls[poll_id] = poll
             snapshot = dict(poll)
         await self.refresh_poll_message(guild, snapshot)

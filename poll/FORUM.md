@@ -50,3 +50,5 @@ Voraussetzung: der Cog `webcore` ist installiert und eingerichtet.
 ```
 
 Verwaltung ist außerdem komplett über das **WebCore-Dashboard** möglich (Seite „Umfragen" unter `/cogs/poll`): Einstellungen, Umfragen anlegen, Tabelle mit Aktionen und Ergebnis-Ansicht.
+
+**Neu – Mein Bereich → Umfragen:** Ist der Mitglieder-Bereich eingeschaltet, stimmen Mitglieder auch im Web ab (`/me/umfragen`) – mit denselben Regeln wie die Buttons (Einzel-/Mehrfachauswahl, Stimme ändern/zurückziehen, geschlossen = gesperrt), nur für Umfragen in Kanälen, die sie sehen. Dazu beendete Umfragen der letzten 14 Tage mit Ergebnis. Abschaltbar pro Server: *Einstellungen → „Im Mitglieder-Bereich anzeigen“*.

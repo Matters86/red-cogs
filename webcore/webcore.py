@@ -1,8 +1,12 @@
+import asyncio
 import hashlib
 import inspect
+import ipaddress
 import logging
+import re
 import secrets
 import socket
+import time
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -26,7 +30,7 @@ import discord
 
 from . import access as acl
 from . import ui as _ui
-from .admin_pages import render_access, render_audit
+from .admin_pages import render_access, render_audit, render_audit_channel, render_member_home, render_portal_card
 
 try:
     import psutil
@@ -42,7 +46,7 @@ DISCORD_TOKEN = f"{DISCORD_API}/oauth2/token"
 # das verschlüsselte Cookie unbegrenzt – ein einmal abgegriffenes Cookie für immer.
 SESSION_MAX_AGE = 7 * 86400
 # Cache-Buster für /static/webcore.css (bei Theme-Änderungen erhöhen).
-ASSET_VERSION = "6"
+ASSET_VERSION = "8"
 # Rollen mit diesen Rechten darf nur vergeben (per Autorole/Ticket-Inhaberrolle …),
 # wer Owner/Allowlist oder Discord-Administrator ist – sonst könnte sich ein
 # Team-Mitglied mit Dashboard-Rechten selbst hochstufen.
@@ -60,6 +64,16 @@ except Exception:
 DPY_VERSION = discord.__version__
 PY_VERSION = platform.python_version()
 
+# Mitglieder-Bereich: POSTs pro Nutzer und Minute; öffentliche API: Anfragen pro IP und Minute.
+MEMBER_POST_LIMIT = 30
+PUBLIC_LIMIT = 60
+RATE_WINDOW = 60.0
+# Abgelehnte Zugriffe desselben Nutzers mit demselben Grund höchstens so oft ins Audit-Log (Sekunden).
+AUDIT_DENY_THROTTLE = 60.0
+# Höchstens so viele Audit-Nachrichten gleichzeitig unterwegs nach Discord (Rest wird verworfen).
+AUDIT_POST_MAX_PENDING = 50
+_PUBLIC_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
 
 def _int(value, default: int) -> int:
     try:
@@ -74,14 +88,104 @@ def _fmt(n: int) -> str:
 
 
 class DashboardPage:
-    """Eine vom Cog registrierte Dashboard-Seite."""
+    """Eine vom Cog registrierte Dashboard-Seite (Team-Seite oder Mitgliederseite)."""
 
-    def __init__(self, owner, slug, name, handler, icon="bi-grid"):
+    def __init__(self, owner, slug, name, handler, icon="bi-grid", description="", visible=None):
         self.owner = owner
+        self.visible = visible  # optional: async (guild) -> bool (nur Mitgliederseiten)
         self.slug = slug
         self.name = name
         self.handler = handler
         self.icon = icon
+        self.description = description
+
+
+class PublicApi:
+    """Ein öffentlicher Lese-Endpunkt unter ``/api/public/<slug>[/<tail>]``."""
+
+    def __init__(self, owner, slug, handler):
+        self.owner = owner
+        self.slug = slug
+        self.handler = handler
+
+
+class _RateLimiter:
+    """Gleitendes Fenster: höchstens ``limit`` Treffer pro ``window`` Sekunden je Schlüssel."""
+
+    def __init__(self, limit: int, window: float = RATE_WINDOW):
+        self.limit = limit
+        self.window = window
+        self._hits: dict = {}
+
+    def hit(self, key) -> tuple[bool, int]:
+        """(erlaubt?, Sekunden bis zum nächsten erlaubten Versuch)."""
+        now = time.monotonic()
+        dq = self._hits.get(key)
+        if dq is None:
+            if len(self._hits) > 5000:
+                self._prune(now)
+            dq = self._hits[key] = collections.deque()
+        while dq and dq[0] <= now - self.window:
+            dq.popleft()
+        if len(dq) >= self.limit:
+            return False, max(1, int(dq[0] + self.window - now) + 1)
+        dq.append(now)
+        return True, 0
+
+    def _prune(self, now: float) -> None:
+        for key in [k for k, dq in self._hits.items() if not dq or dq[-1] <= now - self.window]:
+            del self._hits[key]
+
+    def reset(self) -> None:
+        self._hits.clear()
+
+
+def _parse_ip(value: str):
+    value = (value or "").strip().strip('"')
+    if value.startswith("[") and "]" in value:          # [IPv6]:port
+        value = value[1:value.index("]")]
+    try:
+        return ipaddress.ip_address(value)
+    except ValueError:
+        if value.count(":") == 1:                         # IPv4:port
+            try:
+                return ipaddress.ip_address(value.split(":", 1)[0])
+            except ValueError:
+                return None
+        return None
+
+
+def _is_trusted_proxy(ip) -> bool:
+    return ip is not None and (ip.is_loopback or ip.is_private)
+
+
+def client_ip(request) -> str:
+    """IP des Aufrufers für Rate-Limits.
+
+    ``X-Forwarded-For`` wird nur ausgewertet, wenn die direkte Gegenstelle ein Reverse-Proxy im
+    eigenen Netz ist (127.0.0.1/::1 oder privates Netz). Von rechts gelesen: vertrauenswürdige
+    Proxy-Hops werden übersprungen, der erste öffentliche Eintrag ist der Client (vorne
+    eingeschmuggelte Einträge des Clients zählen damit nicht).
+    """
+    peer = request.remote or ""
+    if _is_trusted_proxy(_parse_ip(peer)):
+        hops = [h for h in request.headers.get("X-Forwarded-For", "").split(",") if h.strip()]
+        candidate = None
+        for hop in reversed(hops):
+            ip = _parse_ip(hop)
+            if ip is None:
+                break
+            candidate = str(ip)
+            if not _is_trusted_proxy(ip):
+                break
+        if candidate:
+            return candidate
+    return peer or "?"
+
+
+def _trunc(text, limit: int) -> str:
+    text = str(text or "")
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 @web.middleware
@@ -136,8 +240,19 @@ class WebCore(commands.Cog):
             role_perms={},
             # Audit-Log aller speichernden Dashboard-Aktionen (neueste zuerst, gekappt).
             audit=[],
+            # Mitglieder-Bereich („Mein Bereich“, /me) je Server: {guild_id(str): True}. Standard: überall aus.
+            member_portal={},
+            # Audit-Log zusätzlich als Embed in einen Discord-Kanal: {guild_id(str): channel_id}.
+            audit_channels={},
         )
         self.pages: dict[str, DashboardPage] = {}
+        self.member_pages: dict[str, DashboardPage] = {}
+        self.public_apis: dict[str, PublicApi] = {}
+        self._member_limiter = _RateLimiter(MEMBER_POST_LIMIT)
+        self._public_limiter = _RateLimiter(PUBLIC_LIMIT)
+        # (user_id, grund) -> Zeitpunkt des letzten protokollierten abgelehnten Zugriffs
+        self._deny_logged: dict[tuple, float] = {}
+        self._bg_tasks: set = set()
         # UI-Baukasten für Cog-Seiten: ``request.app["webcore"].ui`` (siehe ui.py)
         self.ui = _ui
         self.app: web.Application | None = None
@@ -166,10 +281,74 @@ class WebCore(commands.Cog):
         self.pages[slug] = DashboardPage(owner, slug, name, handler, icon)
         log.info("Dashboard-Seite registriert: %s (von %s)", slug, owner.qualified_name)
 
+    def register_member_page(self, owner, slug: str, name: str, handler, icon: str = "bi-grid",
+                             description: str = "", visible=None):
+        """Fügt eine Seite für normale Server-Mitglieder hinzu („Mein Bereich“).
+
+        owner       : der aufrufende Cog (für ``unregister_owner``)
+        slug        : URL-Teil, erreichbar unter ``/me/<slug>`` (GET + POST)
+        name        : Anzeigename (Navigation + Kachel auf ``/me``)
+        handler     : ``async def handler(request) -> {"title": str, "content": html}`` oder
+                      ``{"redirect": url}`` (oder eine fertige ``web.Response``)
+        icon        : Bootstrap-Icon-Klasse
+        description : ein Satz für die Kachel auf der Übersicht ``/me``
+        visible     : optional ``async def visible(guild) -> bool`` – blendet Kachel und Navigation
+                      für Server aus, auf denen der Cog die Seite abgeschaltet hat
+
+        Vor dem Aufruf setzt WebCore ``request["wc_member_guild"]`` (discord.Guild),
+        ``request["wc_member"]`` (discord.Member des angemeldeten Users auf diesem Server) und
+        ``request["webcore_csrf"]``; POSTs sind bereits CSRF-geprüft und rate-limitiert.
+        """
+        if not _PUBLIC_NAME_RE.match(str(slug)):
+            raise ValueError("Ungültiger slug (erlaubt: A-Z a-z 0-9 _ . -).")
+        self.member_pages[slug] = DashboardPage(owner, slug, name, handler, icon, description, visible)
+        log.info("Mitglieder-Seite registriert: /me/%s (von %s)", slug, getattr(owner, "qualified_name", owner))
+
+    async def _visible_member_pages(self, guild) -> list:
+        """Mitgliederseiten, die auf ``guild`` angezeigt werden sollen (sortiert)."""
+        out = []
+        for p in sorted(self.member_pages.values(), key=lambda x: x.name.lower()):
+            if guild is not None and p.visible is not None:
+                try:
+                    if not await p.visible(guild):
+                        continue
+                except Exception:  # noqa: BLE001 – im Zweifel anzeigen, die Seite prüft selbst
+                    log.exception("visible()-Prüfung der Mitgliederseite %s fehlgeschlagen", p.slug)
+            out.append(p)
+        return out
+
+    async def _member_nav_for(self, request) -> list:
+        """Navigation „Mein Bereich“ für den gewählten Server (Kontext-Prozessoren laufen VOR dem
+        Handler und kennen den Server noch nicht – daher hier nachberechnet)."""
+        return [
+            {"slug": p.slug, "name": p.name, "icon": p.icon, "description": p.description}
+            for p in await self._visible_member_pages(request.get("wc_member_guild"))
+        ]
+
+    def register_public_api(self, owner, slug: str, handler):
+        """Öffentliche Lese-API ``GET /api/public/<slug>`` und ``GET /api/public/<slug>/<tail>``.
+
+        Ohne Login und ohne Sitzung (für Launcher/Websites). ``handler(request)`` liest den Rest
+        des Pfads über ``request.match_info.get("tail", "")`` und gibt eine ``web.Response``
+        (z. B. ``web.json_response(...)``) zurück. WebCore setzt CORS ``*`` (GET/OPTIONS),
+        ``Cache-Control: public, max-age=60`` (falls der Handler nichts anderes setzt), ein
+        Rate-Limit von 60 Anfragen pro IP und Minute (429) und fängt Fehler ab (500-JSON).
+        Nur öffentliche Daten ausliefern – es gibt keinen angemeldeten Nutzer.
+        """
+        if not _PUBLIC_NAME_RE.match(str(slug)):
+            raise ValueError("Ungültiger slug für die öffentliche API (erlaubt: A-Z a-z 0-9 _ . -).")
+        self.public_apis[slug] = PublicApi(owner, slug, handler)
+        log.info("Öffentliche API registriert: /api/public/%s (von %s)", slug,
+                 getattr(owner, "qualified_name", owner))
+
     def unregister_owner(self, owner):
-        """Entfernt alle Seiten eines Cogs (im cog_unload aufrufen)."""
+        """Entfernt alle Seiten, Mitglieder-Seiten und öffentlichen APIs eines Cogs (im cog_unload)."""
         for slug in [s for s, p in self.pages.items() if p.owner is owner]:
             del self.pages[slug]
+        for slug in [s for s, p in self.member_pages.items() if p.owner is owner]:
+            del self.member_pages[slug]
+        for slug in [n for n, r in self.public_apis.items() if r.owner is owner]:
+            del self.public_apis[slug]
 
     async def red_delete_data_for_user(self, *, requester, user_id: int):
         """Anonymisiert den Nutzer im Audit-Log und entfernt ihn aus der Allowlist."""
@@ -195,6 +374,8 @@ class WebCore(commands.Cog):
         await self._start_webserver()
 
     async def cog_unload(self):
+        for task in list(self._bg_tasks):
+            task.cancel()
         if self.site is not None:
             await self.site.stop()
         if self.runner is not None:
@@ -259,7 +440,18 @@ class WebCore(commands.Cog):
                 web.get("/access", self.handle_access),
                 web.post("/access", self.handle_access),
                 web.get("/audit", self.handle_audit),
+                web.post("/audit", self.handle_audit),
                 web.get("/api/overview", self.handle_overview_api),
+                # Mitglieder-Bereich und öffentliche API: je EINE feste Route, die zu den
+                # registrierten Handlern verteilt (der aiohttp-Router ist nach dem Start
+                # eingefroren). web.get registriert HEAD automatisch mit.
+                web.get("/me", self.handle_member_home),
+                web.get("/me/{slug}", self.handle_member_page),
+                web.post("/me/{slug}", self.handle_member_page),
+                web.get("/api/public/{slug}", self.handle_public),
+                web.get("/api/public/{slug}/{tail:.*}", self.handle_public),
+                web.route("OPTIONS", "/api/public/{slug}", self.handle_public),
+                web.route("OPTIONS", "/api/public/{slug}/{tail:.*}", self.handle_public),
                 web.get("/healthz", self.handle_health),
                 web.static("/static", str(Path(__file__).parent / "static")),
             ]
@@ -322,8 +514,82 @@ class WebCore(commands.Cog):
             member = await guild.fetch_member(uid)
         except (discord.HTTPException, discord.Forbidden):
             member = None
+        if len(self._member_cache) > 5000:
+            # Mit dem Mitglieder-Bereich melden sich viele Nutzer an – abgelaufene Einträge aufräumen.
+            for k in [k for k, v in self._member_cache.items() if v[0] <= now]:
+                del self._member_cache[k]
         self._member_cache[key] = (now + 300, member)
         return member
+
+    async def _portal_scope(self, user, request=None) -> list:
+        """Server, auf denen ``user`` „Mein Bereich“ nutzen darf (pro Request gecacht).
+
+        * Normale Nutzer: Server mit aktivem Mitglieder-Bereich, auf denen sie Mitglied sind.
+        * Team (Rollen-Rechte/Server-Admin): zusätzlich die Server, auf denen sie Team-Zugriff
+          haben – auch bei ausgeschaltetem Mitglieder-Bereich (Vorschau zum Testen).
+        * Owner/Allowlist: alle Server, auf denen sie Mitglied sind.
+        Mitgliedschaft wird live geprüft (Member-Cache, sonst fetch-Fallback). Ohne
+        ``discord.Member`` gibt es keinen Zugang (der Handler bekommt immer ein Member-Objekt).
+        """
+        if user is None:
+            return []
+        if request is not None and "_wc_portal" in request:
+            return request["_wc_portal"]
+        portal = await self.config.member_portal() or {}
+        amap = await self._access_map(user, request)
+        full = amap is None
+        result, members, preview = [], {}, set()
+        for g in self.bot.guilds:
+            enabled = bool(portal.get(str(g.id)))
+            team_here = full or g.id in (amap or {})
+            if not enabled and not team_here:
+                continue
+            member = await self._resolve_member(g, user["id"])
+            if member is None:
+                continue
+            result.append(g)
+            members[g.id] = member
+            if not enabled:
+                preview.add(g.id)
+        result.sort(key=lambda g: g.name.lower())
+        if request is not None:
+            request["_wc_portal"] = result
+            request["_wc_portal_members"] = members
+            request["_wc_portal_preview"] = preview
+        return result
+
+    async def portal_guilds(self, request) -> list:
+        """Öffentlich für Cogs: Server, die der angemeldete User in „Mein Bereich“ wählen darf.
+
+        Für Mitglieder-Seiten statt ``visible_guilds`` verwenden (Liste von ``discord.Guild``).
+        """
+        return list(await self._portal_scope(await self._get_user(request), request))
+
+    async def member_context(self, request):
+        """Öffentlich für Cogs: ``(guild, member)`` des angemeldeten Users im Mitglieder-Bereich.
+
+        Auf ``/me/<slug>`` die von WebCore gesetzte Auswahl, sonst der Server aus ``?guild=``
+        (nur wenn erlaubt; bei genau einem erlaubten Server dieser). ``None``, wenn kein Zugriff.
+        """
+        guild, member = request.get("wc_member_guild"), request.get("wc_member")
+        if guild is not None and member is not None:
+            return guild, member
+        scope = await self._portal_scope(await self._get_user(request), request)
+        if not scope:
+            return None
+        raw = request.query.get("guild", "")
+        guild = next((g for g in scope if raw.isdigit() and g.id == int(raw)), None)
+        if guild is None and not raw and len(scope) == 1:
+            guild = scope[0]
+        if guild is None:
+            return None
+        member = request.get("_wc_portal_members", {}).get(guild.id)
+        return (guild, member) if member is not None else None
+
+    async def current_user(self, request):
+        """Öffentlich für Cogs: ``{"id", "name", "avatar"}`` des eingeloggten Users oder ``None``."""
+        user = await self._get_user(request)
+        return dict(user) if user else None
 
     async def _has_full_scope(self, user) -> bool:
         """Volle Sicht (alle Server, alle Seiten, Bot-Infrastruktur): Owner und Allowlist."""
@@ -414,7 +680,8 @@ class WebCore(commands.Cog):
         amap = await self._access_map(user, request)
         if amap is None:
             return list(self.bot.guilds) if user is not None else []
-        if not amap:
+        if not amap or request.get("wc_area") == "member":
+            # Rollen-Rechte gelten nur für /cogs/* – Mitglieder-Seiten nutzen portal_guilds.
             return []
         slug = request.match_info.get("slug") if request.match_info else None
         if min_level is None:
@@ -435,6 +702,8 @@ class WebCore(commands.Cog):
         amap = await self._access_map(user, request)
         if amap is None:
             return acl.EDIT if user is not None else acl.NONE
+        if request.get("wc_area") == "member":
+            return acl.NONE
         slug = request.match_info.get("slug") if request.match_info else None
         return (amap.get(guild.id) or {}).get(slug, acl.NONE)
 
@@ -479,6 +748,8 @@ class WebCore(commands.Cog):
 
     async def _global_context(self, request):
         """Wird bei jedem Template-Render eingefügt (Navigation, User, Server-Wechsler …)."""
+        if request.path.startswith(("/api/public/", "/healthz", "/static/")):
+            return {}  # öffentliche Endpunkte: keine Sitzung lesen, keine Rechte berechnen
         user = await self._get_user(request)
         amap = await self._access_map(user, request) if user else {}
         full = amap is None
@@ -493,8 +764,26 @@ class WebCore(commands.Cog):
             if best >= acl.VIEW:
                 nav.append({"slug": p.slug, "name": p.name, "icon": p.icon, "readonly": best < acl.EDIT})
         label, cls = self._role_label(user, full, amap)
+        pguilds = await self._portal_scope(user, request) if user else []
+        member_only = user is not None and not authorized and bool(pguilds)
+        if member_only:
+            label, cls = "Mitglied", "member"
+        # Team/Owner: Abschnitt „Mein Bereich“ nur, wenn Seiten registriert sind und der
+        # Mitglieder-Bereich auf mindestens einem ihrer Server wirklich aktiv ist.
+        preview = request.get("_wc_portal_preview") or set()
+        portal_live = any(g.id not in preview for g in pguilds)
+        show_member_nav = member_only or (bool(self.member_pages) and portal_live)
+        member_nav = [
+            {"slug": p.slug, "name": p.name, "icon": p.icon, "description": p.description}
+            for p in await self._visible_member_pages(request.get("wc_member_guild"))
+        ] if show_member_nav else []
         return {
             "nav_pages": nav,
+            "member_nav": member_nav,
+            "show_member_nav": show_member_nav,
+            "member_only": member_only,
+            "home_href": "/me" if member_only else "/",
+            "home_label": "Zu „Mein Bereich“" if member_only else "Zurück zur Übersicht",
             "current_user": user,
             "authorized": authorized,
             "is_full": bool(user) and full,
@@ -509,6 +798,8 @@ class WebCore(commands.Cog):
             "switcher": None,
             "readonly": False,
             "switcher_guild_name": "",
+            "toast_err": None,
+            "member_preview": False,
         }
 
     @staticmethod
@@ -517,11 +808,16 @@ class WebCore(commands.Cog):
             "switcher": request.get("wc_switcher"),
             "readonly": bool(request.get("webcore_readonly")),
             "switcher_guild_name": request.get("wc_guild_name", ""),
+            "member_preview": bool(request.get("wc_member_preview")),
         }
         ctx.update(extra)
         return ctx
 
-    async def _audit(self, request, user, *, page, guild_id, action, result, ok):
+    async def _audit(self, request, user, *, page, guild_id, action, result, ok, area=None):
+        """Audit-Eintrag speichern und (falls eingerichtet) als Embed in den Log-Kanal posten.
+
+        ``request`` darf ``None`` sein (Befehle). ``user``: {"id", "name"[, "avatar"]}.
+        """
         guild = self.bot.get_guild(guild_id) if guild_id else None
         entry = {
             "ts": int(datetime.now(timezone.utc).timestamp()),
@@ -534,11 +830,98 @@ class WebCore(commands.Cog):
             "result": (str(result)[:160] if result else None),
             "ok": bool(ok),
         }
+        if area:
+            entry["area"] = area
         try:
             async with self.config.audit() as entries:
-                acl.append_audit(entries, entry)
+                acl.append_audit(entries, entry, member_cap=acl.MEMBER_AUDIT_MAX)
         except Exception:  # noqa: BLE001 – Protokoll darf nie die Aktion scheitern lassen
             log.exception("Audit-Eintrag konnte nicht gespeichert werden")
+        self._schedule_audit_post(entry, (user or {}).get("avatar"))
+
+    async def _audit_denied(self, request, user, *, page, guild_id, action, result, area="member"):
+        """Abgelehnten Zugriff protokollieren – pro Nutzer und Grund höchstens einmal pro Minute."""
+        if user is None:
+            return
+        key = (user["id"], page, result)
+        now = time.monotonic()
+        if now - self._deny_logged.get(key, -AUDIT_DENY_THROTTLE) < AUDIT_DENY_THROTTLE:
+            return
+        if len(self._deny_logged) > 5000:
+            self._deny_logged = {k: t for k, t in self._deny_logged.items() if now - t < AUDIT_DENY_THROTTLE}
+        self._deny_logged[key] = now
+        await self._audit(request, user, page=page, guild_id=guild_id, action=action,
+                          result=result, ok=False, area=area)
+
+    # ----------------------------------------------------------------- #
+    #  Audit-Log nach Discord
+    # ----------------------------------------------------------------- #
+    def _page_label(self, slug) -> str:
+        if slug == "access":
+            return "Zugriff & Rollen"
+        if slug == "audit":
+            return "Audit-Log"
+        if slug and str(slug).startswith("me:"):
+            p = self.member_pages.get(slug[3:])
+            return f"Mein Bereich: {p.name if p else slug[3:]}"
+        p = self.pages.get(slug)
+        return p.name if p else (slug or "—")
+
+    def _schedule_audit_post(self, entry: dict, avatar) -> None:
+        """Fire-and-forget: Audit-Eintrag in den Log-Kanal posten (Fehler werden nur geloggt)."""
+        if not entry.get("guild_id"):
+            return
+        if len(self._bg_tasks) >= AUDIT_POST_MAX_PENDING:
+            log.warning("Audit-Log nach Discord: zu viele ausstehende Nachrichten – Eintrag verworfen.")
+            return
+        try:
+            task = asyncio.get_running_loop().create_task(self._post_audit(entry, avatar))
+        except RuntimeError:
+            return
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+
+    def _audit_embed(self, entry: dict, avatar) -> discord.Embed:
+        ok = entry.get("ok", True)
+        esc = discord.utils.escape_markdown
+        ts = int(entry.get("ts") or 0)
+        uid = int(entry.get("user_id") or 0)
+        uname = esc(str(entry.get("user_name") or "?"))
+        result = entry.get("result") or ("OK" if ok else "abgelehnt")
+        embed = discord.Embed(
+            title=("✅ Dashboard-Aktion" if ok else "⛔ Abgelehnter Zugriff"),
+            color=0x3DDC97 if ok else 0xFF6B6B,
+            timestamp=datetime.fromtimestamp(ts, tz=timezone.utc),
+        )
+        embed.add_field(name="Zeit", value=f"<t:{ts}:f>", inline=True)
+        embed.add_field(name="Nutzer", value=_trunc(f"<@{uid}> ({uname})" if uid else uname, 1024), inline=True)
+        embed.add_field(name="Seite", value=_trunc(esc(self._page_label(entry.get("page"))), 1024), inline=True)
+        action = str(entry.get("action") or "—").replace("`", "")
+        embed.add_field(name="Aktion", value=_trunc(f"`{action}`" if entry.get("action") else "—", 1024), inline=True)
+        embed.add_field(name="Ergebnis", value=_trunc(("OK" if ok else "abgelehnt") + f" · {esc(str(result))}", 1024),
+                        inline=False)
+        if avatar:
+            embed.set_thumbnail(url=avatar)
+        area = "Mein Bereich" if entry.get("area") == "member" else "Dashboard"
+        embed.set_footer(text=f"WebCore-Audit · {area}")
+        return embed
+
+    async def _post_audit(self, entry: dict, avatar) -> None:
+        try:
+            gid = entry.get("guild_id")
+            cid = (await self.config.audit_channels() or {}).get(str(gid))
+            guild = self.bot.get_guild(int(gid)) if gid else None
+            if not cid or guild is None:
+                return
+            channel = guild.get_channel(int(cid))
+            if channel is None or not hasattr(channel, "send"):
+                return
+            await channel.send(embed=self._audit_embed(entry, avatar),
+                               allowed_mentions=discord.AllowedMentions.none())
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 – das Dashboard darf daran nie scheitern
+            log.warning("Audit-Eintrag konnte nicht nach Discord gepostet werden: %r", exc)
 
     @staticmethod
     def _redirect_message(location: str | None) -> tuple[str | None, bool]:
@@ -561,16 +944,42 @@ class WebCore(commands.Cog):
     # ----------------------------------------------------------------- #
     #  Routen
     # ----------------------------------------------------------------- #
+    async def _post_guild_id(self, request):
+        """Ziel-Server eines POSTs (Feld ``guild``/``guild_id`` oder ``?guild=``) – nur für Protokolle."""
+        try:
+            form = await request.post()
+        except Exception:  # noqa: BLE001
+            form = {}
+        raw = str(form.get("guild") or form.get("guild_id") or request.query.get("guild") or "")
+        gid = int(raw) if raw.isdigit() else None
+        return gid if gid is not None and self.bot.get_guild(gid) is not None else None
+
     async def _deny(self, request, user):
-        """Nicht angemeldet -> Login; angemeldet ohne Rechte -> "Kein Zugriff"."""
+        """Nicht angemeldet -> Login; angemeldet ohne Rechte -> "Kein Zugriff".
+
+        Reine Mitglieder (nur „Mein Bereich“) bekommen eine 403-Seite mit Link zu /me.
+        """
         if user is None:
             return self._login_response(request)
+        if request.method == "POST":
+            gid = await self._post_guild_id(request)
+            await self._audit_denied(request, user, page=request.match_info.get("slug") or request.path.strip("/"),
+                                     guild_id=gid, action="POST", result="Kein Zugriff (Team-Bereich)", area=None)
+        if await self._portal_scope(user, request):
+            return self._error_page(
+                request, "Kein Zugriff",
+                "Dieser Bereich ist dem Team vorbehalten. Deine Seiten findest du unter „Mein Bereich“.",
+                status=403, icon="bi-shield-lock",
+            )
         return self._login_response(request, state="noaccess", status=403)
 
     @aiohttp_jinja2.template("index.html")
     async def handle_index(self, request):
         user = await self._get_user(request)
         if not await self._is_authorized(user, request):
+            if user is not None and await self._portal_scope(user, request):
+                # Mitglied ohne Team-Rechte -> direkt in „Mein Bereich“.
+                raise web.HTTPFound("/me")
             return await self._deny(request, user)
         ctx = await self._collect_overview(user, request)
         ctx["title"] = "Übersicht"
@@ -783,10 +1192,10 @@ class WebCore(commands.Cog):
         session.invalidate()
         raise web.HTTPFound("/login")
 
-    def _error_page(self, request, title, message, *, status, active=None, icon=None):
+    def _error_page(self, request, title, message, *, status, active=None, icon=None, toast=None):
         return aiohttp_jinja2.render_template(
             "error.html", request,
-            {"title": title, "message": message, "active_page": active, "icon": icon},
+            {"title": title, "message": message, "active_page": active, "icon": icon, "toast_err": toast},
             status=status,
         )
 
@@ -925,6 +1334,183 @@ class WebCore(commands.Cog):
         )
 
     # ----------------------------------------------------------------- #
+    #  Mitglieder-Bereich (/me)
+    # ----------------------------------------------------------------- #
+    async def _member_denied(self, request, user):
+        """Kein Server mit Mitglieder-Bereich: Login bzw. „Kein Zugriff“."""
+        if user is None:
+            return self._login_response(request)
+        if await self._is_authorized(user, request):
+            # Team ohne Mitgliedschaft auf einem passenden Server: Fehlerseite mit normaler Navigation.
+            return self._error_page(
+                request, "Mein Bereich",
+                "„Mein Bereich“ ist für dich auf keinem Server verfügbar. Der Bot-Owner schaltet ihn unter "
+                "„Zugriff & Rollen“ bzw. mit [p]webcore portal on ein.",
+                status=403, icon="bi-person-badge",
+            )
+        return self._login_response(request, state="noaccess", status=403)
+
+    async def _member_guild_from_query(self, request, user, guilds, path, audit_page):
+        """``?guild=`` für den Mitglieder-Bereich auflösen; fremde Server werden abgelehnt + protokolliert."""
+        raw = request.query.get("guild")
+        if raw and not (raw.isdigit() and int(raw) in {g.id for g in guilds}):
+            await self._audit_denied(request, user, page=audit_page, guild_id=int(raw) if raw.isdigit() else None,
+                                     action="guild", result="Kein Mitglieder-Zugriff auf diesen Server")
+            first = sorted(guilds, key=lambda g: g.name.lower())[0]
+            raise web.HTTPFound(f"{path}?guild={first.id}&err=" + "Kein+Zugriff+auf+diesen+Server")
+        selected = await self._select_guild(request, guilds, path)
+        self._set_switcher(request, guilds, selected, path)
+        return selected
+
+    def _set_member_request(self, request, guild_id):
+        members = request.get("_wc_portal_members") or {}
+        request["wc_member_guild"] = self.bot.get_guild(guild_id)
+        request["wc_member"] = members.get(guild_id)
+        request["wc_member_preview"] = guild_id in (request.get("_wc_portal_preview") or set())
+
+    async def handle_member_home(self, request):
+        """„Mein Bereich“: Kacheln aller registrierten Mitglieder-Seiten für den gewählten Server."""
+        request["wc_area"] = "member"
+        user = await self._get_user(request)
+        guilds = await self._portal_scope(user, request)
+        if not guilds:
+            return await self._member_denied(request, user)
+        selected = await self._member_guild_from_query(request, user, guilds, "/me", "me")
+        self._set_member_request(request, selected)
+        pages = [(p.slug, p.name, p.icon, p.description)
+                 for p in await self._visible_member_pages(request["wc_member_guild"])]
+        content = render_member_home(
+            guild=request["wc_member_guild"], member=request["wc_member"], pages=pages,
+        )
+        return aiohttp_jinja2.render_template(
+            "page.html", request,
+            self._page_ctx(request, title="Mein Bereich", content=content, active_page="me",
+                           member_nav=await self._member_nav_for(request)),
+        )
+
+    def _member_limited(self, request, retry: int) -> web.Response:
+        msg = "Zu viele Anfragen – bitte warte kurz und versuche es dann erneut."
+        if "application/json" in request.headers.get("Accept", ""):
+            resp = web.json_response({"error": "rate_limited", "message": msg}, status=429)
+        else:
+            resp = self._error_page(request, "Zu viele Anfragen", msg, status=429,
+                                    icon="bi-hourglass-split", toast=msg)
+        resp.headers["Retry-After"] = str(max(1, int(retry)))
+        return resp
+
+    async def handle_member_page(self, request):
+        """``/me/<slug>``: verteilt an die registrierte Mitglieder-Seite (GET + POST)."""
+        request["wc_area"] = "member"
+        user = await self._get_user(request)
+        guilds = await self._portal_scope(user, request)
+        if not guilds:
+            return await self._member_denied(request, user)
+        slug = request.match_info["slug"]
+        active = f"me:{slug}"
+        page = self.member_pages.get(slug)
+        if page is None:
+            return self._error_page(request, "Nicht gefunden", f"Keine Seite „{slug}“ in „Mein Bereich“.",
+                                    status=404, icon="bi-question-circle")
+        token = await self._csrf_token(request)
+        ids = {g.id for g in guilds}
+
+        if request.method == "POST":
+            allowed, retry = self._member_limiter.hit(user["id"])
+            if not allowed:
+                await self._audit_denied(request, user, page=active, guild_id=None, action="POST",
+                                         result="Zu viele Anfragen (Rate-Limit)")
+                return self._member_limited(request, retry)
+            form = await request.post()
+            if form.get("csrf_token") != token:
+                await self._audit_denied(request, user, page=active, guild_id=await self._post_guild_id(request),
+                                         action="POST", result="Ungültiges CSRF-Token")
+                return self._error_page(
+                    request, "Abgelehnt",
+                    "Ungültiges oder fehlendes Sicherheits-Token. Bitte Seite neu laden und erneut absenden.",
+                    status=400, active=active,
+                )
+            raw = str(form.get("guild") or form.get("guild_id") or request.query.get("guild") or "")
+            if not raw:
+                session = await get_session(request)
+                pref = str(session.get("wc_guild") or "")
+                raw = pref if pref.isdigit() and int(pref) in ids else (str(guilds[0].id) if len(guilds) == 1 else "")
+            gid = int(raw) if raw.isdigit() else None
+            if gid not in ids:
+                await self._audit_denied(request, user, page=active, guild_id=gid,
+                                         action=form.get("form") or form.get("action") or "POST",
+                                         result="Kein Mitglieder-Zugriff auf diesen Server")
+                raise web.HTTPFound(f"/me/{slug}?err=" + "Kein+Zugriff+auf+diesen+Server")
+            self._set_member_request(request, gid)
+        else:
+            selected = await self._member_guild_from_query(request, user, guilds, f"/me/{slug}", active)
+            self._set_member_request(request, selected)
+        request["webcore_readonly"] = False
+        request["webcore_csrf"] = token
+        # Mitglieder-Aktionen landen bewusst NICHT im Admin-Audit-Log (nur abgelehnte Zugriffe).
+        try:
+            result = await page.handler(request)
+        except web.HTTPException:
+            raise
+        except Exception:  # noqa: BLE001
+            log.exception("Fehler in Mitglieder-Seite %s (%s)", slug, request.method)
+            # Mitgliedern keine internen Fehlertexte zeigen.
+            return self._error_page(request, "Fehler", "Da ist etwas schiefgelaufen. Bitte später erneut versuchen.",
+                                    status=500, active=active)
+
+        if isinstance(result, web.StreamResponse):
+            return result
+        if isinstance(result, dict) and result.get("redirect"):
+            raise web.HTTPFound(result["redirect"])
+        result = result or {}
+        return aiohttp_jinja2.render_template(
+            "page.html", request,
+            self._page_ctx(request, title=result.get("title", page.name),
+                           content=result.get("content", ""), active_page=active,
+                           member_nav=await self._member_nav_for(request)),
+        )
+
+    # ----------------------------------------------------------------- #
+    #  Öffentliche API (/api/public/<slug>[/<tail>])
+    # ----------------------------------------------------------------- #
+    _CORS = {"Access-Control-Allow-Origin": "*"}
+
+    def _public_error(self, status: int, error: str, **extra) -> web.Response:
+        headers = {**self._CORS, "Cache-Control": "no-store", **extra}
+        return web.json_response({"error": error}, status=status, headers=headers)
+
+    async def handle_public(self, request):
+        """Ohne Login und ohne Sitzung (es wird nie ein Cookie gelesen oder gesetzt)."""
+        if request.method == "OPTIONS":
+            return web.Response(status=204, headers={
+                **self._CORS,
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+                "Access-Control-Max-Age": "86400",
+            })
+        allowed, retry = self._public_limiter.hit(client_ip(request))
+        if not allowed:
+            return self._public_error(429, "rate_limited", **{"Retry-After": str(retry)})
+        api = self.public_apis.get(request.match_info.get("slug", ""))
+        if api is None:
+            return self._public_error(404, "not_found")
+        try:
+            result = await api.handler(request)
+            if result is None:
+                return self._public_error(404, "not_found")
+            resp = result if isinstance(result, web.StreamResponse) else web.json_response(result)
+        except web.HTTPException as exc:
+            if exc.status < 400:
+                raise
+            return self._public_error(exc.status, (exc.reason or "error").lower().replace(" ", "_"))
+        except Exception:  # noqa: BLE001 – nie einen Stacktrace ausliefern
+            log.exception("Fehler in der öffentlichen API %s", api.slug)
+            return self._public_error(500, "internal_error")
+        for key, val in self._CORS.items():
+            resp.headers.setdefault(key, val)
+        resp.headers.setdefault("Cache-Control", "public, max-age=60")
+        return resp
+
+    # ----------------------------------------------------------------- #
     #  Owner-Seiten: Zugriff & Rollen, Audit-Log
     # ----------------------------------------------------------------- #
     async def _require_owner_page(self, request):
@@ -959,6 +1545,13 @@ class WebCore(commands.Cog):
             if guild is None:
                 raise web.HTTPFound("/access?ok=Server+nicht+gefunden")
             action = form.get("form")
+            from urllib.parse import quote_plus
+            if action == "portal":
+                enabled = bool(form.get("portal"))
+                await self._set_portal(guild.id, enabled)
+                msg = f"Mein Bereich {'eingeschaltet' if enabled else 'ausgeschaltet'}"
+                await self._audit(request, user, page="access", guild_id=guild.id, action="portal", result=msg, ok=True)
+                raise web.HTTPFound(f"/access?guild={guild.id}&ok=" + quote_plus(msg))
             msg = "Gespeichert"
             async with self.config.role_perms() as role_perms:
                 gperms = role_perms.setdefault(str(guild.id), {})
@@ -1002,7 +1595,6 @@ class WebCore(commands.Cog):
                     role_perms.pop(str(guild.id), None)
             await self._audit(request, user, page="access", guild_id=guild.id, action=action, result=msg,
                               ok=msg not in ("Rolle nicht gefunden",))
-            from urllib.parse import quote_plus
             raise web.HTTPFound(f"/access?guild={guild.id}&ok=" + quote_plus(msg))
 
         selected = await self._select_guild(request, guilds, "/access")
@@ -1019,27 +1611,95 @@ class WebCore(commands.Cog):
             guild_perms=acl.guild_role_perms(role_perms, guild.id),
             csrf=token, access_mode=await self.config.access_mode(),
         )
+        portal = await self.config.member_portal() or {}
+        content += render_portal_card(
+            guild=guild, enabled=bool(portal.get(str(guild.id))), csrf=token,
+            member_pages=[(p.name, p.icon, p.description)
+                          for p in sorted(self.member_pages.values(), key=lambda x: x.name.lower())],
+        )
         return aiohttp_jinja2.render_template(
             "page.html", request,
             self._page_ctx(request, title="Zugriff & Rollen", content=content, active_page="access"),
         )
 
+    async def _set_portal(self, guild_id: int, enabled: bool) -> None:
+        async with self.config.member_portal() as portal:
+            if enabled:
+                portal[str(guild_id)] = True
+            else:
+                portal.pop(str(guild_id), None)
+
+    async def _set_audit_channel(self, guild_id: int, channel_id) -> None:
+        async with self.config.audit_channels() as chans:
+            if channel_id:
+                chans[str(guild_id)] = int(channel_id)
+            else:
+                chans.pop(str(guild_id), None)
+
     async def handle_audit(self, request):
         user, denied = await self._require_owner_page(request)
         if denied is not None:
             return denied
+        is_owner = user["id"] in self.bot.owner_ids
+        token = await self._csrf_token(request)
+        guilds = list(self.bot.guilds)
+
+        if request.method == "POST":
+            form = await request.post()
+            if form.get("csrf_token") != token:
+                return self._error_page(request, "Abgelehnt", "Ungültiges CSRF-Token. Bitte neu laden.", status=400)
+            if not is_owner:
+                return self._error_page(request, "Kein Zugriff", "Den Log-Kanal legt nur der Bot-Owner fest.",
+                                        status=403, icon="bi-shield-lock")
+            raw = str(form.get("guild") or "")
+            guild = self.bot.get_guild(int(raw)) if raw.isdigit() else None
+            if guild is None:
+                raise web.HTTPFound("/audit?err=Server+nicht+gefunden")
+            raw_ch = str(form.get("channel") or "")
+            channel = None
+            if raw_ch:
+                channel = next((c for c in guild.text_channels if str(c.id) == raw_ch), None)
+                if channel is None:
+                    raise web.HTTPFound(f"/audit?guild={guild.id}&err=Kanal+nicht+gefunden")
+            await self._set_audit_channel(guild.id, channel.id if channel else None)
+            msg = f"Log-Kanal: #{channel.name}" if channel else "Log-Kanal ausgeschaltet"
+            await self._audit(request, user, page="audit", guild_id=guild.id, action="auditchannel",
+                              result=msg, ok=True)
+            from urllib.parse import quote_plus
+            raise web.HTTPFound(f"/audit?guild={guild.id}&ok=" + quote_plus(msg))
+
+        channel_card = ""
+        if is_owner and guilds:
+            selected = await self._select_guild(request, guilds, "/audit")
+            self._set_switcher(request, guilds, selected, "/audit")
+            guild = self.bot.get_guild(selected)
+            chans = await self.config.audit_channels() or {}
+            active = []
+            for gid, cid in chans.items():
+                g = self.bot.get_guild(int(gid)) if str(gid).isdigit() else None
+                ch = g.get_channel(int(cid)) if g is not None else None
+                if g is not None:
+                    active.append((g.name, f"#{ch.name}" if ch is not None else f"gelöschter Kanal ({cid})"))
+            channel_card = render_audit_channel(
+                guild=guild, channels=[(c.id, c.name) for c in guild.text_channels],
+                current=chans.get(str(guild.id)), csrf=token, active=sorted(active),
+            )
         entries = await self.config.audit()
         page_names = {p.slug: p.name for p in self.pages.values()}
+        page_names.update({f"me:{p.slug}": f"Mein Bereich: {p.name}" for p in self.member_pages.values()})
         page_names["access"] = "Zugriff & Rollen"
+        page_names["audit"] = "Audit-Log"
+        page_names["me"] = "Mein Bereich"
         guild_names = {}
         for e in entries:
             gid = e.get("guild_id")
             if gid:
                 g = self.bot.get_guild(int(gid))
                 guild_names[str(gid)] = g.name if g else (e.get("guild_name") or str(gid))
-        content = render_audit(entries, page_names=page_names, guild_names=guild_names)
+        content = channel_card + render_audit(entries, page_names=page_names, guild_names=guild_names)
         return aiohttp_jinja2.render_template(
-            "page.html", request, {"title": "Audit-Log", "content": content, "active_page": "audit"}
+            "page.html", request,
+            self._page_ctx(request, title="Audit-Log", content=content, active_page="audit"),
         )
 
     # ----------------------------------------------------------------- #
@@ -1184,6 +1844,56 @@ class WebCore(commands.Cog):
             lines.append(f"{name}: {', '.join(parts) or '—'}")
         await ctx.send(box("\n".join(lines)[:1900], lang="yaml"))
 
+    @staticmethod
+    def _cmd_user(ctx) -> dict:
+        a = ctx.author
+        avatar = getattr(getattr(a, "display_avatar", None), "url", None)
+        return {"id": a.id, "name": getattr(a, "display_name", None) or str(a),
+                "avatar": str(avatar) if avatar else None}
+
+    @webcore.command(name="portal")
+    @commands.guild_only()
+    async def webcore_portal(self, ctx: commands.Context, schalter: str):
+        """„Mein Bereich“ (Mitglieder-Bereich) für diesen Server ein-/ausschalten: on | off.
+
+        Ist er an, dürfen sich alle Mitglieder dieses Servers im Dashboard anmelden und sehen
+        ausschließlich die Mitglieder-Seiten („Mein Bereich“) – keine Team-Seiten.
+        """
+        schalter = schalter.lower()
+        if schalter not in ("on", "off", "an", "aus"):
+            return await ctx.send("Bitte `on` oder `off` angeben.")
+        enabled = schalter in ("on", "an")
+        await self._set_portal(ctx.guild.id, enabled)
+        msg = f"Mein Bereich {'eingeschaltet' if enabled else 'ausgeschaltet'}"
+        await self._audit(None, self._cmd_user(ctx), page="access", guild_id=ctx.guild.id,
+                          action="portal (Befehl)", result=msg, ok=True)
+        if enabled:
+            names = ", ".join(sorted(p.name for p in self.member_pages.values())) or "noch keine – Module können welche anbieten"
+            await ctx.send(
+                f"✅ **Mein Bereich** ist auf diesem Server an. Alle Mitglieder können sich jetzt im Dashboard "
+                f"anmelden und sehen nur ihre Mitglieder-Seiten (aktuell: {names}).",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        else:
+            await ctx.send("**Mein Bereich** ist auf diesem Server aus. Reine Mitglieder haben keinen Dashboard-Zugang mehr.")
+
+    @webcore.command(name="auditchannel")
+    @commands.guild_only()
+    async def webcore_auditchannel(self, ctx: commands.Context, kanal: discord.TextChannel = None):
+        """Audit-Log dieses Servers zusätzlich als Embed in einen Kanal posten (ohne Kanal = aus)."""
+        channel = kanal
+        if channel is not None and ctx.guild.get_channel(channel.id) is None:
+            return await ctx.send("Der Kanal muss auf diesem Server liegen.")
+        await self._set_audit_channel(ctx.guild.id, channel.id if channel else None)
+        msg = f"Log-Kanal: #{channel.name}" if channel else "Log-Kanal ausgeschaltet"
+        await self._audit(None, self._cmd_user(ctx), page="audit", guild_id=ctx.guild.id,
+                          action="auditchannel (Befehl)", result=msg, ok=True)
+        if channel:
+            await ctx.send(f"Dashboard-Änderungen und abgelehnte Zugriffe dieses Servers werden jetzt in "
+                           f"{channel.mention} gepostet.")
+        else:
+            await ctx.send("Audit-Log wird nicht mehr in einen Kanal gepostet (im Dashboard bleibt es erhalten).")
+
     @webcore.command(name="settings")
     async def webcore_settings(self, ctx: commands.Context):
         """Aktuelle Einstellungen anzeigen (ohne Secret)."""
@@ -1199,6 +1909,10 @@ class WebCore(commands.Cog):
             f"rollen-rechte: {sum(len(v) for v in (d.get('role_perms') or {}).values())} Rolle(n) auf "
             f"{len(d.get('role_perms') or {})} Server(n)\n"
             f"audit-log: {len(d.get('audit') or [])} Einträge\n"
-            f"seiten: {', '.join(self.pages) or 'keine'}"
+            f"audit-kanäle: {len(d.get('audit_channels') or {})} Server\n"
+            f"mein-bereich: an auf {len(d.get('member_portal') or {})} Server(n)\n"
+            f"seiten: {', '.join(self.pages) or 'keine'}\n"
+            f"mitglieder-seiten: {', '.join(self.member_pages) or 'keine'}\n"
+            f"öffentliche api: {', '.join(self.public_apis) or 'keine'}"
         )
         await ctx.send(box(text, lang="yaml"))

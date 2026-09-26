@@ -23,6 +23,11 @@ config.yml
 *.sqlite3-shm
 backups/
 
+# Tests: Temp-Daten liegen im System-Temp (tests/bootstrap.py), nichts im Repo
+.pytest_cache/
+.coverage
+htmlcov/
+
 # Logs & Temp
 *.log
 *.tmp

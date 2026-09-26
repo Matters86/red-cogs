@@ -164,6 +164,15 @@ def _render_settings(ui, guild, conf, csrf) -> str:
         + "</div>", icon="bi-toggles",
         desc="Vorbelegung für neue Umfragen – lässt sich pro Umfrage ändern.")
 
+    portal = ui.card("Mitglieder-Bereich", ui.switch(
+        "member_page", "Im Mitglieder-Bereich anzeigen", conf.get("member_page", True),
+        desc="Mitglieder sehen unter „Mein Bereich → Umfragen“ die laufenden Umfragen aus Kanälen, die sie lesen "
+             "können, und stimmen dort genauso ab wie mit den Buttons in Discord.",
+    ) + ui.callout(
+        "Den Mitglieder-Bereich selbst schaltet der Bot-Owner pro Server unter <b>Verwaltung → Zugriff &amp; Rollen</b> "
+        "ein (oder mit <code>[p]webcore portal on</code>). Dieser Schalter blendet nur die Umfragen-Seite aus.",
+    ), icon="bi-person-badge", desc="Abstimmen im Web – für Mitglieder ohne Team-Rechte.")
+
     overrides = conf.get("messages") or {}
     fields = []
     for key in OVERRIDABLE_KEYS:
@@ -178,7 +187,7 @@ def _render_settings(ui, guild, conf, csrf) -> str:
     # Ein Formular über zwei Reiter (Einstellungen + Texte) – beide speichern alles.
     return ui.form(
         "/cogs/poll",
-        ui.tab("einstellungen", "Einstellungen", "bi-sliders", access + defaults + save)
+        ui.tab("einstellungen", "Einstellungen", "bi-sliders", access + defaults + portal + save)
         + ui.tab("texte", "Texte", "bi-chat-left-text", texts + save),
         csrf=csrf, hidden={"form": "settings", "guild": guild.id}, savebar=True,
     )
@@ -349,6 +358,7 @@ async def _handle_post(cog, request):
         await gconf.manager_roles.set(roles)
         await gconf.default_multiple.set("default_multiple" in data)
         await gconf.default_anonymous.set("default_anonymous" in data)
+        await gconf.member_page.set("member_page" in data)
         overrides = {}
         for key in OVERRIDABLE_KEYS:
             val = (data.get(f"ovr_{key}") or "").strip()
@@ -397,6 +407,7 @@ async def _handle_post(cog, request):
                 raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&ok=Umfrage+nicht+gefunden")
             if action == "close":
                 poll["closed"] = True
+                poll["closed_ts"] = int(datetime.now(tz=timezone.utc).timestamp())
                 polls[poll_id] = poll
                 snapshot = dict(poll)
             elif action == "reopen":
@@ -404,6 +415,7 @@ async def _handle_post(cog, request):
                 poll["ended"] = False
                 poll["announced"] = False
                 poll["end_ts"] = None
+                poll.pop("closed_ts", None)
                 polls[poll_id] = poll
                 snapshot = dict(poll)
             elif action == "delete":

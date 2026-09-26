@@ -31,6 +31,9 @@ NAME_BY_LEVEL = {NONE: "none", VIEW: "view", EDIT: "edit"}
 LEVEL_LABEL = {NONE: "Kein Zugriff", VIEW: "Ansehen", EDIT: "Bearbeiten"}
 
 AUDIT_MAX = 300
+# Höchstens so viele Einträge aus dem Mitglieder-Bereich im Audit-Log, damit viele
+# Mitglieder-Aktionen die Team-/Owner-Einträge nicht verdrängen.
+MEMBER_AUDIT_MAX = 150
 
 
 def parse_level(value) -> int:
@@ -86,9 +89,21 @@ def configured_guild_ids(role_perms: dict | None) -> set[int]:
     return {int(gid) for gid, roles in (role_perms or {}).items() if roles and str(gid).isdigit()}
 
 
-def append_audit(entries: list, entry: dict, cap: int = AUDIT_MAX) -> list:
-    """Neuester Eintrag zuerst, gekappt auf ``cap`` (in-place)."""
+def append_audit(entries: list, entry: dict, cap: int = AUDIT_MAX, member_cap: int | None = None) -> list:
+    """Neuester Eintrag zuerst, gekappt auf ``cap`` (in-place).
+
+    ``member_cap``: zusätzlich höchstens so viele Einträge mit ``area == "member"``
+    behalten (die ältesten fliegen zuerst raus).
+    """
     entries.insert(0, entry)
+    if member_cap is not None and entry.get("area") == "member":
+        seen = 0
+        for i in range(len(entries)):
+            if entries[i].get("area") == "member":
+                seen += 1
+                if seen > member_cap:
+                    entries[i] = None
+        entries[:] = [e for e in entries if e is not None]
     del entries[cap:]
     return entries
 

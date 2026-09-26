@@ -5,7 +5,7 @@
     <div class="wc-intro-icon" style="background:var(--danger-soft);color:var(--danger)"><i class="bi {{ icon or 'bi-exclamation-triangle' }}"></i></div>
     <div>
       <p style="color:var(--text);margin:4px 0 14px">{{ message }}</p>
-      <a class="btn-ghost" href="/"><i class="bi bi-arrow-left"></i> Zurück zur Übersicht</a>
+      <a class="btn-ghost" href="{{ home_href|default('/') }}"><i class="bi bi-arrow-left"></i> {{ home_label|default('Zurück zur Übersicht') }}</a>
     </div>
   </div>
 </div>

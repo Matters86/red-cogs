@@ -19,6 +19,7 @@ umschaltbar und alle Texte sind überschreibbar.
 - Übernehmen, Sperren, Schließen, Wiederöffnen, Löschen, Umbenennen, Mitglieder verwalten
 - Limit für offene Tickets pro Nutzer, Schließen-Bestätigung
 - HTML-Transcripts + Statistik im Dashboard
+- **Meine Tickets** im Mitglieder-Bereich: eigene Tickets + Verläufe ansehen und Tickets auch über die Website öffnen
 - Persistente Buttons (überstehen Neustarts)
 
 **Befehle**
@@ -51,4 +52,4 @@ umschaltbar und alle Texte sind überschreibbar.
 | `[p]ticketset settings` | Aktuelle Einstellungen anzeigen. | Admin / Manage Server |
 | `[p]ticketset dashboard` | Hinweis auf das Dashboard. | Admin / Manage Server |
 
-**Dashboard:** Tab **Tickets** → Einstellungen, Panels (inkl. Editor und Team-Zuordnung je Grund), Transcripts und Statistik pro Server.
+**Dashboard:** Tab **Tickets** → Einstellungen, Panels (inkl. Editor und Team-Zuordnung je Grund), Transcripts und Statistik pro Server. Mitglieder finden unter **Mein Bereich → Meine Tickets** ihre eigenen Tickets und Verläufe und können dort (gleiche Fragen und Limits wie der Button) ein Ticket öffnen – abschaltbar im Reiter Einstellungen.

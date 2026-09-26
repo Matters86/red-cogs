@@ -89,6 +89,8 @@ nicht zuweisbare Rollen), ein Formular für alle Einstellungen (An/Aus, Sprache,
 Verzögerung, Kontoalter, die drei Rollenlisten) sowie ein Knopf **„Jetzt anwenden\"** für
 bestehende Mitglieder – alles per Formular. Unter **Rollen-Panels** legst du beliebig viele Self-Service-Panels (Buttons/Dropdown) an, pflegst Rollen samt Emoji/Farbe und postest sie.
 
+**Neu – Mein Bereich → Rollen:** Ist der Mitglieder-Bereich eingeschaltet, wählen Mitglieder ihre Panel-Rollen auch im Web (`/me/rollen`) – nur Panels aus Kanälen, die sie sehen, mit exakt denselben Regeln wie die Buttons (Toggle/nur vergeben, „nur eine“, Bot-Rechte und Rollen-Hierarchie). Es sind nur Rollen aus dem Panel wählbar. Abschaltbar pro Server: *Einstellungen → „Im Mitglieder-Bereich anzeigen“*.
+
 ## Hinweise
 - Der Bot vergibt nur Rollen **unter** seiner höchsten Rolle; nicht zuweisbare Rollen werden mit ⚠ markiert.
 - Verzögerung entschärft zusätzlich Konflikte mit dem Mutes-Cog bei schnellem Rejoin.

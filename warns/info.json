@@ -1,0 +1,12 @@
+{
+    "name": "Warns",
+    "short": "Verwarnsystem mit Punkten, Verfall und automatischen Maßnahmen.",
+    "description": "Moderatoren verwarnen Mitglieder mit Grund und Punkten; Verwarnungen können nach N Tagen verfallen. Ab einstellbaren Punktzahlen folgen automatisch Timeout, Kick oder Bann – nie gegen Bot-/Server-Owner oder höhere Rollen. DM an Verwarnte, Log-Kanal und eine Dashboard-Seite mit durchsuchbarem Verlauf. Hinweis: Reds eingebauten Cog „warnings“ vorher entladen (gleiche Befehlsnamen).",
+    "tags": ["moderation", "warn", "verwarnung", "strikes", "dashboard"],
+    "requirements": [],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert pro Server die Verwarnungen von Mitgliedern (Nutzer-ID, Anzeigename, Grund, Punkte, Zeitpunkt) sowie ID und Anzeigenamen des verwarnenden Moderators. Auf Löschanfrage werden die Verwarnungen des Nutzers gelöscht und er wird als Moderator anonymisiert."
+}

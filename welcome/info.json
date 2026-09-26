@@ -1,0 +1,12 @@
+{
+    "name": "Welcome",
+    "short": "Willkommens- und Abschiedsnachrichten mit Willkommensbild und DM.",
+    "description": "Begrüßt neue Mitglieder mit einer Nachricht (Text oder Embed) und optional einem Willkommensbild (runder Avatar, Name, „Mitglied #N“, Farbverlauf oder eigenes Hintergrundbild) sowie einer DM, und verabschiedet Mitglieder beim Verlassen. Platzhalter, Ping nur für das neue Mitglied, Bots ignorieren. Vollständig über das WebCore-Dashboard einstellbar – mit Live-Vorschau des Bildes.",
+    "tags": ["welcome", "willkommen", "goodbye", "abschied", "greeting", "image", "dashboard"],
+    "requirements": ["Pillow"],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert keine personenbezogenen Endnutzerdaten. Avatare neuer Mitglieder werden nur kurzzeitig im Arbeitsspeicher zwischengespeichert, um das Willkommensbild zu erzeugen."
+}

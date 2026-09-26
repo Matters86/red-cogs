@@ -1,4 +1,4 @@
-"""HTML der Owner-Seiten „Zugriff & Rollen“ und „Audit-Log“.
+"""HTML der Owner-Seiten „Zugriff & Rollen“, „Audit-Log“ und der Übersicht „Mein Bereich“.
 
 Reine Darstellung (nur ``html``), die Daten kommen aus ``webcore.py``.
 Alle dynamischen Werte werden escaped.
@@ -9,6 +9,7 @@ from __future__ import annotations
 import html
 from datetime import datetime, timezone
 
+from . import ui
 from .access import EDIT, NONE, VIEW, parse_level
 
 _MODE_TEXT = {
@@ -187,3 +188,89 @@ def render_audit(entries: list, *, page_names: dict, guild_names: dict) -> str:
         "var ok=(!t||r.textContent.toLowerCase().indexOf(t)>-1)&&(!gv||r.dataset.guild===gv);"
         "r.style.display=ok?'':'none';});}q.addEventListener('input',f);g.addEventListener('change',f);})();</script>"
     )
+
+
+# --------------------------------------------------------------------------- #
+#  Mitglieder-Bereich („Mein Bereich“)
+# --------------------------------------------------------------------------- #
+def render_portal_card(*, guild, enabled: bool, csrf: str, member_pages: list) -> str:
+    """Karte „Mitglieder-Bereich“ auf „Zugriff & Rollen“. member_pages: [(name, icon, description)]."""
+    if member_pages:
+        items = "".join(
+            f"<li><i class='bi {_esc(icon)}'></i><span><b>{_esc(name)}</b>"
+            + (f" <span class='wc-muted'>– {_esc(desc)}</span>" if desc else "") + "</span></li>"
+            for name, icon, desc in member_pages
+        )
+        pages_html = f"<ul class='wc-list'>{items}</ul>"
+    else:
+        pages_html = ui.callout(
+            "Noch kein geladenes Modul bietet Mitglieder-Seiten an. Mitglieder sehen dann nur eine leere "
+            "Übersicht – sobald ein Modul Seiten registriert, erscheinen sie automatisch.", tone="info")
+    status = ui.badge("An", "ok") if enabled else ui.badge("Aus", "muted")
+    body = (
+        "<p class='wc-hint' style='margin-top:0'>Ist der Mitglieder-Bereich an, können sich <b>alle Mitglieder</b> "
+        f"von <b>{_esc(guild.name)}</b> mit Discord anmelden. Sie sehen <b>ausschließlich „Mein Bereich“</b> mit "
+        "diesen Seiten – und dort nur ihre eigenen Daten:</p>"
+        + pages_html
+        + "<p class='wc-hint'>Team-Seiten, „Zugriff &amp; Rollen“ und das Audit-Log bleiben für sie gesperrt. "
+        "Befehl im Server: <span class='mono'>[p]webcore portal on|off</span></p>"
+        + ui.form(
+            "/access",
+            ui.switch("portal", "Mein Bereich für Mitglieder freischalten", enabled,
+                      desc="Gilt nur für diesen Server. Team und Owner können „Mein Bereich“ auch bei "
+                           "ausgeschaltetem Schalter als Vorschau öffnen.")
+            + ui.actions(
+                ui.button("Speichern", icon="bi-check2"),
+                ui.button("Vorschau öffnen", icon="bi-box-arrow-up-right", kind="ghost", href=f"/me?guild={guild.id}"),
+            ),
+            csrf=csrf, hidden={"form": "portal", "guild": guild.id}, savebar=False,
+        )
+    )
+    return "<div style='margin-top:16px'>" + ui.card(
+        "Mitglieder-Bereich („Mein Bereich“)", body, icon="bi-person-badge", actions=status,
+        desc="Selbstbedienung für normale Server-Mitglieder",
+    ) + "</div>"
+
+
+def render_audit_channel(*, guild, channels: list, current, csrf: str, active: list) -> str:
+    """Karte „Log-Kanal in Discord“ auf dem Audit-Log. channels: [(id, name)], active: [(server, kanal)]."""
+    items = [(cid, f"#{name}") for cid, name in channels]
+    control = ui.select("channel", items, current, none_label="— aus (nicht posten)")
+    summary = ""
+    if active:
+        summary = "<p class='wc-hint' style='margin:10px 0 0'>Aktiv: " + " · ".join(
+            f"<b>{_esc(g)}</b> → {_esc(c)}" for g, c in active) + "</p>"
+    body = ui.form(
+        "/audit",
+        ui.grid(ui.field(f"Log-Kanal für {guild.name}", control,
+                         help="Jeder Eintrag dieses Servers (auch abgelehnte Zugriffe) erscheint dort als Embed – "
+                              "ohne Pings. Befehl: <span class='mono'>[p]webcore auditchannel [#kanal]</span>"),
+                cols=1)
+        + ui.actions(ui.button("Speichern", icon="bi-check2")),
+        csrf=csrf, hidden={"guild": guild.id, "form": "auditchannel"},
+    ) + summary
+    return ui.card("Log-Kanal in Discord", body, icon="bi-discord",
+                   desc="Gilt für den oben gewählten Server.") + "<div style='height:16px'></div>"
+
+
+def render_member_home(*, guild, member, pages: list) -> str:
+    """Übersicht „Mein Bereich“: Kacheln aller Mitglieder-Seiten. pages: [(slug, name, icon, description)]."""
+    name = getattr(member, "display_name", None) or getattr(member, "name", "")
+    parts = [ui.hero("bi-person-badge", "",
+                     f"Hallo <b>{_esc(name)}</b>! Hier findest du deine persönlichen Bereiche auf "
+                     f"<b>{_esc(guild.name)}</b>.")]
+    if pages:
+        tiles = "".join(
+            f"<a class='tile' href='/me/{_esc(slug)}?guild={guild.id}'>"
+            f"<span class='ti'><i class='bi {_esc(icon)}'></i></span>"
+            f"<span style='min-width:0'><div class='tn'>{_esc(title)}</div>"
+            + (f"<div class='td'>{_esc(desc)}</div>" if desc else "")
+            + "</span></a>"
+            for slug, title, icon, desc in pages
+        )
+        parts.append(ui.card("Deine Seiten", f"<div class='tiles'>{tiles}</div>", icon="bi-grid",
+                             desc="Du siehst und änderst hier nur deine eigenen Daten."))
+    else:
+        parts.append(ui.card(None, ui.empty("bi-inboxes", "Noch keine Seiten verfügbar",
+                                            "Sobald ein Modul Seiten für Mitglieder anbietet, erscheinen sie hier.")))
+    return "".join(parts)

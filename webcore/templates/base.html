@@ -42,6 +42,13 @@
           <a class="nav-link {% if active_page == 'audit' %}active{% endif %}" href="/audit"><i class="bi bi-journal-text"></i> Audit-Log</a>
         {% endif %}
       {% endif %}
+      {% if show_member_nav %}
+        <div class="nav-section">Mein Bereich</div>
+        <a class="nav-link {% if active_page == 'me' %}active{% endif %}" href="/me"><i class="bi bi-person-badge"></i> Übersicht</a>
+        {% for p in member_nav %}
+          <a class="nav-link {% if active_page == 'me:' ~ p.slug %}active{% endif %}" href="/me/{{ p.slug }}"><i class="bi {{ p.icon }}"></i> {{ p.name }}</a>
+        {% endfor %}
+      {% endif %}
     </nav>
     <div class="sb-foot">Red {{ red_version }} · WebCore</div>
   </aside>
@@ -79,7 +86,8 @@
             <strong>{{ current_user.name }}</strong>
             <small><span class="role-pill {{ role_class }}">{{ role_label }}</span></small>
           </div>
-          <a href="/"><i class="bi bi-grid-1x2"></i> Übersicht</a>
+          {% if member_only %}<a href="/me"><i class="bi bi-person-badge"></i> Mein Bereich</a>{% else %}<a href="/"><i class="bi bi-grid-1x2"></i> Übersicht</a>{% endif %}
+          {% if show_member_nav and not member_only %}<a href="/me"><i class="bi bi-person-badge"></i> Mein Bereich</a>{% endif %}
           {% if is_full %}<a href="/access"><i class="bi bi-person-lock"></i> Zugriff &amp; Rollen</a>{% endif %}
           <a class="danger" href="/logout"><i class="bi bi-box-arrow-right"></i> Abmelden</a>
         </div>
@@ -96,5 +104,6 @@
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
   <script src="/static/webcore.js?v={{ asset_version }}"></script>
+  {% if toast_err %}<script>window.wcToast && wcToast({{ toast_err|tojson }}, true);</script>{% endif %}
 </body>
 </html>

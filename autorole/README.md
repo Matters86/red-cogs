@@ -137,7 +137,24 @@ Ist `webcore` geladen, erscheint automatisch der Tab **Autorole**. Dort lassen s
   Kanal, Darstellung (Buttons/Dropdown), Verhalten, Aussehen und die einzelnen Rollen (Label,
   Emoji, Button-Farbe, Beschreibung) pflegen, posten und aktualisieren –
 
-alles über Formulare (POST + CSRF), die direkt in die Bot-Konfiguration schreiben.
+alles über Formulare (POST + CSRF), die direkt in die Bot-Konfiguration schreiben. Unter
+*Einstellungen* steht außerdem der Schalter **„Im Mitglieder-Bereich anzeigen“** (Standard: an).
+
+## Mein Bereich: „Rollen“ (für Mitglieder)
+
+Hat der Bot-Owner den Mitglieder-Bereich für den Server eingeschaltet (*Verwaltung → Zugriff & Rollen*
+bzw. `[p]webcore portal on`), finden normale Mitglieder unter **Mein Bereich → Rollen** (`/me/rollen`)
+alle **geposteten** Rollen-Panels aus Kanälen, die sie in Discord sehen können:
+
+- Buttons-Panels erscheinen als große Buttons, Dropdown-Panels als Auswahl (Schalter bzw. bei
+  „nur eine“ als Einfachauswahl mit „— keine —“). Rollen, die man schon hat, sind hervorgehoben.
+- Jede Änderung läuft durch **dieselbe Funktion wie der Discord-Button** (`panel_interact`):
+  Verhalten (An/Aus bzw. nur vergeben), „nur eine Rolle“, Bot-Recht „Rollen verwalten“ und
+  Rollen-Hierarchie werden identisch geprüft, die Antwort erscheint als Hinweis.
+- Angenommen werden nur Rollen, die im jeweiligen Panel stehen – fremde Rollen-IDs, Panels anderer
+  Server, ungepostete oder unsichtbare Panels, mehrere Rollen bei „nur eine“ und eine zum Panel
+  unpassende Bedienart werden abgelehnt.
+- Der Schalter „Im Mitglieder-Bereich anzeigen“ blendet die Seite pro Server aus.
 
 ## Hinweise
 

@@ -1,0 +1,12 @@
+# Abhängigkeiten für tests/ und die GitHub Action (.github/workflows/tests.yml)
+# pip install -r tests/requirements.txt
+Red-DiscordBot>=3.5,<3.6
+pyflakes
+
+# Anforderungen der Cogs (Feld "requirements" in den info.json) –
+# run_all.py prüft, dass hier nichts fehlt.
+aiohttp-jinja2
+aiohttp-session
+cryptography
+Pillow
+tzdata

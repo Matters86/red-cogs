@@ -1,0 +1,12 @@
+{
+    "name": "TwitchLive",
+    "short": "Live-Benachrichtigungen für Twitch-Streams mit Dashboard.",
+    "description": "Meldet in Discord, sobald beobachtete Twitch-Kanäle live gehen: Embed mit Titel, Spiel, Zuschauern, Vorschaubild und Profilbild, Button „Zum Stream“, optionaler Rollen-Ping und eigene Nachricht pro Streamer. Genau eine Meldung pro Stream (auch über Neustarts), nach Stream-Ende wird sie bearbeitet („war live · Dauer“) oder gelöscht. Optional Live-Rolle für verknüpfte Mitglieder. Twitch-Helix-API mit App-Token, gebündelte Abfragen für alle Server, komplett über das WebCore-Dashboard bedienbar.",
+    "tags": ["twitch", "stream", "live", "notifications", "dashboard"],
+    "requirements": [],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert pro Server die beobachteten Twitch-Kanäle samt Einstellungen und, falls die Live-Rolle genutzt wird, die vom Team eingetragene Zuordnung Discord-Nutzer-ID ↔ Twitch-Login. Diese Zuordnung wird bei einer Datenlöschanfrage entfernt."
+}

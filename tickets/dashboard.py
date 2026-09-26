@@ -285,6 +285,16 @@ def _render_settings(ui, guild, conf, role_items, text_items, cat_items, forum_i
                     desc="Kanal wird gelöscht statt archiviert (Transcript bleibt erhalten).")
         + "</div>", icon="bi-toggles")
 
+    portal = ui.card("Mitglieder-Bereich", "<div class='wc-switches'>"
+        + ui.switch("portal_enabled", "Im Mitglieder-Bereich anzeigen", conf.get("portal_enabled", True),
+                    desc="Mitglieder sehen unter „Mein Bereich → Meine Tickets“ ihre eigenen offenen Tickets "
+                         "und die Verläufe ihrer geschlossenen Tickets.")
+        + ui.switch("portal_create", "Tickets über die Website öffnen erlauben", conf.get("portal_create", True),
+                    desc="Mitglieder können dort über die Panels, die sie in Discord sehen, ein Ticket öffnen – "
+                         "mit denselben Fragen und Limits wie beim Button.")
+        + "</div>", icon="bi-person-badge",
+        desc="Wirkt nur, wenn der Bot-Owner „Mein Bereich“ für diesen Server eingeschaltet hat.")
+
     overrides = conf.get("messages") or {}
     override_fields = []
     labels = {
@@ -309,7 +319,7 @@ def _render_settings(ui, guild, conf, role_items, text_items, cat_items, forum_i
     # Ein Formular über zwei Reiter (Einstellungen + Texte) – beide speichern alles.
     return ui.form(
         "/cogs/tickets",
-        ui.tab("einstellungen", "Einstellungen", "bi-sliders", general + team + place + behaviour + save)
+        ui.tab("einstellungen", "Einstellungen", "bi-sliders", general + team + place + behaviour + portal + save)
         + ui.tab("texte", "Texte", "bi-chat-left-text", texts + save),
         csrf=csrf, hidden={"form": "settings", "guild": guild.id}, savebar=True,
     )
@@ -490,6 +500,8 @@ async def _handle_post(cog, request):
         await gconf.close_confirmation.set("close_confirmation" in data)
         await gconf.user_can_close.set("user_can_close" in data)
         await gconf.delete_on_close.set("delete_on_close" in data)
+        await gconf.portal_enabled.set("portal_enabled" in data)
+        await gconf.portal_create.set("portal_create" in data)
 
         overrides = {}
         for key in OVERRIDABLE_KEYS:
@@ -672,11 +684,7 @@ async def _serve_transcript(cog, request):
     record = next((r for r in records if str(r.get("num")) == str(num)), None)
     if not record:
         return web.Response(text="Transcript nicht gefunden.", status=404)
-    path = cog.transcripts_dir / record.get("file", "")
-    if not path.exists():
+    text = await cog.read_transcript(record)  # gemeinsam mit „Meine Tickets“ (asyncio.to_thread)
+    if text is None:
         return web.Response(text="Transcript-Datei fehlt.", status=404)
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return web.Response(text="Transcript konnte nicht gelesen werden.", status=500)
     return web.Response(text=text, content_type="text/html")

@@ -15,10 +15,12 @@ Server-Auswahl ist auf die für den eingeloggten User sichtbaren Server beschrä
 from __future__ import annotations
 
 import html
-from urllib.parse import quote
+import json
+from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 
+from .public import build_payload
 from .strings import LANGUAGES, OVERRIDABLE_KEYS, STRINGS
 
 # Anzeige-Namen + Hilfetexte für die überschreibbaren Texte.
@@ -139,15 +141,86 @@ async def _render(cog, request):
          f"{_fmt_ts(last_ts)[6:10]} · {_fmt_ts(last_ts)[11:]} Uhr (UTC)" if last_ts else None, None),
     ])
 
+    base, public_host = await _public_base(request)
     body = (
-        _render_settings(ui, cog, guild, conf, channel, csrf)
+        _render_settings(ui, cog, guild, conf, channel, csrf, base, public_host)
         + ui.tab("historie", "Historie", "bi-clock-history", _render_history(ui, guild, entries, csrf),
                  count=len(entries))
     )
     return {"title": "Changelog", "content": bar + head + body}
 
 
-def _render_settings(ui, cog, guild, conf, channel, csrf) -> str:
+async def _public_base(request) -> tuple[str, bool]:
+    """Basis-URL des Dashboards: aus der OAuth-``redirect_uri`` (öffentliche Adresse), sonst die
+    aktuelle Anfrage. Zweiter Wert: ``True``, wenn die Adresse öffentlich per HTTPS aussieht."""
+    webcore = request.app.get("webcore")
+    redirect = ""
+    try:
+        redirect = str(await webcore.config.redirect_uri() or "") if webcore is not None else ""
+    except Exception:  # noqa: BLE001
+        redirect = ""
+    parts = urlsplit(redirect)
+    if parts.scheme in ("http", "https") and parts.netloc:
+        host = parts.hostname or ""
+        public = parts.scheme == "https" and host not in ("localhost", "127.0.0.1", "::1")
+        return f"{parts.scheme}://{parts.netloc}", public
+    return f"{request.scheme}://{request.host}", False
+
+
+def _render_public(ui, guild, conf, base, public_host) -> str:
+    """Karte „Für Launcher & Website freigeben“ (Schalter + URLs + Beispiel)."""
+    json_url = f"{base}/api/public/changelog/{guild.id}"
+    rss_url = json_url + "/rss"
+
+    def copy_field(url):
+        inp = ui.text_input("", url, attrs={"readonly": True, "onclick": "this.select()"})
+        btn = ui.button("", icon="bi-clipboard", kind="ghost", type="button",
+                        attrs={"title": "Kopieren", "onclick": "navigator.clipboard&&navigator.clipboard.writeText("
+                               "this.previousElementSibling.value);this.querySelector('i').className='bi bi-check2'"})
+        return f"<div class='wc-input-group'>{inp}{btn}</div>"
+
+    example = build_payload(guild, conf, limit=1)
+    if not example["entries"]:
+        example["entries"] = [{
+            "id": "cl1", "title": "Fahrzeug-Update",
+            "category": {"emoji": "🚗", "label": "Fahrzeuge"},
+            "sections": [{"key": "neu", "title": "Neu", "emoji": "🚗", "items": ["Neues Polizeiauto"]}],
+            "note": None, "created_at": "2026-09-25T18:00:00Z", "author": "Matters86",
+            "url": f"https://discord.com/channels/{guild.id}/123/456",
+        }]
+    example_json = json.dumps(example, ensure_ascii=False, indent=2)
+    state = ui.badge("freigegeben", "ok") if conf.get("public_api") else ui.badge("aus", "muted")
+    hint = ui.callout(
+        "Damit ein Launcher oder eine Website die Daten abrufen kann, muss das Dashboard <b>öffentlich erreichbar</b> "
+        "sein (Reverse-Proxy mit HTTPS, siehe WebCore-README). Ohne Freigabe – oder für unbekannte Server – antwortet "
+        "die Adresse mit <code>404</code>. Ausgegeben werden nur Titel, Inhalte, Datum, Anzeigename des Autors und der "
+        "Link zur Nachricht, keine Nutzer-IDs.",
+        tone="info" if public_host else "warn",
+    )
+    if not public_host:
+        hint += ui.callout(
+            f"Die Adresse unten stammt von <code>{html.escape(base)}</code> – das sieht nicht nach einer öffentlichen "
+            "HTTPS-Adresse aus. Trage in WebCore die öffentliche Redirect-URI ein, dann stimmen die Links.", tone="warn")
+    body = (
+        ui.switches(ui.switch("public_api", "Changelogs öffentlich abrufbar machen", conf.get("public_api"),
+                              desc="JSON und RSS für diesen Server freigeben (Standard: aus)."))
+        + ui.divider()
+        + ui.grid(
+            ui.field("JSON-Adresse", copy_field(json_url),
+                     help="Parameter: <code>?limit=1–50</code> (Standard 10), <code>&amp;before=&lt;id&gt;</code> "
+                          "für ältere Einträge (Wert aus <code>next_before</code>)."),
+            ui.field("RSS-Feed", copy_field(rss_url), help="RSS 2.0 – z. B. für Feed-Reader oder Website-Widgets."),
+        )
+        + hint
+        + ui.field("Beispiel-Antwort",
+                   f"<textarea class='wc-input mono' rows='14' readonly>{html.escape(example_json)}</textarea>",
+                   help="Neuester Eintrag dieses Servers (bzw. ein Beispiel, solange es noch keinen gibt).")
+    )
+    return ui.card("Für Launcher & Website freigeben", body, icon="bi-broadcast", actions=state,
+                   desc="Öffentliche Schnittstelle, mit der z. B. dein Launcher die neuesten Changelogs anzeigt.")
+
+
+def _render_settings(ui, cog, guild, conf, channel, csrf, base="", public_host=False) -> str:
     text_items = [(c.id, f"#{c.name}") for c in guild.text_channels]
     role_items = _role_items(guild)
     color_hex = f"#{int(conf.get('color', 0x3DDC97)):06X}"
@@ -208,7 +281,9 @@ def _render_settings(ui, cog, guild, conf, channel, csrf) -> str:
         "/cogs/changelog",
         ui.tab("einstellungen", "Einstellungen", "bi-sliders", setup + post + ping + look + save)
         + ui.tab("kategorien", "Kategorien", "bi-tags", categories + save, count=len(cats))
-        + ui.tab("texte", "Texte", "bi-chat-left-text", texts + save),
+        + ui.tab("texte", "Texte", "bi-chat-left-text", texts + save)
+        + ui.tab("launcher", "Launcher & Website", "bi-broadcast",
+                 _render_public(ui, guild, conf, base, public_host) + save),
         csrf=csrf, hidden={"form": "settings", "guild": guild.id}, savebar=True,
     )
 
@@ -371,6 +446,9 @@ async def _handle_post(cog, request):
             if val:
                 overrides[key] = val
         await gconf.messages.set(overrides)
+
+        # Öffentliche API (Launcher & Website)
+        await gconf.public_api.set("public_api" in data)
 
         raise web.HTTPFound(f"/cogs/changelog?guild={guild.id}&ok=" + quote("Gespeichert"))
 

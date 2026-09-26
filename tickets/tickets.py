@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import discord
@@ -9,6 +10,7 @@ from redbot.core.bot import Red
 from redbot.core.data_manager import cog_data_path
 
 from .dashboard import dashboard_handler
+from .member import member_handler
 from .strings import LANGUAGES, OVERRIDABLE_KEYS, t
 from .transcript import build_transcript
 from .views import (
@@ -36,6 +38,17 @@ PING_ALLOWED = discord.AllowedMentions(everyone=False, roles=True, users=True)
 # Kanalnamen: Umlaute lesbar umschreiben statt sie zu "-" zu machen (Störung -> stoerung).
 _TRANSLIT = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"})
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
+
+
+@dataclass
+class OpenResult:
+    """Ergebnis von ``Tickets.open_ticket`` (gemeinsam für Discord-Button und Website).
+
+    ``status``: ``ok`` | ``max_open`` | ``failed``; ``max_open`` = aktuelles Limit.
+    """
+    status: str
+    target: object = None
+    max_open: int = 1
 
 
 def _fill(template, **values) -> str:
@@ -80,6 +93,8 @@ class Tickets(commands.Cog):
             tickets={},
             transcripts=[],
             stats={"opened": 0, "closed": 0, "claims": {}, "duration_sum": 0},
+            portal_enabled=True,   # „Meine Tickets“ im Mitglieder-Bereich (WebCore /me/tickets)
+            portal_create=True,    # Tickets über die Website öffnen erlauben
         )
         self.transcripts_dir = cog_data_path(self) / "transcripts"
         self.transcripts_dir.mkdir(parents=True, exist_ok=True)
@@ -111,9 +126,22 @@ class Tickets(commands.Cog):
             icon="bi-life-preserver",
             handler=self.dashboard_page,
         )
+        if hasattr(webcore, "register_member_page"):  # ältere WebCore-Versionen ohne „Mein Bereich“
+            webcore.register_member_page(
+                owner=self,
+                visible=lambda g: self.config.guild(g).portal_enabled(),
+                slug="tickets",
+                name="Meine Tickets",
+                handler=self.member_page,
+                icon="bi-life-preserver",
+                description="Deine Tickets und Verläufe",
+            )
 
     async def dashboard_page(self, request):
         return await dashboard_handler(self, request)
+
+    async def member_page(self, request):
+        return await member_handler(self, request)
 
     # ----------------------------------------------------------------- #
     #  Helfer
@@ -142,6 +170,16 @@ class Tickets(commands.Cog):
             1 for r in (conf.get("tickets") or {}).values()
             if r.get("owner_id") == member_id and r.get("status") == "open"
         )
+
+    def open_blocked(self, conf, member_id) -> str | None:
+        """Warum ``member_id`` gerade kein Ticket öffnen darf (``"max_open"``) – sonst ``None``.
+
+        Einzige Stelle für Öffnen-Sperren: Discord-Button (Vorprüfung + Prüfung unter dem Lock)
+        und Website nutzen genau diese Funktion.
+        """
+        if self._open_count(conf, member_id) >= int(conf["max_open"]):
+            return "max_open"
+        return None
 
     @staticmethod
     def _channel_name(raw: str) -> str:
@@ -377,7 +415,7 @@ class Tickets(commands.Cog):
             await interaction.response.send_message(t(lang, "not_a_ticket"), ephemeral=True)
             return
 
-        if self._open_count(conf, member.id) >= int(conf["max_open"]):
+        if self.open_blocked(conf, member.id):
             await interaction.response.send_message(
                 t(lang, "max_open_reached", max=conf["max_open"]), ephemeral=True
             )
@@ -401,26 +439,50 @@ class Tickets(commands.Cog):
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True, thinking=True)
 
-        # Pro Nutzer serialisiert + Limit frisch geprüft: ein Doppelklick (oder zwei
-        # offene Modals) erzeugt sonst zwei Tickets trotz "max. 1 offen".
+        result = await self.open_ticket(guild, member, panel, reason, answers)
+        if result.status == "max_open":
+            await interaction.followup.send(
+                t(lang, "max_open_reached", max=result.max_open), ephemeral=True
+            )
+            return
+        if result.target is None:
+            await interaction.followup.send(t(lang, "create_failed"), ephemeral=True)
+            return
+        await interaction.followup.send(
+            t(lang, "created_ephemeral", channel=result.target.mention), ephemeral=True
+        )
+
+    async def open_ticket(self, guild, member, panel, reason, answers) -> OpenResult:
+        """Legt ein Ticket an – gemeinsamer Kern für den Discord-Button/-Modal und die Website.
+
+        Pro Nutzer serialisiert + Limit frisch geprüft: ein Doppelklick (oder zwei offene
+        Modals, zwei Browser-Tabs) erzeugt sonst zwei Tickets trotz "max. 1 offen".
+        """
         async with self._lock("open", guild.id, member.id):
             conf = await self.config.guild(guild).all()
-            if self._open_count(conf, member.id) >= int(conf["max_open"]):
-                await interaction.followup.send(
-                    t(lang, "max_open_reached", max=conf["max_open"]), ephemeral=True
-                )
-                return
+            if self.open_blocked(conf, member.id):
+                return OpenResult("max_open", None, int(conf["max_open"]))
             try:
                 target = await self._create_ticket(guild, member, conf, panel, reason, answers)
             except Exception:  # noqa: BLE001 – Nutzer darf nie im "denkt nach…" hängen bleiben
                 log.exception("Unerwarteter Fehler bei der Ticket-Erstellung (Guild %s)", guild.id)
                 target = None
-        if target is None:
-            await interaction.followup.send(t(lang, "create_failed"), ephemeral=True)
-            return
-        await interaction.followup.send(
-            t(lang, "created_ephemeral", channel=target.mention), ephemeral=True
-        )
+        return OpenResult("ok" if target is not None else "failed", target, int(conf["max_open"]))
+
+    async def read_transcript(self, record: dict) -> str | None:
+        """HTML eines gespeicherten Transcripts (Dateiname aus den Metadaten) oder ``None``."""
+        name = str(record.get("file") or "")
+        if not name or "/" in name or "\\" in name or name.startswith("."):
+            return None
+        path = self.transcripts_dir / name
+
+        def _read():
+            try:
+                return path.read_text(encoding="utf-8") if path.is_file() else None
+            except OSError:
+                log.exception("Transcript %s konnte nicht gelesen werden", name)
+                return None
+        return await asyncio.to_thread(_read)
 
     async def _create_ticket(self, guild, member, conf, panel, reason, answers):
         lang = panel.get("lang") or conf["language"]
@@ -717,6 +779,7 @@ class Tickets(commands.Cog):
                     "channel_name": meta["channel_name"],
                     "owner": meta["owner"],
                     "owner_id": record["owner_id"],
+                    "members": list(record.get("members") or []),  # per [p]ticket add hinzugefügt
                     "reason": record.get("reason_label"),
                     "closed": meta["closed"],
                     "file": filename,
@@ -925,6 +988,10 @@ class Tickets(commands.Cog):
                 )
         except discord.HTTPException:
             pass
+        async with self.config.guild(ctx.guild).tickets() as tickets:
+            rec = tickets.get(str(ctx.channel.id))
+            if rec is not None and member.id not in (rec.get("members") or []):
+                rec.setdefault("members", []).append(member.id)
         await ctx.send(t(lang, "member_added", user=member.mention))
 
     @ticket.command(name="remove")
@@ -943,6 +1010,10 @@ class Tickets(commands.Cog):
                 await ctx.channel.set_permissions(member, overwrite=None)
         except discord.HTTPException:
             pass
+        async with self.config.guild(ctx.guild).tickets() as tickets:
+            rec = tickets.get(str(ctx.channel.id))
+            if rec is not None and member.id in (rec.get("members") or []):
+                rec["members"] = [m for m in rec["members"] if m != member.id]
         await ctx.send(t(lang, "member_removed", user=member.mention))
 
     @ticket.command(name="rename")

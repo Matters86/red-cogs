@@ -105,6 +105,7 @@ code{color:var(--accent);background:var(--panel-2);padding:1px 6px;border-radius
 .role-pill.owner{color:var(--accent);border-color:rgba(61,220,151,.4);background:var(--accent-soft)}
 .role-pill.admin{color:var(--info);border-color:rgba(108,182,255,.4);background:var(--info-soft)}
 .role-pill.team{color:var(--amber);border-color:rgba(245,185,74,.4);background:var(--amber-soft)}
+.role-pill.member{color:var(--info);border-color:rgba(108,182,255,.4);background:var(--info-soft)}
 
 /* Nur-Ansicht-Banner */
 .ro-banner{display:flex;align-items:center;gap:12px;background:var(--info-soft);border:1px solid rgba(108,182,255,.35);

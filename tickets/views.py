@@ -26,6 +26,8 @@ CID_UNCLAIM = "tickets:unclaim"
 CID_LOCK = "tickets:lock"
 CID_UNLOCK = "tickets:unlock"
 
+ANSWER_MAX = 1000  # max. Zeichen je Antwort (Discord-Modal und Website)
+
 
 def build_panel_view(panel: dict, *, open_label: str | None = None, emojis: bool = True) -> discord.ui.View:
     """Baut die View eines Panels (Buttons ODER Dropdown) anhand der Config.
@@ -130,6 +132,23 @@ def build_controls_view(lang: str, *, claimed: bool = False, locked: bool = Fals
     return view
 
 
+def modal_fields(questions) -> list[dict]:
+    """Normalisierte Modal-Fragen (max. 5) – gemeinsam für das Discord-Modal und die Website.
+
+    ``label`` ist zugleich der Schlüssel der Antwort im Ticket-Embed (wie bisher ``f.label``).
+    """
+    out = []
+    for q in (questions or [])[:5]:
+        out.append({
+            "label": (q.get("label") or "Frage")[:45],
+            "placeholder": (q.get("placeholder") or None),
+            "required": bool(q.get("required", True)),
+            "long": q.get("style") == "long",
+            "max_length": ANSWER_MAX,
+        })
+    return out
+
+
 class TicketModal(discord.ui.Modal):
     """Fragt beim Öffnen bis zu 5 frei definierte Fragen ab (transient)."""
 
@@ -139,14 +158,14 @@ class TicketModal(discord.ui.Modal):
         self._panel_id = panel_id
         self._reason_id = reason_id
         self._inputs: list[discord.ui.TextInput] = []
-        for q in (questions or [])[:5]:
-            style = discord.TextStyle.paragraph if q.get("style") == "long" else discord.TextStyle.short
+        for q in modal_fields(questions):
+            style = discord.TextStyle.paragraph if q["long"] else discord.TextStyle.short
             field = discord.ui.TextInput(
-                label=(q.get("label") or "Frage")[:45],
-                placeholder=(q.get("placeholder") or None),
-                required=bool(q.get("required", True)),
+                label=q["label"],
+                placeholder=q["placeholder"],
+                required=q["required"],
                 style=style,
-                max_length=1000,
+                max_length=q["max_length"],
             )
             self._inputs.append(field)
             self.add_item(field)

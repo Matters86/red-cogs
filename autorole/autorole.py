@@ -9,6 +9,7 @@ from redbot.core import Config, commands
 from redbot.core.bot import Red
 
 from .dashboard import dashboard_handler
+from .member import member_page_handler
 from .panels import (
     MAX_ROLES,
     build_view,
@@ -53,6 +54,7 @@ class Autorole(commands.Cog):
             min_account_age=0,    # Stunden; 0 = aus
             screening="auto",     # auto | on | off
             panels={},            # Rollen-Panels: {panel_id: {...}} (Buttons/Dropdown)
+            member_page=True,     # Seite „Rollen“ in „Mein Bereich“ anzeigen
         )
         self.config.register_member(
             sticky=[],            # beim Verlassen gehaltene sticky-Rollen (Rollen-IDs)
@@ -108,9 +110,22 @@ class Autorole(commands.Cog):
             icon="bi-person-plus",
             handler=self.dashboard_page,
         )
+        if hasattr(webcore, "register_member_page"):  # ältere WebCore-Versionen ohne „Mein Bereich“
+            webcore.register_member_page(
+                owner=self,
+                visible=lambda g: self.config.guild(g).member_page(),
+                slug="rollen",
+                name="Rollen",
+                icon="bi-person-badge",
+                description="Rollen selbst wählen",
+                handler=self.member_page,
+            )
 
     async def dashboard_page(self, request):
         return await dashboard_handler(self, request)
+
+    async def member_page(self, request):
+        return await member_page_handler(self, request)
 
     # ----------------------------------------------------------------- #
     #  Helfer
@@ -449,25 +464,14 @@ class Autorole(commands.Cog):
             await interaction.response.defer(ephemeral=True, thinking=True)
             lang = await self._lang(guild)
             panel = await self._get_panel(guild, pid)
-            if panel is None:
-                return await self._pf(interaction, t(lang, "panel_gone"))
-            me = guild.me
-            if me is None or not me.guild_permissions.manage_roles:
-                return await self._pf(interaction, t(lang, "panel_bot_no_perm"))
             member = interaction.user
             if not isinstance(member, discord.Member):
                 member = guild.get_member(getattr(interaction.user, "id", 0))
-            if member is None:
-                return await self._pf(interaction, t(lang, "panel_failed"))
-            panel_ids = [int(r["role_id"]) for r in panel.get("roles", [])]
-            member_ids = {r.id for r in member.roles}
-            mode = panel.get("mode", "toggle")
-            unique = bool(panel.get("unique"))
-            if kind == "btn":
-                await self._panel_button(interaction, lang, guild, member, member_ids, role_id, panel_ids, mode, unique)
-            else:
+            values = None
+            if kind != "btn":
                 values = {int(v) for v in (data.get("values") or []) if str(v).isdigit()}
-                await self._panel_select(interaction, lang, guild, member, member_ids, values, panel_ids, mode, unique)
+            _, msg = await self.panel_interact(guild, member, panel, kind, target=role_id, chosen=values, lang=lang)
+            await self._pf(interaction, msg)
         except Exception:  # noqa: BLE001
             log.exception("Fehler bei einer Panel-Interaktion.")
             try:
@@ -495,21 +499,49 @@ class Autorole(commands.Cog):
         except (discord.Forbidden, discord.HTTPException):
             return False
 
-    async def _panel_button(self, interaction, lang, guild, member, member_ids,
-                            target, panel_ids, mode, unique) -> None:
+    async def panel_interact(self, guild: discord.Guild, member, panel: dict | None, kind: str, *,
+                             target: int | None = None, chosen=None, lang: str | None = None) -> tuple[str, str]:
+        """Gemeinsame Panel-Logik für Discord (Button/Dropdown) und „Mein Bereich → Rollen“.
+
+        Prüft Panel vorhanden, Bot-Recht „Rollen verwalten“, Mitglied, Panel-Zugehörigkeit der Rolle
+        und die Rollen-Hierarchie, berechnet die Änderung nach den Panel-Regeln (Modus, „nur eine“)
+        und vergibt/entfernt die Rollen.
+
+        ``kind``: ``"btn"`` (``target`` = Rollen-ID) oder ``"sel"`` (``chosen`` = gewählte Rollen-IDs).
+        Rückgabe: ``(status, text)`` – status ``"changed"``, ``"none"`` (nichts zu tun) oder ``"error"``.
+        """
+        if lang is None:
+            lang = await self._lang(guild)
+        if panel is None:
+            return "error", t(lang, "panel_gone")
+        me = guild.me
+        if me is None or not me.guild_permissions.manage_roles:
+            return "error", t(lang, "panel_bot_no_perm")
+        if member is None:
+            return "error", t(lang, "panel_failed")
+        panel_ids = [int(r["role_id"]) for r in panel.get("roles", [])]
+        member_ids = {r.id for r in member.roles}
+        mode = panel.get("mode", "toggle")
+        unique = bool(panel.get("unique"))
+        if kind == "btn":
+            return await self._panel_button(lang, guild, member, member_ids, target, panel_ids, mode, unique)
+        return await self._panel_select(lang, guild, member, member_ids, set(chosen or ()), panel_ids, mode, unique)
+
+    async def _panel_button(self, lang, guild, member, member_ids,
+                            target, panel_ids, mode, unique) -> tuple[str, str]:
         if target not in panel_ids:
-            return await self._pf(interaction, t(lang, "panel_gone"))
+            return "error", t(lang, "panel_gone")
         role = guild.get_role(target)
         if role is None or self._assignable_reason(guild, role) is not None:
-            return await self._pf(interaction, t(lang, "panel_role_unavailable"))
+            return "error", t(lang, "panel_role_unavailable")
         add_ids, rem_ids = compute_button(member_ids, target, panel_ids, mode, unique)
         add_roles = self._filter_roles(guild, add_ids)
         rem_roles = self._filter_roles(guild, rem_ids)
         if not add_roles and not rem_roles:
             key = "panel_have" if (mode == "add" and target in member_ids) else "panel_none"
-            return await self._pf(interaction, t(lang, key, role=role.name))
+            return "none", t(lang, key, role=role.name)
         if not await self._panel_apply(member, add_roles, rem_roles):
-            return await self._pf(interaction, t(lang, "panel_failed"))
+            return "error", t(lang, "panel_failed")
         added_target = any(r.id == target for r in add_roles)
         removed_target = any(r.id == target for r in rem_roles)
         also_removed = [r for r in rem_roles if r.id != target]
@@ -521,23 +553,23 @@ class Autorole(commands.Cog):
             msg = t(lang, "panel_removed", role=role.name)
         else:
             msg = t(lang, "panel_updated")
-        await self._pf(interaction, msg)
+        return "changed", msg
 
-    async def _panel_select(self, interaction, lang, guild, member, member_ids,
-                            chosen, panel_ids, mode, unique) -> None:
+    async def _panel_select(self, lang, guild, member, member_ids,
+                            chosen, panel_ids, mode, unique) -> tuple[str, str]:
         add_ids, rem_ids = compute_select(member_ids, chosen, panel_ids, mode, unique)
         add_roles = self._filter_roles(guild, add_ids)
         rem_roles = self._filter_roles(guild, rem_ids)
         if not add_roles and not rem_roles:
-            return await self._pf(interaction, t(lang, "panel_none"))
+            return "none", t(lang, "panel_none")
         if not await self._panel_apply(member, add_roles, rem_roles):
-            return await self._pf(interaction, t(lang, "panel_failed"))
+            return "error", t(lang, "panel_failed")
         parts = []
         if add_roles:
             parts.append(t(lang, "panel_part_added", roles=", ".join(r.name for r in add_roles)))
         if rem_roles:
             parts.append(t(lang, "panel_part_removed", roles=", ".join(r.name for r in rem_roles)))
-        await self._pf(interaction, " • ".join(parts) if parts else t(lang, "panel_none"))
+        return "changed", (" • ".join(parts) if parts else t(lang, "panel_none"))
 
     # ----------------------------------------------------------------- #
     #  Befehle (hybrid = Text + Slash)

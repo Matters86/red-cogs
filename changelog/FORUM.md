@@ -17,6 +17,7 @@ Voraussetzung: der Cog `webcore` ist installiert und eingerichtet. Falls nötig 
 - Fester Ziel-Kanal pro Server + serverseitige Rechteprüfung (Poster-Rollen/Admin)
 - Optionaler `@Updates`-Ping als separate Nachricht vor dem Embed
 - Historie aller Posts inkl. Detailansicht und Löschfunktion im Dashboard
+- Optional öffentliche **JSON-/RSS-Schnittstelle** für Launcher und Websites (pro Server freischaltbar, Standard aus)
 
 **Schnellstart**
 ```
@@ -44,6 +45,6 @@ Voraussetzung: der Cog `webcore` ist installiert und eingerichtet. Falls nötig 
 | `[p]changelogset show` | Aktuelle Einstellungen anzeigen. | Admin / Manage Server |
 | `[p]changelogset history [anzahl]` | Letzte Changelogs auflisten (Standard: 5). | Admin / Manage Server |
 
-**Dashboard:** Seite **Changelog** unter `/cogs/changelog` – Einstellungen, Historie-Tabelle (mit „Zur Nachricht" und Löschen) und Detailansicht je Changelog.
+**Dashboard:** Seite **Changelog** unter `/cogs/changelog` – Einstellungen, Historie-Tabelle (mit „Zur Nachricht" und Löschen) und Detailansicht je Changelog. Reiter **Launcher & Website**: öffentliche JSON-/RSS-Adresse freigeben und kopieren.
 
 **Hinweis zum Formular:** Das Modal hat genau fünf Felder (Discord-Limit). Mindestens eines von *Neu/Geändert/Fixes* muss ausgefüllt sein; mehrzeilige Eingaben werden automatisch zu Bullet-Listen.

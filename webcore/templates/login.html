@@ -26,10 +26,10 @@
           <div><strong>{{ current_user.name }}</strong><br><small class="mono" style="color:var(--muted)">{{ current_user.id }}</small></div>
         </div>
         <div class="lc-msg info"><i class="bi bi-info-circle"></i>
-          <span>Der Bot-Owner kann deiner Discord-Rolle unter „Zugriff &amp; Rollen“ Rechte geben. Danach einfach neu laden.</span></div>
+          <span>Zugang haben das Team und – falls der Bot-Owner „Mein Bereich“ für deinen Server freigeschaltet hat – die Mitglieder. Nach einer Freischaltung einfach neu laden.</span></div>
         <a class="btn-discord" href="/logout" style="background:var(--panel-3)"><i class="bi bi-box-arrow-right"></i> Mit anderem Konto anmelden</a>
       {% else %}
-        <p>Melde dich mit deinem Discord-Konto an. Du siehst danach genau die Bereiche, für die deine Rolle freigeschaltet ist.</p>
+        <p>Für das Team und – falls freigeschaltet – die Mitglieder der Server. Melde dich mit deinem Discord-Konto an; du siehst danach genau die Bereiche, die für dich freigeschaltet sind.</p>
         {% if error %}<div class="lc-msg err"><i class="bi bi-exclamation-octagon"></i><span>{{ error }}</span></div>{% endif %}
         {% if not_configured %}
           <div class="lc-msg info"><i class="bi bi-gear"></i>

@@ -265,6 +265,15 @@ def _render_settings(ui, cog, guild, conf, csrf) -> str:
                  help="„Erst nach der Regel-Verifizierung“ wirkt nur, wenn dieser Server Discords Screening nutzt."),
     ), icon="bi-gear")
 
+    portal = ui.card("Mitglieder-Bereich", ui.switch(
+        "member_page", "Im Mitglieder-Bereich anzeigen", conf.get("member_page", True),
+        desc="Mitglieder können unter „Mein Bereich → Rollen“ dieselben Rollen wie über die geposteten "
+             "Rollen-Panels wählen (gleiche Regeln wie die Buttons, nur Panels aus Kanälen, die sie sehen).",
+    ) + ui.callout(
+        "Den Mitglieder-Bereich selbst schaltet der Bot-Owner pro Server unter <b>Verwaltung → Zugriff &amp; Rollen</b> "
+        "ein (oder mit <code>[p]webcore portal on</code>). Dieser Schalter blendet nur die Rollen-Seite aus.",
+    ), icon="bi-person-badge", desc="Rollen im Web wählen – für Mitglieder ohne Team-Rechte.")
+
     protect = ui.card("Zeitpunkt & Schutz", ui.grid(
         ui.field("Verzögerung", ui.number("delay", int(conf["delay"]), min=0, max=3600, unit="Sekunden"),
                  help="Wartezeit nach dem Beitritt vor der Vergabe (0 = sofort)."),
@@ -277,7 +286,7 @@ def _render_settings(ui, cog, guild, conf, csrf) -> str:
         "/cogs/autorole",
         ui.tab("rollen", "Beitrittsrollen", "bi-person-plus", roles + sticky + save,
                count=len(conf["join_roles"]) + len(conf["bot_roles"]))
-        + ui.tab("einstellungen", "Einstellungen", "bi-sliders", general + protect + save),
+        + ui.tab("einstellungen", "Einstellungen", "bi-sliders", general + protect + portal + save),
         csrf=csrf, hidden={"form": "settings", "guild": guild.id}, savebar=True,
     )
 
@@ -523,6 +532,7 @@ async def _handle_post(cog, request):
         scr = data.get("screening") or "auto"
         await gconf.screening.set(scr if scr in ("auto", "on", "off") else "auto")
         await gconf.enabled.set("enabled" in data)
+        await gconf.member_page.set("member_page" in data)
         try:
             delay = int(data.get("delay", 0))
         except (TypeError, ValueError):

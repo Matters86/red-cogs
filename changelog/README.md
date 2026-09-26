@@ -78,9 +78,94 @@ Die Seite **Changelog** erscheint nach dem Laden automatisch im WebCore-Dashboar
 
 - ein Einstellungs-Formular (Ziel-Kanal, Sprache, Poster-Rollen, Ping-Rolle + Schalter, Embed-Farbe, wählbare Kategorien, Text-Overrides),
 - eine **Historie-Tabelle** aller geposteten Changelogs (Datum, Kategorie, Titel, Kanal, Autor) mit Link „Zur Nachricht" und Löschfunktion,
-- eine **Detailansicht** je Changelog mit allen Abschnitten.
+- eine **Detailansicht** je Changelog mit allen Abschnitten,
+- den Reiter **Launcher & Website** zum Freigeben der öffentlichen JSON-/RSS-Schnittstelle (siehe unten).
 
 Die Server-Auswahl im Dashboard ist auf die Server beschränkt, die der eingeloggte User sehen darf.
+
+## Öffentliche API für Launcher & Website
+
+Die Changelogs eines Servers lassen sich ohne Login als **JSON** oder **RSS 2.0** abrufen – z. B. für
+einen Spiele-Launcher oder die eigene Website.
+
+**Einschalten:** Dashboard → **Changelog** → Reiter **Launcher & Website** → Schalter
+„Changelogs öffentlich abrufbar machen“ → Speichern. Standard: **aus**. Dort stehen auch die fertigen
+Adressen zum Kopieren und eine Beispiel-Antwort. Das Dashboard muss dafür **öffentlich erreichbar** sein
+(Reverse-Proxy mit HTTPS, siehe [`webcore/README.md`](../webcore/README.md)).
+
+| Adresse | Inhalt |
+|---|---|
+| `GET https://<dashboard>/api/public/changelog/<server-id>` | JSON |
+| `GET https://<dashboard>/api/public/changelog/<server-id>/rss` | RSS 2.0 (`application/rss+xml`) |
+
+Parameter (beide Formate): `limit` = Anzahl Einträge (1–50, Standard 10), `before` = Eintrags-ID
+(z. B. `cl12`) – liefert nur ältere Einträge (Blättern: Wert aus `next_before` der vorigen Antwort).
+
+- Ist die Freigabe aus oder gibt es den Server nicht, lautet die Antwort immer `404 {"error": "not_found"}`.
+- Ausgegeben werden nur Titel, Inhalte, Kategorie, Datum, **Anzeigename** des Autors und der Link zur
+  Discord-Nachricht – keine Nutzer-IDs.
+- WebCore setzt `Access-Control-Allow-Origin: *` (Abruf direkt aus dem Browser möglich),
+  `Cache-Control: public, max-age=60` und begrenzt auf 60 Abrufe pro Minute und IP.
+
+Beispiel-Antwort:
+
+```json
+{
+  "server": "Matters Community",
+  "entries": [
+    {
+      "id": "cl12",
+      "title": "Fahrzeug-Update",
+      "category": {"emoji": "🚗", "label": "Fahrzeuge"},
+      "sections": [
+        {"key": "neu", "title": "Neu", "emoji": "🚗", "items": ["Neues Polizeiauto", "Tuning-Menü"]},
+        {"key": "geaendert", "title": "Geändert", "emoji": "🔧", "items": ["Preise angepasst"]},
+        {"key": "fixes", "title": "Fixes", "emoji": "🐛", "items": ["Absturz beim Einparken behoben"]}
+      ],
+      "note": "Server-Neustart um 20 Uhr",
+      "created_at": "2026-09-25T18:00:00Z",
+      "author": "Matters86",
+      "url": "https://discord.com/channels/123456789012345678/234567890123456789/345678901234567890"
+    }
+  ],
+  "next_before": "cl11"
+}
+```
+
+`sections` enthält nur befüllte Bereiche (in der Sprache des Servers), `note` ist `null`, wenn kein
+Hinweis gesetzt ist, `next_before` ist `null`, wenn es keine älteren Einträge gibt.
+
+**curl:**
+
+```bash
+curl -s "https://dash.example.org/api/public/changelog/123456789012345678?limit=5"
+curl -s "https://dash.example.org/api/public/changelog/123456789012345678/rss"
+```
+
+**JavaScript (Launcher/Website):**
+
+```js
+const BASE = "https://dash.example.org/api/public/changelog/123456789012345678";
+
+async function loadChangelogs(limit = 10, before = null) {
+  const url = new URL(BASE);
+  url.searchParams.set("limit", limit);
+  if (before) url.searchParams.set("before", before);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Changelog nicht verfügbar (${res.status})`);
+  return res.json(); // { server, entries: [...], next_before }
+}
+
+const data = await loadChangelogs(5);
+for (const e of data.entries) {
+  console.log(e.created_at, e.title);
+  for (const s of e.sections) console.log(` ${s.emoji} ${s.title}:`, s.items.join(" · "));
+}
+// Ältere Einträge: loadChangelogs(5, data.next_before)
+```
+
+Texte immer als **Text** einfügen (z. B. `textContent`), nicht als HTML – die Inhalte stammen von
+Team-Mitgliedern und werden in JSON bewusst nicht HTML-escaped.
 
 ## Datenspeicherung
 

@@ -8,7 +8,11 @@ Dashboard-Seiten zu registrieren. Neue Cogs erscheinen automatisch in der Naviga
   **ansehen** oder **bearbeiten** darf. Team-Mitglieder melden sich mit Discord an und sehen
   nur ihre freigegebenen Bereiche.
 - **Globaler Server-Wechsler** in der Kopfzeile (die Auswahl bleibt beim Seitenwechsel erhalten).
-- **Audit-Log:** jede Änderung über das Dashboard mit Nutzer, Server, Seite und Ergebnis.
+- **Audit-Log:** jede Änderung über das Dashboard mit Nutzer, Server, Seite und Ergebnis – auf Wunsch
+  zusätzlich als Embed in einem Discord-Kanal.
+- **Mein Bereich (Mitglieder-Bereich):** pro Server zuschaltbar – normale Mitglieder melden sich an und
+  sehen ausschließlich ihre persönlichen Seiten (z. B. eigene Tickets, eigenes Profil).
+- **Öffentliche API** (`/api/public/…`) für Launcher/Websites – ohne Login, mit CORS, Cache und Rate-Limit.
 - Einheitliche, übersichtliche Seiten (Reiter, Kennzahlen, Hilfetexte, Speicherleiste) über das
   gemeinsame UI-Kit; mobil bedienbar.
 - Login-Seite, Nutzer-Menü mit Avatar und Rolle, Toast-Meldungen.
@@ -51,6 +55,8 @@ Dashboard-Seiten zu registrieren. Neue Cogs erscheinen automatisch in der Naviga
 | `[p]webcore deny <user>` | Freigabe entfernen |
 | `[p]webcore roleperm <rolle> <seite\|alle> <none\|view\|edit>` | Dashboard-Recht einer Rolle setzen (im Server ausführen) |
 | `[p]webcore roles` | Dashboard-Rechte der Rollen dieses Servers anzeigen |
+| `[p]webcore portal <on\|off>` | „Mein Bereich“ für Mitglieder dieses Servers ein-/ausschalten (im Server ausführen) |
+| `[p]webcore auditchannel [#kanal]` | Audit-Log dieses Servers zusätzlich in einen Kanal posten; ohne Kanal = aus (im Server ausführen) |
 | `[p]webcore settings` | Aktuelle Einstellungen anzeigen (ohne Secret) |
 
 Alle `webcore`-Befehle sind dem Bot-Owner vorbehalten.
@@ -86,6 +92,40 @@ Im Dashboard unter **Verwaltung → Zugriff & Rollen** (nur Bot-Owner):
 **Verwaltung → Audit-Log** zeigt jede speichernde Aktion im Dashboard: Zeit, Nutzer, Server,
 Seite, Aktion und Ergebnis – auch abgelehnte Versuche ohne Bearbeitungsrecht. Aufbewahrt werden
 die letzten 300 Einträge; Suche und Server-Filter sind eingebaut.
+
+### Audit-Log nach Discord
+
+Oben auf der Audit-Seite (Server oben rechts wählen) legt der Bot-Owner je Server einen
+**Log-Kanal** fest – oder im Server mit `[p]webcore auditchannel #kanal` (ohne Kanal = aus).
+Danach erscheint jeder Eintrag dieses Servers zusätzlich als Embed im Kanal: Zeit, Nutzer (als
+Erwähnung, **ohne Ping**), Seite, Aktion und Ergebnis – grün für OK, rot für **abgelehnte Zugriffe**.
+Das Posten läuft im Hintergrund; ist der Kanal weg oder fehlen dem Bot Rechte, wird das nur im
+Bot-Log vermerkt, das Dashboard arbeitet normal weiter. Einträge ohne Server (z. B. botweite
+Einstellungen) werden nicht gepostet.
+
+## Mein Bereich (Mitglieder-Bereich)
+
+Normale Server-Mitglieder ohne Team-Rechte können sich – wenn du es erlaubst – im Dashboard anmelden
+und sehen dort **ausschließlich „Mein Bereich“**: eine Übersicht mit Kacheln und die
+Mitglieder-Seiten, die Module anbieten (z. B. eigene Tickets). Team-Seiten, Übersicht mit
+Bot-Kennzahlen, „Zugriff & Rollen“ und Audit-Log bleiben für sie gesperrt (403 bzw. Umleitung nach `/me`).
+
+**Einschalten (Bot-Owner):** *Verwaltung → Zugriff & Rollen* → Server oben rechts wählen → Karte
+„Mitglieder-Bereich“ → Schalter an → Speichern. Oder im Server: `[p]webcore portal on`.
+Standard: auf allen Servern **aus**. Jede Änderung landet im Audit-Log.
+
+- Zugang haben Mitglieder der Server, auf denen der Bereich an ist. Die Mitgliedschaft wird bei
+  **jeder Anfrage live** geprüft – wer den Server verlässt, verliert den Zugang sofort.
+- Wer auf mehreren freigeschalteten Servern ist, wechselt oben rechts; fremde Server lassen sich
+  auch über `?guild=` nicht öffnen (der Versuch wird abgelehnt und protokolliert).
+- **Team und Owner** sehen in der Navigation zusätzlich den Abschnitt „Mein Bereich“, sobald er auf
+  einem ihrer Server aktiv ist, und können ihn auf ihren Team-Servern auch bei ausgeschaltetem
+  Schalter als **Vorschau** öffnen (Button „Vorschau öffnen“ in der Karte).
+- Schutz vor Missbrauch: höchstens **30 Speicher-Aktionen pro Minute** und Nutzer (danach Meldung
+  „Zu viele Anfragen“, HTTP 429). Aktionen von Mitgliedern landen **nicht** im Audit-Log (sonst
+  würde es geflutet) – abgelehnte Zugriffe (fremder Server, ungültiges Token, Rate-Limit) schon.
+- Discord-Login mit Scope `identify` genügt; das Members-Intent wird empfohlen (sonst prüft WebCore
+  die Mitgliedschaft per API-Abfrage mit 5 Minuten Cache).
 
 ## Sicherheit
 
@@ -282,3 +322,74 @@ den Wechsler in der Kopfzeile.
 
 **Meldungen:** `?ok=<Text>` bzw. `?err=<Text>` in der Weiterleitung nach einem POST zeigt WebCore
 als Toast an (Hinweisbalken mit einer Klasse `…-flash` werden dann ausgeblendet).
+
+## Für Cog-Entwickler: Mitglieder-Seiten („Mein Bereich“)
+
+```python
+def _register_dashboard(self, webcore):
+    webcore.register_page(owner=self, slug="tickets", name="Tickets", handler=self.dashboard_page)
+    webcore.register_member_page(
+        owner=self, slug="tickets", name="Meine Tickets", handler=self.member_page,
+        icon="bi-ticket-perforated", description="Deine offenen und geschlossenen Tickets.",
+    )
+
+async def member_page(self, request):
+    guild = request["wc_member_guild"]      # discord.Guild (gewählter Server)
+    member = request["wc_member"]           # discord.Member des angemeldeten Users auf diesem Server
+    csrf = request["webcore_csrf"]
+    ui = request.app["webcore"].ui
+    if request.method == "POST":            # CSRF + Rate-Limit schon geprüft
+        form = await request.post()
+        ...                                  # nur Daten von `member` ändern!
+        return {"redirect": f"/me/tickets?guild={guild.id}&ok=Gespeichert"}
+    return {"title": "Meine Tickets", "content": ui.card("Offen", "…")}
+```
+
+| API | Zweck |
+|---|---|
+| `register_member_page(owner, slug, name, handler, icon="bi-grid", description="")` | Seite unter `/me/<slug>` (GET + POST); Kachel auf `/me` mit Icon, Name, Beschreibung |
+| `request["wc_member_guild"]` / `request["wc_member"]` / `request["webcore_csrf"]` | vor dem Handler gesetzt: Server, eigenes `discord.Member`, CSRF-Token |
+| `await webcore.portal_guilds(request)` | Server, die der User in „Mein Bereich“ wählen darf |
+| `await webcore.member_context(request)` | `(guild, member)` oder `None` (auch außerhalb von `/me/<slug>` nutzbar) |
+| `unregister_owner(owner)` | entfernt auch Mitglieder-Seiten und öffentliche APIs |
+
+- Handler-Rückgabe wie bei Cog-Seiten: `{"title", "content"}`, `{"redirect": url}` oder eine `web.Response`.
+- Server-Auswahl: `?guild=<id>` (WebCore hängt ihn an und zeigt den Wechsler). Bei POST zählt das Feld
+  `guild`/`guild_id`, sonst `?guild=` – immer gegen die erlaubten Server geprüft.
+- Jedes Formular sendet `csrf_token` mit (z. B. über `ui.form(..., csrf=request["webcore_csrf"])`).
+- Fehler im Handler zeigen Mitgliedern nur eine neutrale Meldung (Details im Bot-Log).
+
+**Regeln (Pflicht):**
+1. **Nur eigene Daten** des Mitglieds anzeigen und ändern – immer über `request["wc_member"].id` filtern,
+   nie über IDs aus Formular/URL (sonst kann man fremde Tickets/Profile abrufen).
+2. **Jede Aktion serverseitig prüfen** wie der entsprechende Discord-Button (Cooldowns, Limits,
+   „darf dieses Mitglied das überhaupt“ – z. B. Ticket nur schließen, wenn es sein eigenes ist).
+3. Keine Team-Informationen (interne Notizen, Logs, andere Mitglieder) ausgeben; Werte mit `html.escape`.
+4. `visible_guilds`/`page_level` gelten hier nicht (liefern im Mitglieder-Bereich `[]` bzw. 0) –
+   `portal_guilds`/`member_context` verwenden.
+
+## Für Cog-Entwickler: öffentliche API (Launcher/Websites)
+
+```python
+from aiohttp import web
+
+def _register_dashboard(self, webcore):
+    webcore.register_public_api(owner=self, slug="serverstatus", handler=self.public_status)
+
+async def public_status(self, request):
+    tail = request.match_info.get("tail", "")   # /api/public/serverstatus/<tail>
+    return web.json_response({"online": 42, "tail": tail})
+```
+
+- Erreichbar unter `GET /api/public/<slug>` und `GET /api/public/<slug>/<beliebiger/rest>` –
+  **ohne Login und ohne Sitzung** (es wird kein Cookie gelesen oder gesetzt).
+- WebCore setzt `Access-Control-Allow-Origin: *` (nur GET/OPTIONS, Preflight wird beantwortet) und
+  `Cache-Control: public, max-age=60` (ein eigener `Cache-Control`-Header des Handlers hat Vorrang).
+- Rate-Limit: **60 Anfragen pro Minute und IP** (danach `429` mit `Retry-After`).
+- Fehler im Handler → `500` mit `{"error": "internal_error"}` (kein Stacktrace, Details im Bot-Log);
+  unbekannter slug → `404` `{"error": "not_found"}`. `web.HTTPNotFound()` usw. im Handler werden als
+  JSON-Fehler mit passendem Status ausgeliefert.
+- Nur **öffentliche** Daten ausliefern (keine Nutzer-IDs, Tokens, internen Notizen).
+- Hinter einem Reverse-Proxy: Die Client-IP für das Rate-Limit kommt aus `X-Forwarded-For`, aber nur,
+  wenn die Verbindung von `127.0.0.1`/`::1` oder aus einem privaten Netz (z. B. Docker, Synology-Proxy)
+  kommt; sonst zählt die direkte Gegenstelle (gefälschte Header aus dem Internet wirken nicht).

@@ -19,11 +19,16 @@ red-cogs/
 ├── CONVENTIONS.md            # diese Datei
 ├── COG-BRIEF-TEMPLATE.md     # pro Cog-Chat ausfüllen
 ├── webcore/                  # Dashboard-Kern
+├── tests/                    # automatische Tests (run_all.py) – kein Cog, ohne info.json
+├── .github/workflows/        # CI (tests.yml)
 └── <cog>/                    # je Cog: __init__.py, <cog>.py, info.json, README.md, FORUM.md
 ```
 
 ## Namens- & Code-Regeln
 - Ordnername: kleingeschrieben, ein Wort (z. B. `welcomer`)
+- Cog-Ordner **nie** wie ein Python-Standardmodul oder einen Red-Core-Cog benennen (z. B. `warnings`,
+  `logging`, `json`, `admin`, `mod`) – das Paket überdeckt sonst das Modul bzw. kollidiert mit Reds
+  eigenem Cog (deshalb heißt das Verwarnsystem `warns`). `tests/realred.py` prüft das.
 - Cog-Klasse: CamelCase (`Welcomer`)
 - `Config.get_conf(self, identifier=<eindeutige Zahl>, force_registration=True)` —
   jede Zahl nur **einmal** vergeben (Liste unten pflegen!)
@@ -48,7 +53,12 @@ red-cogs/
 | changelog | 274069153822 |
 | onlyimagevideo | 472619305847 |
 | fivemadmin | 10539329 (`0xA0D141`, Altbestand ohne `force_registration` – nicht ändern, sonst Datenverlust) |
+| twitchlive | 618305729164 |
+| welcome | 730418295561 |
+| warns | 551902837146 |
 | _neue hier ergänzen_ | |
+
+`tests/realred.py` prüft, dass jede Zahl im Code nur einmal vorkommt und hier eingetragen ist.
 
 ## info.json pro Cog — Vorlage
 ```json
@@ -135,11 +145,33 @@ async def dashboard_page(self, request):
   bzw. synchron `member.id in self.bot.owner_ids`. Reds Dekoratoren (`commands.has_permissions`,
   `admin_or_permissions` …) machen das schon selbst.
 
+### Mitglieder-Seiten („Mein Bereich“, `/me/<slug>`) — optional
+Cogs dürfen normalen Mitgliedern eigene Seiten anbieten (`webcore.register_member_page(...)`,
+Details und Beispiel: `webcore/README.md` → „Für Cog-Entwickler: Mitglieder-Seiten“). Pflicht dabei:
+- **Nur eigene Daten**: immer über `request["wc_member"]` filtern, nie über IDs aus Formular/URL;
+  Server nur aus `request["wc_member_guild"]` bzw. `portal_guilds`/`member_context` – nicht `visible_guilds`.
+- **Gleiche Logik wie die Discord-Buttons**: dieselbe Cog-Funktion aufrufen (Limits, Cooldowns,
+  Rechte, Rollen-Hierarchie), keine zweite Implementierung; Ergebnis per `?ok=`/`?err=`.
+- **Abschaltbar**: `visible=lambda g: self.config.guild(g).member_page()` mitgeben und im
+  Team-Dashboard einen Schalter „Im Mitglieder-Bereich anzeigen“ anbieten; ist er aus, sind Seite
+  und Aktionen gesperrt.
+- Keine Team-Interna ausgeben, alles mit `html.escape`, Formulare mit `csrf_token`.
+
+## Tests (Pflicht)
+- Jeder Cog braucht eine Test-Suite in `tests/` (Anleitung: `tests/README.md` → „Test für einen
+  neuen Cog ergänzen“) und einen Eintrag in `tests/run_all.py` (`SUITES`). `run_all.py` meldet
+  Cogs, die von keiner Test-Datei importiert werden.
+- Neue `requirements` aus der `info.json` auch in `tests/requirements.txt` eintragen.
+- Vor jedem Push: `python tests/run_all.py` muss grün sein. Die GitHub Action
+  (`.github/workflows/tests.yml`: `compileall`, `pyflakes`, `run_all.py`) läuft bei jedem Push und
+  Pull-Request – ohne grüne CI ist Punkt 4 der Definition of Done nicht erfüllt.
+- Tests ändern nie Cog-Code, sondern setzen Fakes zur Laufzeit ein; keine festen Pfade oder Ports.
+
 ## Definition of Done (ein Cog ist erst fertig, wenn ALLE 4 stehen)
 1. **Code** — `<cog>/` mit `__init__.py`, `<cog>.py`, `info.json`
 2. **Dashboard-Seite** — `register_page(...)` + `cog_unload`-Aufräumen + `on_webcore_ready`
 3. **Doku** — `README.md` und `FORUM.md` (Deutsch, mit Befehlstabelle)
-4. **GitHub** — committen/pushen + im Repo-`README.md` die Cog-Tabelle ergänzen
+4. **GitHub** — Test-Suite in `tests/` grün, committen/pushen + im Repo-`README.md` die Cog-Tabelle ergänzen
 
 ## Doku-Format
 - **README.md**: Kurzbeschreibung · Installation · Befehlstabelle (Befehl · Beschreibung · Rechte) · Dashboard-Abschnitt
