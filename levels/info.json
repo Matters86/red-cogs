@@ -1,0 +1,12 @@
+{
+    "name": "Levels",
+    "short": "Levelsystem: XP für Nachrichten und Voice, Level-Up-Meldungen, Rollen-Belohnungen und Rangkarte.",
+    "description": "Mitglieder sammeln XP für Nachrichten (Standard 15–25 XP, 60 s Cooldown) und optional für Zeit in Sprachkanälen, steigen nach der MEE6-Kurve (5·L²+50·L+100) im Level auf und erhalten Rollen-Belohnungen (stapelnd oder nur die höchste). Level-Up-Meldung im selben Kanal, festen Kanal oder per DM, Rangkarte als Bild ([p]rank), Rangliste ([p]leaderboard/[p]top), ausgeschlossene Kanäle/Rollen und XP-Multiplikatoren. WebCore-Dashboard „Level“ und Mitglieder-Seite „Mein Level“.",
+    "tags": ["levels", "level", "xp", "rank", "leaderboard", "rangliste", "rewards", "dashboard"],
+    "requirements": ["Pillow"],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert pro Server und Mitglied die XP, das Level und den Zeitpunkt der letzten XP-Nachricht (für den Cooldown). Nachrichteninhalte werden nicht gespeichert. Avatare werden nur kurz im Arbeitsspeicher zwischengespeichert, um die Rangkarte zu erzeugen. Die Daten lassen sich über Reds Datenlöschung entfernen."
+}

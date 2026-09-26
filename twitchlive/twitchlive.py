@@ -14,6 +14,7 @@ from redbot.core.utils.chat_formatting import pagify
 
 from .api import AuthError, NoCredentials, RateLimited, TwitchAPI, TwitchError
 from .dashboard import dashboard_handler
+from .public import public_handler
 from .embed import (
     LIMIT_TEMPLATE, LIMIT_TITLE, cap, ended_embed, link_view, live_embed, parse_ts, render_template, stream_url,
 )
@@ -75,6 +76,7 @@ class TwitchLive(commands.Cog):
             state={},                  # login -> laufende Live-Sitzung (Nachricht-ID, Stream-ID, live seit …)
             announced={},              # login -> zuletzt gemeldete Stream-ID (gegen Doppelmeldungen, auch nach Neustart)
             stats={"day": "", "today": 0, "total": 0},
+            public_api=False,          # öffentliche JSON-API /api/public/twitch/<id> für Launcher & Website
         )
         self.api = TwitchAPI(self._credentials, clock=lambda: self._now())
         self._task: asyncio.Task | None = None
@@ -216,9 +218,15 @@ class TwitchLive(commands.Cog):
             icon="bi-twitch",
             handler=self.dashboard_page,
         )
+        # Öffentliche API für Launcher/Websites (pro Server im Dashboard freizugeben, Standard aus).
+        if hasattr(webcore, "register_public_api"):  # ältere WebCore-Versionen ohne öffentliche API
+            webcore.register_public_api(owner=self, slug="twitch", handler=self.public_api)
 
     async def dashboard_page(self, request):
         return await dashboard_handler(self, request)
+
+    async def public_api(self, request):
+        return await public_handler(self, request)
 
     # ----------------------------------------------------------------- #
     #  Hintergrund: eine gemeinsame Abfrage für alle Server

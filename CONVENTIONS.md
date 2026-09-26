@@ -56,6 +56,10 @@ red-cogs/
 | twitchlive | 618305729164 |
 | welcome | 730418295561 |
 | warns | 551902837146 |
+| serverstats | 683920147265 |
+| levels | 427610958372 |
+| giveaways | 739164825013 |
+| scheduler | 862057319448 |
 | _neue hier ergänzen_ | |
 
 `tests/realred.py` prüft, dass jede Zahl im Code nur einmal vorkommt und hier eingetragen ist.

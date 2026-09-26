@@ -36,6 +36,12 @@ SUITES = [
     ("wl_test_welcome", "welcome: Beitritt/Verlassen, Willkommensbild, DM, Befehle, Dashboard"),
     ("wl_test_warns", "warns: Punkte, Verfall, Maßnahmen mit Hierarchie-Schutz, Befehle, Dashboard"),
     ("fivem_functest", "fivemadmin: WebCore-Seite, Panel-Rechte, keine Secrets im HTML"),
+    ("fx_test", "tickets + raidhelper + twitchlive: Datenlöschung, „Neu posten“, öffentliche APIs raids/twitch"),
+    ("ws_test", "WebCore: Bot-Status, Fehlerprotokoll (Handler, Maskierung, kein Doppel-Handler), Sichern & Wiederherstellen, Audit-Tabelle"),
+    ("st_test", "serverstats: Zählung, Puffer/Flush, Voice-Zeit, Aufbewahrung, keine Personendaten, SVG-Diagramme, CSV, Befehle, Dashboard-Rechte"),
+    ("lv_test", "levels: XP/Cooldown/Kurve, Voice-XP, Level-Up-Meldung, Belohnungen, Rangkarte, Rangliste, Befehle, Dashboard, /me/level, Datenlöschung"),
+    ("gv_test", "giveaways: Teilnahme-Regeln, persistente Buttons, faire Auslosung, Downtime-Nachholen, Reroll/Ende/Abbruch, Rechte, Dashboard, /me/gewinnspiele"),
+    ("sc_test", "scheduler: nächster Termin (alle Typen, Sommerzeit, Monatsende), Downtime-Regel, Auto-Pause, allowed_mentions, Dashboard, Befehle"),
 ]
 
 # Dateien in tests/, die keine Suite sind

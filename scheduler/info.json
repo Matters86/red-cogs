@@ -1,0 +1,22 @@
+{
+    "name": "Scheduler",
+    "short": "Geplante Nachrichten: einmalig, täglich, an Wochentagen, monatlich oder im Intervall – mit Dashboard.",
+    "description": "Der Bot postet Nachrichten automatisch nach Zeitplan: Text und/oder Embed (Titel, Text, Farbe, Bild), optional mit Rollen-Ping (es wird ausschließlich diese Rolle erwähnt). Zeitpläne: einmalig, täglich, wöchentlich an ausgewählten Wochentagen, monatlich am Tag X (Monatsende sauber) oder alle N Minuten/Stunden (mindestens 10 Minuten). Zeitzone je Server (IANA) mit korrekter Sommerzeit, Start-/Enddatum, pausieren, „vorherige Nachricht löschen“. Nach Bot-Downtime werden verpasste Termine nicht nachgeholt (außer der letzte liegt unter 10 Minuten zurück); nach 5 Fehlern in Folge pausiert ein Eintrag automatisch. Verwaltung per Befehl oder komplett über das WebCore-Dashboard mit Vorschau und „Jetzt testen“. Mehrsprachige Bot-Antworten (Deutsch/Englisch).",
+    "tags": [
+        "schedule",
+        "zeitplan",
+        "geplant",
+        "nachrichten",
+        "timer",
+        "dashboard",
+        "i18n"
+    ],
+    "requirements": [
+        "tzdata"
+    ],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert pro geplanter Nachricht deren Inhalt, Kanal und Zeitplan sowie die Discord-ID der Person, die den Eintrag angelegt bzw. zuletzt bearbeitet hat. Auf Anfrage (Red-Datenlöschung) werden diese IDs anonymisiert. Nachrichteninhalte stammen vom Server-Team."
+}

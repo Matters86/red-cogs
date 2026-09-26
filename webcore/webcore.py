@@ -2,10 +2,14 @@ import asyncio
 import hashlib
 import inspect
 import ipaddress
+import json
 import logging
+import os
 import re
 import secrets
 import socket
+import sys
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlencode
@@ -29,13 +33,23 @@ from datetime import datetime, timezone
 import discord
 
 from . import access as acl
+from . import backup as bk
+from . import errorlog
 from . import ui as _ui
-from .admin_pages import render_access, render_audit, render_audit_channel, render_member_home, render_portal_card
+from .admin_pages import (
+    render_access, render_audit, render_audit_channel, render_backup, render_backup_preview, render_errors,
+    render_member_home, render_portal_card, render_status,
+)
 
 try:
     import psutil
 except Exception:  # psutil ist optional
     psutil = None
+
+try:
+    import resource  # nur Unix – Fallback für RAM/CPU ohne psutil
+except Exception:  # pragma: no cover – Windows
+    resource = None
 
 log = logging.getLogger("red.red-cogs.webcore")
 
@@ -46,7 +60,7 @@ DISCORD_TOKEN = f"{DISCORD_API}/oauth2/token"
 # das verschlüsselte Cookie unbegrenzt – ein einmal abgegriffenes Cookie für immer.
 SESSION_MAX_AGE = 7 * 86400
 # Cache-Buster für /static/webcore.css (bei Theme-Änderungen erhöhen).
-ASSET_VERSION = "8"
+ASSET_VERSION = "9"
 # Rollen mit diesen Rechten darf nur vergeben (per Autorole/Ticket-Inhaberrolle …),
 # wer Owner/Allowlist oder Discord-Administrator ist – sonst könnte sich ein
 # Team-Mitglied mit Dashboard-Rechten selbst hochstufen.
@@ -73,6 +87,14 @@ AUDIT_DENY_THROTTLE = 60.0
 # Höchstens so viele Audit-Nachrichten gleichzeitig unterwegs nach Discord (Rest wird verworfen).
 AUDIT_POST_MAX_PENDING = 50
 _PUBLIC_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+# Sichern & Wiederherstellen: Vorschau gilt so lange (Sekunden); so viele „Rückgängig“-Stände je Server.
+IMPORT_PREVIEW_TTL = 30 * 60
+IMPORT_UNDO_KEEP = 5
+# Namen der Owner-Seiten (Audit-Log, Discord-Embed)
+OWNER_PAGE_LABELS = {
+    "access": "Zugriff & Rollen", "audit": "Audit-Log", "status": "Bot-Status",
+    "errors": "Fehlerprotokoll", "backup": "Sichern & Wiederherstellen",
+}
 
 
 def _int(value, default: int) -> int:
@@ -262,6 +284,13 @@ class WebCore(commands.Cog):
         self.recent: collections.deque = collections.deque(maxlen=12)
         self._loaded_at = datetime.now(timezone.utc)
         self._process = None
+        # Fehlerprotokoll (logging.Handler am Logger ``red``) und bekannte Secrets zum Maskieren.
+        self._errorlog = None
+        self._known_secrets: set = set()
+        # Sichern & Wiederherstellen: offene Vorschauen und „Rückgängig“-Stände (nur im RAM).
+        self._import_pending: dict = {}
+        self._import_undo: dict = {}
+        self._backup_lock = asyncio.Lock()
         # Kurzlebiger Cache für fetch_member-Fallback (admin-Modus ohne Member-Cache):
         # (guild_id, user_id) -> (ablauf_ts, member_or_none). Verhindert fetch-Stürme.
         self._member_cache: dict[tuple[int, int], tuple[float, object]] = {}
@@ -371,9 +400,67 @@ class WebCore(commands.Cog):
                 self._process.cpu_percent(None)  # CPU-Messung initialisieren
             except Exception:
                 self._process = None
-        await self._start_webserver()
+        self._install_error_log()
+        try:
+            await self._refresh_known_secrets()
+        except Exception:  # noqa: BLE001
+            log.debug("Secrets für das Fehlerprotokoll nicht ermittelbar", exc_info=True)
+        try:
+            await self._start_webserver()
+        except BaseException:
+            # Red ruft cog_unload nach einem fehlgeschlagenen cog_load nicht auf -> Handler selbst entfernen.
+            self._remove_error_log()
+            raise
+
+    def _install_error_log(self):
+        """Fehlerprotokoll-Handler am Logger ``red`` anbringen (ersetzt einen vorhandenen, nie doppelt)."""
+        self._errorlog = errorlog.install(secrets_provider=lambda: self._known_secrets)
+        return self._errorlog
+
+    def _remove_error_log(self):
+        errorlog.remove(self._errorlog)
+        self._errorlog = None
+
+    async def _refresh_known_secrets(self) -> None:
+        """Werte, die im Fehlerprotokoll nie im Klartext erscheinen dürfen (Bot-Token, OAuth-Secret,
+        API-Keys aus ``[p]set api`` und Secret-Schlüssel der Cog-Konfigurationen)."""
+        found = set()
+
+        def walk(value, secret_name=False):
+            if isinstance(value, dict):
+                for k, v in value.items():
+                    walk(v, secret_name or bk.is_secret_key(k))
+            elif isinstance(value, list):
+                for v in value:
+                    walk(v, secret_name)
+            elif secret_name and isinstance(value, (str, int)) and len(str(value)) >= 6:
+                found.add(str(value))
+
+        data = await self.config.all()
+        walk({"client_secret": data.get("client_secret"), "secret_key": data.get("secret_key")})
+        token = getattr(getattr(self.bot, "http", None), "token", None)
+        if token:
+            found.add(str(token))
+        getter = getattr(self.bot, "get_shared_api_tokens", None)
+        if getter is not None:
+            try:
+                tokens = await getter()
+                for service in (tokens or {}).values():
+                    if isinstance(service, dict):
+                        found.update(str(v) for v in service.values() if v and len(str(v)) >= 6)
+            except Exception:  # noqa: BLE001
+                pass
+        for cog in bk.backup_cogs(self).values():
+            try:
+                walk(await cog.config.all())
+            except Exception:  # noqa: BLE001
+                pass
+        self._known_secrets = found
 
     async def cog_unload(self):
+        self._remove_error_log()
+        self._import_pending.clear()
+        self._import_undo.clear()
         for task in list(self._bg_tasks):
             task.cancel()
         if self.site is not None:
@@ -441,6 +528,11 @@ class WebCore(commands.Cog):
                 web.post("/access", self.handle_access),
                 web.get("/audit", self.handle_audit),
                 web.post("/audit", self.handle_audit),
+                web.get("/status", self.handle_status),
+                web.get("/errors", self.handle_errors),
+                web.post("/errors", self.handle_errors),
+                web.get("/backup", self.handle_backup),
+                web.post("/backup", self.handle_backup),
                 web.get("/api/overview", self.handle_overview_api),
                 # Mitglieder-Bereich und öffentliche API: je EINE feste Route, die zu den
                 # registrierten Handlern verteilt (der aiohttp-Router ist nach dem Start
@@ -857,10 +949,8 @@ class WebCore(commands.Cog):
     #  Audit-Log nach Discord
     # ----------------------------------------------------------------- #
     def _page_label(self, slug) -> str:
-        if slug == "access":
-            return "Zugriff & Rollen"
-        if slug == "audit":
-            return "Audit-Log"
+        if slug in OWNER_PAGE_LABELS:
+            return OWNER_PAGE_LABELS[slug]
         if slug and str(slug).startswith("me:"):
             p = self.member_pages.get(slug[3:])
             return f"Mein Bereich: {p.name if p else slug[3:]}"
@@ -1687,8 +1777,7 @@ class WebCore(commands.Cog):
         entries = await self.config.audit()
         page_names = {p.slug: p.name for p in self.pages.values()}
         page_names.update({f"me:{p.slug}": f"Mein Bereich: {p.name}" for p in self.member_pages.values()})
-        page_names["access"] = "Zugriff & Rollen"
-        page_names["audit"] = "Audit-Log"
+        page_names.update(OWNER_PAGE_LABELS)
         page_names["me"] = "Mein Bereich"
         guild_names = {}
         for e in entries:
@@ -1700,6 +1789,344 @@ class WebCore(commands.Cog):
         return aiohttp_jinja2.render_template(
             "page.html", request,
             self._page_ctx(request, title="Audit-Log", content=content, active_page="audit"),
+        )
+
+    # ----------------------------------------------------------------- #
+    #  Owner-Seiten: Bot-Status, Fehlerprotokoll
+    # ----------------------------------------------------------------- #
+    def _process_info(self) -> dict:
+        """RAM/CPU des Bot-Prozesses: psutil (in Red enthalten), sonst ``resource`` (nur Spitzenwerte)."""
+        proc = self._process
+        if proc is None and psutil is not None:
+            try:
+                proc = self._process = psutil.Process()
+                proc.cpu_percent(None)
+            except Exception:  # noqa: BLE001
+                proc = None
+        if proc is not None:
+            try:
+                with proc.oneshot():
+                    return {
+                        "source": "psutil",
+                        "rss_mb": round(proc.memory_info().rss / 1048576),
+                        "mem_pct": round(proc.memory_percent(), 1),
+                        "cpu_pct": round(proc.cpu_percent(None), 1),
+                        "threads": proc.num_threads(),
+                        "pid": proc.pid,
+                        "cpu_count": psutil.cpu_count() or None,
+                    }
+            except Exception:  # noqa: BLE001
+                pass
+        if resource is not None:
+            try:
+                ru = resource.getrusage(resource.RUSAGE_SELF)
+                # Linux: KiB, macOS: Bytes
+                peak = ru.ru_maxrss / (1048576 if sys.platform == "darwin" else 1024)
+                cpu = int(ru.ru_utime + ru.ru_stime)
+                return {
+                    "source": "resource",
+                    "rss_mb": round(peak),
+                    "cpu_time": f"{cpu // 3600}h {(cpu % 3600) // 60}m {cpu % 60}s",
+                    "threads": threading.active_count(),
+                    "pid": os.getpid(),
+                }
+            except Exception:  # noqa: BLE001
+                pass
+        return {"source": None}
+
+    def _cog_rows(self) -> list:
+        """Geladene Cogs mit ihren WebCore-Registrierungen (Seiten, Mitglieder-Seiten, öffentliche APIs)."""
+        cogs = {}
+        for name, cog in dict(getattr(self.bot, "cogs", None) or {}).items():
+            cogs[str(name)] = cog
+        for reg in list(self.pages.values()) + list(self.member_pages.values()) + list(self.public_apis.values()):
+            name = getattr(reg.owner, "qualified_name", None) or str(reg.owner)
+            cogs.setdefault(str(name), reg.owner)
+        rows = []
+        for name, cog in sorted(cogs.items(), key=lambda kv: kv[0].lower()):
+            module = type(cog).__module__ or ""
+            try:
+                n_cmds = sum(1 for _ in cog.walk_commands()) if hasattr(cog, "walk_commands") else None
+            except Exception:  # noqa: BLE001
+                n_cmds = None
+            rows.append({
+                "name": name,
+                "core": module.startswith("redbot."),
+                "package": module.split(".")[0] if module and module not in ("types", "builtins") else "",
+                "commands": n_cmds,
+                "pages": [(p.slug, p.name) for p in sorted(self.pages.values(), key=lambda x: x.name.lower())
+                          if p.owner is cog],
+                "member_pages": [(p.slug, p.name) for p in sorted(self.member_pages.values(), key=lambda x: x.name.lower())
+                                 if p.owner is cog],
+                "apis": [(a.slug, f"/api/public/{a.slug}") for a in sorted(self.public_apis.values(), key=lambda x: x.slug)
+                         if a.owner is cog],
+            })
+        return rows
+
+    def _error_records(self) -> list:
+        """Einträge des Fehlerprotokolls (neueste zuerst), zur Anzeige erneut maskiert."""
+        if self._errorlog is None:
+            return []
+        known = tuple(self._known_secrets)
+        out = []
+        for r in self._errorlog.snapshot():
+            r = dict(r)
+            r["message"] = errorlog.mask_secrets(r.get("message"), known)
+            r["traceback"] = errorlog.mask_secrets(r.get("traceback"), known)
+            r["time"] = errorlog.fmt_time(r.get("ts"))
+            out.append(r)
+        return out
+
+    async def _collect_status(self) -> dict:
+        bot = self.bot
+        started = self._aware(getattr(bot, "uptime", None) or self._loaded_at)
+        lat = getattr(bot, "latency", None)
+        latency = round(lat * 1000) if isinstance(lat, (int, float)) and lat == lat and lat != float("inf") else None
+        guilds = list(bot.guilds)
+        records = self._error_records()
+        cogs = self._cog_rows()
+        return {
+            "uptime": self._humanize(datetime.now(timezone.utc) - started),
+            "started": started.astimezone().strftime("%d.%m.%Y %H:%M"),
+            "latency": latency,
+            "guild_count": _fmt(len(guilds)),
+            "member_total": _fmt(sum((g.member_count or 0) for g in guilds)),
+            "user_count": _fmt(len(getattr(bot, "users", []) or [])),
+            "cog_count": _fmt(len(cogs)),
+            "page_count": len(self.pages),
+            "process": self._process_info(),
+            "versions": [
+                ("Python", PY_VERSION), ("Red-DiscordBot", RED_VERSION), ("discord.py", DPY_VERSION),
+                ("aiohttp", aiohttp.__version__), ("System", f"{platform.system()} {platform.release()}".strip()),
+                ("Shards", str(getattr(bot, "shard_count", None) or 1)),
+            ],
+            "cogs": cogs,
+            "errors": {
+                "warning": sum(1 for r in records if r["levelno"] < logging.ERROR),
+                "error": sum(1 for r in records if r["levelno"] >= logging.ERROR),
+                "recent": records[:5],
+            },
+        }
+
+    async def handle_status(self, request):
+        user, denied = await self._require_owner_page(request)
+        if denied is not None:
+            return denied
+        try:
+            await self._refresh_known_secrets()
+        except Exception:  # noqa: BLE001
+            pass
+        content = render_status(await self._collect_status())
+        return aiohttp_jinja2.render_template(
+            "page.html", request, self._page_ctx(request, title="Bot-Status", content=content, active_page="status"),
+        )
+
+    async def handle_errors(self, request):
+        user, denied = await self._require_owner_page(request)
+        if denied is not None:
+            return denied
+        token = await self._csrf_token(request)
+        if request.method == "POST":
+            form = await request.post()
+            if form.get("csrf_token") != token:
+                return self._error_page(request, "Abgelehnt", "Ungültiges CSRF-Token. Bitte neu laden.", status=400,
+                                        active="errors")
+            if form.get("form") != "clear":
+                raise web.HTTPFound("/errors?err=Unbekannte+Aktion")
+            n = len(self._errorlog.records) if self._errorlog is not None else 0
+            if self._errorlog is not None:
+                self._errorlog.clear()
+            await self._audit(request, user, page="errors", guild_id=None, action="clear",
+                              result=f"{n} Einträge gelöscht", ok=True)
+            raise web.HTTPFound("/errors?ok=Fehlerprotokoll+geleert")
+        try:
+            await self._refresh_known_secrets()
+        except Exception:  # noqa: BLE001
+            pass
+        records = self._error_records()
+        sources = sorted({r["source"] for r in records}, key=str.lower)
+        level = request.query.get("level", "").upper()
+        min_no = logging.getLevelName(level) if level in ("WARNING", "ERROR", "CRITICAL") else None
+        level = level if min_no is not None else ""
+        source = request.query.get("source", "")
+        query = request.query.get("q", "").strip()[:200]
+        shown = [
+            r for r in records
+            if (min_no is None or r["levelno"] >= min_no)
+            and (not source or r["source"] == source)
+            and (not query or query.lower() in f"{r['message']}\n{r['traceback']}\n{r['logger']}".lower())
+        ]
+        content = render_errors(shown, total=len(records), sources=sources, level=level, source=source, query=query,
+                                csrf=token, active=self._errorlog is not None, capacity=errorlog.MAX_RECORDS)
+        return aiohttp_jinja2.render_template(
+            "page.html", request,
+            self._page_ctx(request, title="Fehlerprotokoll", content=content, active_page="errors"),
+        )
+
+    # ----------------------------------------------------------------- #
+    #  Owner-Seite: Sichern & Wiederherstellen
+    # ----------------------------------------------------------------- #
+    def _prune_pending(self) -> None:
+        now = time.monotonic()
+        for key in [k for k, v in self._import_pending.items() if now - v["created"] > IMPORT_PREVIEW_TTL]:
+            del self._import_pending[key]
+        while len(self._import_pending) > 20:
+            oldest = min(self._import_pending, key=lambda k: self._import_pending[k]["created"])
+            del self._import_pending[oldest]
+
+    def _get_pending(self, token, user, guild_id):
+        self._prune_pending()
+        pending = self._import_pending.get(str(token or ""))
+        if pending is None or pending["user_id"] != user["id"] or pending["guild_id"] != guild_id:
+            return None
+        return pending
+
+    @staticmethod
+    def _backup_filename(guild) -> str:
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", guild.name).strip("-").lower()[:40] or "server"
+        return f"backup-{slug}-{guild.id}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M')}.json"
+
+    async def handle_backup(self, request):
+        user, denied = await self._require_owner_page(request)
+        if denied is not None:
+            return denied
+        guilds = list(self.bot.guilds)
+        if not guilds:
+            return self._error_page(request, "Sichern & Wiederherstellen", "Der Bot ist auf keinem Server.", status=200,
+                                    active="backup")
+        token = await self._csrf_token(request)
+        from urllib.parse import quote_plus
+
+        if request.method == "POST":
+            back_gid = request.query.get("guild", "")
+            back = f"/backup?guild={back_gid}&" if back_gid.isdigit() else "/backup?"
+            too_big = back + "err=" + quote_plus("Datei zu groß (höchstens 2 MB).")
+            if (request.content_length or 0) > bk.MAX_BYTES + 256 * 1024:
+                raise web.HTTPFound(too_big)
+            try:
+                # Upload bis 2 MB (+ Formular-Overhead) – das App-weite Limit bleibt bei 1 MiB.
+                form = await request.clone(client_max_size=bk.MAX_BYTES + 256 * 1024).post()
+            except web.HTTPRequestEntityTooLarge:
+                raise web.HTTPFound(too_big) from None
+            if form.get("csrf_token") != token:
+                return self._error_page(request, "Abgelehnt", "Ungültiges CSRF-Token. Bitte neu laden.", status=400,
+                                        active="backup")
+            raw = str(form.get("guild") or "")
+            guild = self.bot.get_guild(int(raw)) if raw.isdigit() else None
+            if guild is None:
+                raise web.HTTPFound("/backup?err=Server+nicht+gefunden")
+            base = f"/backup?guild={guild.id}"
+            action = form.get("form")
+
+            if action == "export":
+                include_global = bool(form.get("include_global"))
+                data = await bk.build_export(self, guild, include_global=include_global)
+                await self._audit(request, user, page="backup", guild_id=guild.id, action="export",
+                                  result=f"{len(data['cogs'])} Cogs exportiert" + (" (inkl. botweit)" if include_global else ""),
+                                  ok=True)
+                return web.Response(
+                    body=json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"),
+                    content_type="application/json", charset="utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{self._backup_filename(guild)}"',
+                             "Cache-Control": "no-store"},
+                )
+
+            if action == "preview":
+                upload = form.get("backup")
+                if not hasattr(upload, "file"):
+                    raise web.HTTPFound(f"{base}&err=" + quote_plus("Bitte eine Sicherungsdatei auswählen."))
+                raw_bytes = await asyncio.to_thread(upload.file.read, bk.MAX_BYTES + 1)
+                try:
+                    data = bk.parse_backup(raw_bytes)
+                except ValueError as exc:
+                    raise web.HTTPFound(f"{base}&err=" + quote_plus(str(exc))) from None
+                self._prune_pending()
+                pid = secrets.token_urlsafe(16)
+                self._import_pending[pid] = {
+                    "user_id": user["id"], "guild_id": guild.id, "data": data,
+                    "filename": str(getattr(upload, "filename", "") or "")[:120], "created": time.monotonic(),
+                }
+                raise web.HTTPFound(f"{base}&preview={pid}")
+
+            if action == "cancel":
+                self._import_pending.pop(str(form.get("preview") or ""), None)
+                raise web.HTTPFound(f"{base}&ok=" + quote_plus("Import abgebrochen"))
+
+            if action == "confirm":
+                pending = self._get_pending(form.get("preview"), user, guild.id)
+                if pending is None:
+                    raise web.HTTPFound(f"{base}&err=" + quote_plus(
+                        "Die Vorschau ist abgelaufen – bitte die Datei erneut hochladen."))
+                async with self._backup_lock:
+                    plan = await bk.plan_import(self, guild, pending["data"])
+                    include_global = bool(form.get("include_global")) and plan["has_global"]
+                    totals = bk.plan_totals(plan, include_global=include_global)
+                    snapshot = await bk.apply_import(self, guild, plan, include_global=include_global)
+                self._import_pending.pop(str(form.get("preview")), None)
+                ignored = totals["unknown"] + totals["type_errors"]
+                if not snapshot:
+                    msg = "Keine Änderungen – die Einstellungen waren schon so"
+                else:
+                    src = pending["data"]
+                    undo = self._import_undo.setdefault(guild.id, [])
+                    undo.insert(0, {
+                        "id": secrets.token_urlsafe(10), "ts": time.time(), "user": user["name"],
+                        "source": f"{src.get('guild_name') or '?'} ({src.get('guild_id')})",
+                        "cogs": sorted(snapshot), "snapshot": snapshot,
+                        "keys": sum(len(s.get("guild", {})) + len(s.get("global", {})) for s in snapshot.values()),
+                    })
+                    del undo[IMPORT_UNDO_KEEP:]
+                    msg = f"Import: {totals['changed']} Einstellung(en) in {totals['cogs']} Cog(s) übernommen"
+                if ignored:
+                    msg += f", {ignored} ignoriert (unbekannt/falscher Typ)"
+                await self._audit(request, user, page="backup", guild_id=guild.id,
+                                  action="import" + (" (inkl. botweit)" if include_global else ""), result=msg, ok=True)
+                raise web.HTTPFound(f"{base}&ok=" + quote_plus(msg))
+
+            if action == "undo":
+                uid = str(form.get("undo") or "")
+                entries = self._import_undo.get(guild.id) or []
+                entry = next((e for e in entries if e["id"] == uid), None)
+                if entry is None:
+                    raise web.HTTPFound(f"{base}&err=" + quote_plus("Dieser Stand ist nicht mehr verfügbar."))
+                async with self._backup_lock:
+                    count, missing = await bk.restore_snapshot(self, guild, entry["snapshot"])
+                entries.remove(entry)
+                msg = f"Rückgängig: {count} Einstellung(en) wiederhergestellt"
+                if missing:
+                    msg += " (nicht geladen: " + ", ".join(missing) + ")"
+                await self._audit(request, user, page="backup", guild_id=guild.id, action="undo", result=msg,
+                                  ok=not missing)
+                raise web.HTTPFound(f"{base}&ok=" + quote_plus(msg))
+
+            raise web.HTTPFound(f"{base}&err=Unbekannte+Aktion")
+
+        selected = await self._select_guild(request, guilds, "/backup")
+        self._set_switcher(request, guilds, selected, "/backup")
+        guild = self.bot.get_guild(selected)
+        preview_html = ""
+        pid = request.query.get("preview", "")
+        if pid:
+            pending = self._get_pending(pid, user, guild.id)
+            if pending is None:
+                request["wc_toast_err"] = "Die Vorschau ist abgelaufen oder gehört zu einem anderen Server."
+            else:
+                plan = await bk.plan_import(self, guild, pending["data"])
+                preview_html = render_backup_preview(guild=guild, data=pending["data"], plan=plan, token=pid,
+                                                     csrf=token, filename=pending["filename"])
+        cogs = [(name, len(bk.guild_defaults(cog.config)), len(bk.global_defaults(cog.config)))
+                for name, cog in bk.backup_cogs(self).items()
+                if bk.guild_defaults(cog.config) or bk.global_defaults(cog.config)]
+        undo = [
+            {"id": e["id"], "time": errorlog.fmt_time(e["ts"]), "user": e["user"], "source": e["source"],
+             "cogs": e["cogs"], "keys": e["keys"]}
+            for e in self._import_undo.get(guild.id) or []
+        ]
+        content = render_backup(guild=guild, cogs=cogs, csrf=token, undo=undo, preview=preview_html)
+        return aiohttp_jinja2.render_template(
+            "page.html", request,
+            self._page_ctx(request, title="Sichern & Wiederherstellen", content=content, active_page="backup",
+                           toast_err=request.get("wc_toast_err")),
         )
 
     # ----------------------------------------------------------------- #

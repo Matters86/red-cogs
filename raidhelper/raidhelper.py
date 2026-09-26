@@ -15,6 +15,7 @@ from redbot.core.utils.chat_formatting import pagify
 from . import games
 from .dashboard import dashboard_handler
 from .member import member_handler
+from .public import public_handler
 from .embed import build_event_embed, signup_counts
 from .strings import DEFAULT_LANGUAGE, LANGUAGES, t
 from .views import (
@@ -75,6 +76,7 @@ class RaidHelper(commands.Cog):
             stats={"events": 0, "attended": {}},
             cleanup_days=30,        # abgeschlossene Events nach N Tagen löschen (0 = aus)
             member_page=True,       # Seite „Raids“ im WebCore-Mitglieder-Bereich (/me/raids) anbieten
+            public_api=False,       # öffentliche JSON-API /api/public/raids/<id> für Launcher & Website
         )
         # Gemerkte Spec je Nutzer und Spiel/Klasse (serverübergreifend).
         self.config.register_user(remember={})
@@ -123,9 +125,15 @@ class RaidHelper(commands.Cog):
                 handler=self.member_page,
                 description="Kommende Raids ansehen und dich anmelden",
             )
+        # Öffentliche API für Launcher/Websites (pro Server im Dashboard freizugeben, Standard aus).
+        if hasattr(webcore, "register_public_api"):  # ältere WebCore-Versionen ohne öffentliche API
+            webcore.register_public_api(owner=self, slug="raids", handler=self.public_api)
 
     async def dashboard_page(self, request):
         return await dashboard_handler(self, request)
+
+    async def public_api(self, request):
+        return await public_handler(self, request)
 
     async def member_page(self, request):
         return await member_handler(self, request)
@@ -307,8 +315,88 @@ class RaidHelper(commands.Cog):
                 embed=build_event_embed(event, lang, overrides=overrides, emojis=emojis),
                 view=build_signup_view(event, lang, emojis=emojis),
             )
+        except discord.NotFound:
+            # Nachricht wurde gelöscht -> merken, damit das Dashboard „Neu posten“ anbietet.
+            await self._forget_message(guild, event.get("id"), event["message_id"])
         except discord.HTTPException:
             log.debug("Event-Nachricht nicht aktualisierbar (Event %s)", event.get("id"))
+
+    async def _forget_message(self, guild, event_id, message_id) -> None:
+        """Gelöschte Event-Nachricht vergessen (``message_id`` -> ``None``), nur wenn sie noch passt."""
+        async with self.config.guild(guild).events() as events:
+            ev = events.get(event_id)
+            if isinstance(ev, dict) and ev.get("message_id") == message_id:
+                ev["message_id"] = None
+
+    async def repost_event(self, guild, event_id: str) -> dict:
+        """Event-Nachricht neu posten – für fehlende/gelöschte Nachrichten oder fehlgeschlagenes Posten.
+
+        Gleiche Prüfung und Post-Logik wie beim Anlegen (:meth:`create_event_from_input` →
+        :meth:`post_event`): Kanal des Events (existiert er nicht mehr: der Anmelde-Kanal), Bot-Rechte
+        „Kanal ansehen/Nachrichten senden/Links einbetten“. Eine eventuell noch vorhandene alte
+        Nachricht wird gelöscht (keine Doppelten), ihre ID durch die neue ersetzt.
+        Gemeinsam für das Dashboard und ``[p]raid repost``. Wirft :class:`EventInputError`.
+        """
+        conf = await self.config.guild(guild).all()
+        event = (conf.get("events") or {}).get(event_id)
+        if not isinstance(event, dict):
+            raise EventInputError("not_found", id=event_id)
+        old_ch = guild.get_channel(event["channel_id"]) if event.get("channel_id") else None
+        ch = old_ch
+        if not isinstance(ch, discord.TextChannel):
+            ch = guild.get_channel(conf["signup_channel"]) if conf.get("signup_channel") else None
+        if not isinstance(ch, discord.TextChannel) or getattr(ch.guild, "id", guild.id) != guild.id:
+            raise EventInputError("create_no_channel")
+        self._check_post_perms(guild, ch)
+        old_id = event.get("message_id")
+        if old_id and old_ch is not None:
+            try:
+                old_msg = await old_ch.fetch_message(old_id)
+                await old_msg.delete()
+            except discord.HTTPException:
+                pass  # schon weg oder keine Rechte – die neue Nachricht ersetzt sie trotzdem
+        event["channel_id"] = ch.id
+        msg_id = await self.post_event(guild, event)
+        if msg_id is None:
+            raise EventInputError("repost_failed", channel=f"#{ch.name}")
+        async with self.config.guild(guild).events() as events:
+            ev = events.get(event_id)
+            if not isinstance(ev, dict):  # währenddessen gelöscht -> neue Nachricht wieder entfernen
+                try:
+                    await (await ch.fetch_message(msg_id)).delete()
+                except discord.HTTPException:
+                    pass
+                raise EventInputError("not_found", id=event_id)
+            ev["channel_id"] = ch.id
+            ev["message_id"] = msg_id
+            event = dict(ev)
+        return event
+
+    @commands.Cog.listener()
+    async def on_raw_message_delete(self, payload):
+        await self._on_messages_deleted(payload.guild_id, {payload.message_id})
+
+    @commands.Cog.listener()
+    async def on_raw_bulk_message_delete(self, payload):
+        await self._on_messages_deleted(payload.guild_id, set(payload.message_ids))
+
+    async def _on_messages_deleted(self, guild_id, message_ids: set) -> None:
+        """Gelöschte Event-Nachrichten erkennen -> ``message_id`` leeren (Dashboard: „Neu posten“)."""
+        if not guild_id or not message_ids:
+            return
+        try:
+            events = await self.config.guild_from_id(int(guild_id)).events()
+            hits = [(eid, e["message_id"]) for eid, e in events.items()
+                    if isinstance(e, dict) and e.get("message_id") in message_ids]
+            if not hits:
+                return
+            async with self.config.guild_from_id(int(guild_id)).events() as stored:
+                for eid, mid in hits:
+                    ev = stored.get(eid)
+                    if isinstance(ev, dict) and ev.get("message_id") == mid:
+                        ev["message_id"] = None
+        except Exception:  # noqa: BLE001 – Listener darf nie werfen
+            log.exception("Gelöschte Event-Nachricht konnte nicht vermerkt werden (Guild %s)", guild_id)
 
     async def create_event(self, guild, *, game, title, description, leader_id,
                            channel_id, start_ts, deadline_ts=None, color=None,
@@ -1054,6 +1142,20 @@ class RaidHelper(commands.Cog):
     async def raid_reopen(self, ctx, event_id: str):
         """Anmeldung wieder öffnen."""
         await self._set_closed(ctx, event_id, False)
+
+    @raid.command(name="repost")
+    async def raid_repost(self, ctx, event_id: str):
+        """Event-Nachricht neu posten (z. B. wenn sie gelöscht wurde oder das Posten fehlschlug)."""
+        guild = ctx.guild
+        lang = await self._lang(guild)
+        if not await self._is_manager(ctx.author):
+            return await ctx.send(t(lang, "no_permission"))
+        try:
+            event = await self.repost_event(guild, event_id)
+        except EventInputError as err:
+            return await self._send_input_error(ctx, lang, err)
+        link = f"https://discord.com/channels/{guild.id}/{event['channel_id']}/{event['message_id']}"
+        await ctx.send(t(lang, "reposted", id=event_id, link=link))
 
     async def _set_closed(self, ctx, event_id, closed):
         guild = ctx.guild

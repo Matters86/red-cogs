@@ -1,7 +1,7 @@
 """WebCore-Dashboard für TwitchLive.
 
 * GET  -> Seite rendern (Reiter Streamer · Hinzufügen/Bearbeiten · Vorschau · Einstellungen ·
-  Live-Rolle · Twitch-Zugang)
+  Live-Rolle · Launcher & Website · Twitch-Zugang)
 * POST -> Aktion ausführen, danach Redirect mit ``?ok=``/``?err=`` (Toast)
 
 Nur UI-Kit (``request.app["webcore"].ui``), kein eigenes CSS. Rechte: Server ausschließlich über
@@ -13,6 +13,7 @@ Zugangsdaten werden nie angezeigt – nur „gesetzt/nicht gesetzt“.
 from __future__ import annotations
 
 import html
+import json
 import re
 from urllib.parse import quote
 
@@ -22,6 +23,7 @@ from aiohttp import web
 from .embed import (
     LIMIT_TEMPLATE, TWITCH_COLOR, cap, fmt_duration, render_template, stream_url, thumbnail,
 )
+from .public import build_payload as build_public_payload, public_base
 from .strings import LANGUAGES, default_message, t
 
 SLUG = "twitchlive"
@@ -168,6 +170,8 @@ async def _render(cog, request):
         + ui.tab("vorschau", "Vorschau", "bi-eye", _tab_preview(cog, ui, guild, conf, csrf, request, now))
         + ui.tab("einstellungen", "Einstellungen", "bi-sliders", _tab_settings(ui, guild, conf, csrf))
         + ui.tab("liverole", "Live-Rolle", "bi-person-badge", _tab_liverole(cog, ui, guild, conf, csrf))
+        + ui.tab("launcher", "Launcher & Website", "bi-broadcast",
+                 _tab_public(cog, ui, guild, conf, csrf, *(await public_base(request))))
         + ui.tab("zugang", "Twitch-Zugang", "bi-key", await _tab_access(cog, ui, guild, csrf, creds, full, now))
     )
     return {"title": TITLE, "content": head + guild_picker + body}
@@ -545,6 +549,58 @@ def _tab_liverole(cog, ui, guild, conf, csrf) -> str:
     return settings + links_card
 
 
+def _tab_public(cog, ui, guild, conf, csrf, base: str, public_host: bool) -> str:
+    """Karte „Für Launcher & Website freigeben“ (Schalter + URL + Beispiel) – wie beim Changelog."""
+    json_url = f"{base}/api/public/twitch/{guild.id}"
+    inp = ui.text_input("", json_url, attrs={"readonly": True, "onclick": "this.select()"})
+    copy = ui.button("", icon="bi-clipboard", kind="ghost", type="button",
+                     attrs={"title": "Kopieren", "onclick": "navigator.clipboard&&navigator.clipboard.writeText("
+                            "this.previousElementSibling.value);this.querySelector('i').className='bi bi-check2'"})
+    example = build_public_payload(cog, guild, conf)
+    example["streamers"] = example["streamers"][:2]
+    if not example["streamers"]:
+        example["streamers"] = [{
+            "login": "matters86", "display_name": "Matters86", "live": True,
+            "title": "Ranked mit der Community", "game": "Valorant", "viewers": 42,
+            "started_at": "2026-09-26T18:00:00Z", "url": "https://www.twitch.tv/matters86",
+            "thumbnail": "https://static-cdn.jtvnw.net/previews-ttv/live_user_matters86-640x360.jpg",
+            "avatar": None,
+        }]
+    example_json = json.dumps(example, ensure_ascii=False, indent=2)
+    state = ui.badge("freigegeben", "ok") if conf.get("public_api") else ui.badge("aus", "muted")
+    hint = ui.callout(
+        "Damit ein Launcher oder eine Website die Daten abrufen kann, muss das Dashboard <b>öffentlich erreichbar</b> "
+        "sein (Reverse-Proxy mit HTTPS, siehe WebCore-README). Ohne Freigabe – oder für unbekannte Server – antwortet "
+        "die Adresse mit <code>404</code>. Die Adresse ist <b>für jeden abrufbar</b>: ausgegeben werden nur die hier "
+        "eingetragenen (nicht pausierten) Twitch-Kanäle mit öffentlichen Twitch-Daten – keine Discord-Mitglieder oder "
+        "Verknüpfungen. Die Werte stammen aus der letzten Abfrage des Bots (keine zusätzlichen Twitch-Anfragen).",
+        tone="info" if public_host else "warn",
+    )
+    if not public_host:
+        hint += ui.callout(
+            f"Die Adresse unten stammt von <code>{_esc(base)}</code> – das sieht nicht nach einer öffentlichen "
+            "HTTPS-Adresse aus. Trage in WebCore die öffentliche Redirect-URI ein, dann stimmt der Link.", tone="warn")
+    body = (
+        ui.switches(ui.switch("public_api", "Live-Status öffentlich abrufbar machen", conf.get("public_api"),
+                              desc="JSON-Schnittstelle für diesen Server freigeben (Standard: aus)."))
+        + ui.divider()
+        + ui.field("JSON-Adresse", f"<div class='wc-input-group'>{inp}{copy}</div>",
+                   help="Live-Kanäle zuerst (nach Zuschauern), dann alphabetisch. Antwort wird bis zu 60 Sekunden "
+                        "zwischengespeichert – öfter abfragen bringt nichts.")
+        + hint
+        + ui.field("Beispiel-Antwort",
+                   f"<textarea class='wc-input mono' rows='16' readonly>{_esc(example_json)}</textarea>",
+                   help="Aktuelle Daten dieses Servers (bzw. ein Beispiel, solange kein Streamer eingetragen ist).")
+    )
+    return ui.form(
+        BASE,
+        ui.card("Für Launcher & Website freigeben", body, icon="bi-broadcast", actions=state,
+                desc="Öffentliche Schnittstelle, mit der z. B. dein Launcher zeigt, wer gerade live ist.")
+        + ui.save_row("Speichern"),
+        csrf=csrf, hidden={"action": "public_api", "guild": guild.id}, savebar=True,
+    )
+
+
 async def _tab_access(cog, ui, guild, csrf, creds, full, now) -> str:
     st = cog.status or {}
     label, tone, hint = api_state(cog, creds, now)
@@ -689,6 +745,11 @@ async def _handle_post(cog, request):
         await gconf.language.set(language)
         await gconf.default_message.set(message)
         raise _redirect(gid, ok="Einstellungen gespeichert")
+
+    if action == "public_api":
+        on = "public_api" in data
+        await cog.config.guild(guild).public_api.set(on)
+        raise _redirect(gid, ok="Öffentliche API " + ("freigegeben" if on else "ausgeschaltet"))
 
     if action == "liverole":
         rid = _int(data.get("live_role"))

@@ -429,6 +429,21 @@ body.wc-has-savebar .main{padding-bottom:96px}
 .wc-list li{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)}
 .wc-list li:last-child{border-bottom:0}
 
+/* Fehlerprotokoll: Meldung + aufklappbarer Traceback */
+.wc-msg{white-space:pre-wrap;word-break:break-word;font-size:.86rem}
+.wc-trace{margin-top:6px;min-width:0;max-width:100%}
+.wc-trace summary{cursor:pointer;color:var(--muted);font-size:.78rem;display:inline-flex;align-items:center;gap:6px}
+.wc-trace summary::-webkit-details-marker{display:none}
+.wc-trace summary::before{content:"\25B8";font-size:.7rem;transition:transform .12s ease}
+.wc-trace[open] summary::before{transform:rotate(90deg)}
+.wc-trace pre{margin:8px 0 0;max-height:360px;overflow:auto;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;font:500 .74rem/1.5 "IBM Plex Mono",monospace;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text)}
+.wc-table tr[data-level]>td{vertical-align:top}
+@media (max-width: 560px){
+  .wc-table td:has(.wc-msg){grid-column:1/-1}
+}
+.wc-keys{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.wc-keys code{font-size:.72rem}
+
 /* ------------------------------------------------------------------ */
 /* Responsiv                                                           */
 /* ------------------------------------------------------------------ */

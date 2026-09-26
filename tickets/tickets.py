@@ -12,7 +12,7 @@ from redbot.core.data_manager import cog_data_path
 from .dashboard import dashboard_handler
 from .member import member_handler
 from .strings import LANGUAGES, OVERRIDABLE_KEYS, t
-from .transcript import build_transcript
+from .transcript import build_transcript, redact_user
 from .views import (
     CID_CLAIM,
     CID_CLOSE,
@@ -117,6 +117,103 @@ class Tickets(commands.Cog):
     @commands.Cog.listener()
     async def on_webcore_ready(self, webcore):
         self._register_dashboard(webcore)
+
+    # ----------------------------------------------------------------- #
+    #  Datenlöschung (Red: [p]mydata / Owner / Discord-Löschanfrage)
+    # ----------------------------------------------------------------- #
+    async def red_delete_data_for_user(self, *, requester, user_id: int):
+        """Entfernt bzw. anonymisiert alle Daten eines Nutzers (alle Server).
+
+        - **Transcripts, deren Ersteller er ist, werden gelöscht** (Datei + Metadaten). Ein
+          Transcript ist der Verlauf *seines* Anliegens: Name, Fragen/Antworten und Inhalte
+          identifizieren ihn auch nach Schwärzen des Namens, und Nachrichten anderer darin sind
+          Antworten auf sein Anliegen – Anonymisieren wäre unvollständig, Löschen ist sauber.
+        - In Transcripts **fremder** Tickets werden nur seine Nachrichten, sein Name im Kopf
+          („Geschlossen von“) und Erwähnungen durch „Gelöschter Nutzer“ ersetzt – der Rest gehört
+          zum Anliegen des anderen Mitglieds und bleibt. (Transcripts älterer Versionen ohne
+          Nutzer-IDs: nur Erwähnungen, Anzeigenamen sind nicht eindeutig zuzuordnen.)
+        - Geschlossene Tickets: Inhaber-ID → 0, aus „hinzugefügt“ entfernt, Übernahme gelöscht,
+          Modal-Antworten gelöscht; Übernahme-Statistik des Nutzers gelöscht.
+        - **Offene** Tickets sind Betriebsdaten (Rechte, Limit, Schließen): bei ``user`` bleiben sie
+          unverändert, bei ``owner``/``user_strict`` bleiben nur die IDs (Antworten werden gelöscht),
+          bei ``discord_deleted_user`` (Konto gelöscht, ID ungültig) wird auch die ID entfernt.
+        """
+        uid = int(user_id)
+        drop_open_ids = requester == "discord_deleted_user"
+        keep_open_answers = requester == "user"
+        langs: dict[int, str] = {}
+        creator_files: set[str] = set()
+        try:
+            all_guilds = await self.config.all_guilds()
+        except Exception:  # noqa: BLE001
+            log.exception("Datenlöschung: Config nicht lesbar")
+            return
+        for gid, gdata in all_guilds.items():
+            langs[int(gid)] = (gdata or {}).get("language") or "de"
+            gconf = self.config.guild_from_id(int(gid))
+            try:
+                async with gconf.tickets() as tickets:
+                    for rec in tickets.values():
+                        if not isinstance(rec, dict):
+                            continue
+                        is_open = rec.get("status") == "open"
+                        involved = (rec.get("owner_id") == uid or rec.get("claimed_by") == uid
+                                    or uid in (rec.get("members") or []))
+                        if not involved:
+                            continue
+                        if is_open and not drop_open_ids:
+                            if not keep_open_answers and rec.get("owner_id") == uid:
+                                rec["answers"] = {}
+                            continue
+                        if rec.get("owner_id") == uid:
+                            rec["owner_id"] = 0
+                            rec["answers"] = {}
+                        if rec.get("claimed_by") == uid:
+                            rec["claimed_by"] = None
+                        if uid in (rec.get("members") or []):
+                            rec["members"] = [m for m in rec["members"] if m != uid]
+                async with gconf.transcripts() as transcripts:
+                    kept = []
+                    for tr in transcripts:
+                        if isinstance(tr, dict) and tr.get("owner_id") == uid:
+                            if tr.get("file"):
+                                creator_files.add(str(tr["file"]))
+                            continue
+                        if isinstance(tr, dict) and uid in (tr.get("members") or []):
+                            tr["members"] = [m for m in tr["members"] if m != uid]
+                        kept.append(tr)
+                    transcripts[:] = kept
+                async with gconf.stats() as stats:
+                    claims = stats.get("claims")
+                    if isinstance(claims, dict):
+                        claims.pop(str(uid), None)
+            except Exception:  # noqa: BLE001 – ein kaputter Server darf die anderen nicht blockieren
+                log.exception("Datenlöschung für Guild %s fehlgeschlagen", gid)
+        await asyncio.to_thread(self._scrub_transcript_files, uid, creator_files, langs)
+
+    def _scrub_transcript_files(self, uid: int, creator_files: set, langs: dict) -> None:
+        """Löscht Transcript-Dateien des Erstellers, schwärzt ihn in allen übrigen (blockierend).
+
+        Geht über alle Dateien im Ordner – auch über solche, deren Metadaten schon aus der
+        500er-Liste gefallen sind (Ersteller dann über ``Inhaber: <span data-uid=…>`` erkannt).
+        """
+        marker = str(uid)
+        creator_head = f"Inhaber: <span data-uid='{uid}'>"
+        for path in sorted(self.transcripts_dir.glob("*.html")):
+            try:
+                doc = path.read_text(encoding="utf-8")
+                if path.name in creator_files or creator_head in doc:
+                    path.unlink()
+                    continue
+                if marker not in doc:
+                    continue
+                gid = path.name.split("-", 1)[0]
+                lang = langs.get(int(gid), "de") if gid.isdigit() else "de"
+                new_doc, n = redact_user(doc, uid, t(lang, "deleted_user"))
+                if n:
+                    path.write_text(new_doc, encoding="utf-8")
+            except OSError:
+                log.exception("Transcript %s: Datenlöschung fehlgeschlagen", path.name)
 
     def _register_dashboard(self, webcore):
         webcore.register_page(
@@ -768,6 +865,8 @@ class Tickets(commands.Cog):
             "opened": record.get("created_at", "")[:19].replace("T", " "),
             "closed": record["closed_at"][:19].replace("T", " "),
             "closed_by": str(closer),
+            "owner_id": record.get("owner_id"),       # nur als data-uid (Datenlöschung)
+            "closed_by_id": getattr(closer, "id", None),
         }
         filename = f"{guild.id}-{record['num']}.html"
         try:
@@ -1093,7 +1192,8 @@ class Tickets(commands.Cog):
             if status in ("open", "closed") and rec.get("status") != status:
                 continue
             owner = ctx.guild.get_member(rec.get("owner_id"))
-            lines.append(f"#{rec.get('num')} · <#{cid}> · {owner.mention if owner else rec.get('owner_id')} · {rec.get('status')}")
+            who = owner.mention if owner else (rec.get("owner_id") or t(conf["language"], "deleted_user"))
+            lines.append(f"#{rec.get('num')} · <#{cid}> · {who} · {rec.get('status')}")
         if not lines:
             return await ctx.send(embed=discord.Embed(title="Tickets", description="—", color=EMBED_COLOR))
         # Zeilenweise auf mehrere Embeds verteilen statt mitten in einer Zeile abzuschneiden.

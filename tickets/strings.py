@@ -71,6 +71,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "log_claimed": "Ticket #{num} übernommen von {user}.",
         # Modal
         "modal_title": "Ticket öffnen",
+        # Datenlöschung (red_delete_data_for_user)
+        "deleted_user": "Gelöschter Nutzer",
     },
     "en": {
         "panel_default_title": "Support Ticket",
@@ -114,6 +116,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "log_closed": "Ticket #{num} closed by {user}. Duration: {duration}.",
         "log_claimed": "Ticket #{num} claimed by {user}.",
         "modal_title": "Open ticket",
+        "deleted_user": "Deleted user",
     },
 }
 

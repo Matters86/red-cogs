@@ -103,3 +103,31 @@ Im Team-Dashboard unter **Einstellungen → Mitglieder-Bereich** (beide Standard
 Hinweis: Read-only **View-Rollen** wirken vor allem im **Kategorie-Modus**. In Threads/Foren wird
 der Zugriff über Thread-Mitgliedschaft bzw. Kanalrechte gesteuert (Support-Rollen brauchen dort
 ggf. die Berechtigung, private Threads zu sehen).
+
+## Datenspeicherung & Datenlöschung
+
+Gespeichert werden pro Ticket Metadaten (Nummer, Discord-IDs von Inhaber, hinzugefügten Mitgliedern und
+Übernehmer, Grund, Formular-Antworten, Zeitstempel), eine Übernahme-Statistik je Team-Mitglied sowie
+HTML-Transcripts (Nachrichten, Anzeigenamen, Zeitpunkte, Anhang-Dateinamen). Neue Transcripts markieren
+jede Nachricht intern mit der Nutzer-ID des Autors, damit sie sich bei einer Löschanfrage exakt zuordnen lässt.
+
+Bei einer Datenlöschung über Red (`[p]mydata forgetme`, Owner-Befehle oder Löschanfrage von Discord) passiert:
+
+| Daten | Ergebnis |
+|---|---|
+| Transcripts, deren **Ersteller** der Nutzer ist | **vollständig gelöscht** (Datei + Eintrag im Dashboard) |
+| Transcripts **anderer** Tickets | seine Nachrichten, sein Name („Geschlossen von“) und Erwähnungen werden durch „Gelöschter Nutzer“ ersetzt; der Rest bleibt |
+| geschlossene Tickets | Inhaber-ID → 0 („Gelöschter Nutzer“), aus „hinzugefügt“ entfernt, Übernahme und Formular-Antworten gelöscht |
+| Übernahme-Statistik | Eintrag des Nutzers gelöscht |
+| **offene** Tickets | Betriebsdaten: bei `user` unverändert, bei `owner`/`user_strict` nur die IDs (Antworten gelöscht), bei gelöschtem Discord-Konto (`discord_deleted_user`) auch die IDs entfernt |
+
+**Warum Löschen statt Anonymisieren beim Ersteller?** Ein Transcript ist der Verlauf *seines* Anliegens –
+Formular-Antworten und Inhalte identifizieren ihn auch ohne Namen, und die Antworten des Teams darin
+beziehen sich nur auf dieses Anliegen. Ein bloß geschwärzter Name wäre also keine echte Anonymisierung.
+In fremden Tickets gehört der Verlauf dagegen zum Anliegen eines anderen Mitglieds und bleibt deshalb
+erhalten – nur die Beiträge des Nutzers werden entfernt.
+
+Hinweis: Transcripts aus Versionen vor dieser Änderung enthalten keine Nutzer-IDs an den Nachrichten; dort
+werden nur Erwähnungen ersetzt (Anzeigenamen sind nicht eindeutig). Transcripts, deren Ersteller der Nutzer
+ist, werden auch dort über die Metadaten gefunden und gelöscht. Nachrichten im Log-Kanal (Discord selbst)
+sind nicht Teil der Cog-Daten.

@@ -110,6 +110,7 @@ Mit geladenem `webcore` erscheint die Seite **Twitch-Live**:
   „Testmeldung posten“.
 - **Einstellungen:** Standardkanal, Standardtext, Verhalten bei Stream-Ende, Sprache.
 - **Live-Rolle:** Rolle und Verknüpfungen Mitglied ↔ Twitch-Kanal.
+- **Launcher & Website:** öffentliche API freigeben (siehe unten), mit fertiger Adresse und Beispiel-Antwort.
 - **Twitch-Zugang:** nur „gesetzt / nicht gesetzt“, API-Status, letzte/nächste Abfrage und die
   Einrichtungs-Anleitung. Bot-Owner können hier das Intervall ändern und eine Abfrage anstoßen.
 
@@ -117,6 +118,64 @@ Rechte: Die Seite folgt den WebCore-Rollen-Rechten (*Ansehen* = schreibgeschütz
 alle Einstellungen dieses Servers). Die Live-Rolle kann ein Team-Mitglied nur auf Rollen unter
 seiner höchsten Rolle ohne Verwaltungsrechte setzen. Intervall und „Jetzt abfragen“ gelten botweit
 und sind dem Bot-Owner vorbehalten. Zugangsdaten werden nur per Befehl gesetzt.
+
+## Öffentliche API für Launcher & Website
+
+Wer gerade live ist, lässt sich ohne Login als JSON abrufen – z. B. für einen Launcher oder die Community-Website:
+
+```
+GET /api/public/twitch/<server-id>
+```
+
+- **Standardmäßig aus.** Pro Server im Dashboard im Reiter **Launcher & Website** einschalten
+  („Live-Status öffentlich abrufbar machen“). Dort stehen die fertige Adresse und eine Beispiel-Antwort.
+- Ist die API aus oder der Server unbekannt, kommt immer dieselbe Antwort `404 {"error": "not_found"}`.
+- Enthalten sind nur die in diesem Server eingetragenen, nicht pausierten Twitch-Kanäle – live zuerst (nach
+  Zuschauern), dann alphabetisch. Nur öffentliche Twitch-Daten, **keine** Discord-Mitglieder, IDs oder Verknüpfungen.
+- Die Werte stammen aus dem **Cache der letzten Abfrage** des Bots (Intervall, Standard 60 s) – ein API-Aufruf löst
+  nie eine zusätzliche Anfrage an Twitch aus. CORS `*`, bis zu 60 s zwischengespeichert, 60 Anfragen/Minute pro IP
+  (WebCore). Das Dashboard muss öffentlich erreichbar sein (Reverse-Proxy mit HTTPS, siehe WebCore-README).
+
+```json
+{
+  "server": "Matters Community",
+  "streamers": [
+    {
+      "login": "matters86",
+      "display_name": "Matters86",
+      "live": true,
+      "title": "Ranked mit der Community",
+      "game": "Valorant",
+      "viewers": 42,
+      "started_at": "2026-09-26T18:00:00Z",
+      "url": "https://www.twitch.tv/matters86",
+      "thumbnail": "https://static-cdn.jtvnw.net/previews-ttv/live_user_matters86-640x360.jpg",
+      "avatar": "https://static-cdn.jtvnw.net/jtv_user_pictures/…-profile_image-300x300.png"
+    },
+    {
+      "login": "lenaplays", "display_name": "LenaPlays", "live": false,
+      "title": null, "game": null, "viewers": null, "started_at": null,
+      "url": "https://www.twitch.tv/lenaplays", "thumbnail": null, "avatar": "https://…"
+    }
+  ]
+}
+```
+
+Offline-Kanäle haben `title`, `game`, `viewers`, `started_at` und `thumbnail` = `null`. `thumbnail` ist das
+Twitch-Vorschaubild (640×360), `avatar` das Profilbild (falls schon bekannt).
+
+```bash
+curl https://dash.example.org/api/public/twitch/123456789012345678
+```
+
+```js
+const res = await fetch("https://dash.example.org/api/public/twitch/123456789012345678");
+if (res.ok) {
+  const { streamers } = await res.json();
+  const live = streamers.filter((s) => s.live);
+  console.log(live.length ? live.map((s) => `${s.display_name}: ${s.title} (${s.viewers})`).join("\n") : "Niemand live");
+}
+```
 
 ## Hinweise
 

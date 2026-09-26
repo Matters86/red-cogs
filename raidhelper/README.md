@@ -56,6 +56,7 @@ Verwaltung (`raid`) erfordert eine Manager-Rolle, „Server verwalten" oder Bot-
 | `[p]raid close <id>` | Anmeldung schließen |
 | `[p]raid reopen <id>` | Anmeldung wieder öffnen |
 | `[p]raid delete <id>` | Event samt Nachricht löschen |
+| `[p]raid repost <id>` | Event-Nachricht neu posten (gelöscht/Posten fehlgeschlagen) – alte Nachricht wird ersetzt, Anmeldungen bleiben |
 | `[p]raid add <id> <mitglied> <klasse> <spec>` | Mitglied manuell eintragen |
 | `[p]raid remove <id> <mitglied>` | Mitglied aus einem Event entfernen |
 | `[p]raid export <id>` | Anmeldungen als CSV exportieren |
@@ -93,9 +94,9 @@ Die Seite **Raidplaner** erscheint nach dem Laden automatisch im WebCore-Dashboa
 
 - Statistik-Kacheln (kommende Events, Anmeldungen gesamt, Standard-Spiel),
 - den Reiter **Neues Event** – Event anlegen und sofort posten (siehe unten),
-- eine Event-Tabelle mit Aktionen (Roster, **Bearbeiten**, Schließen/Öffnen, Löschen),
+- eine Event-Tabelle mit Aktionen (Roster, **Bearbeiten**, Schließen/Öffnen, Löschen, **Neu posten**),
 - eine Roster-Ansicht pro Event,
-- ein Einstellungs-Formular (Sprache, Standard-Spiel, Anmelde-Kanal, Zeitzone, Erinnerungen, Mitglieder-Bereich, Aufräumen, Text-Overrides),
+- ein Einstellungs-Formular (Sprache, Standard-Spiel, Anmelde-Kanal, Zeitzone, Erinnerungen, Mitglieder-Bereich, Aufräumen, Text-Overrides) und der Reiter **Launcher & Website** (öffentliche API, siehe unten),
 - eine **Spec-Icon-Verwaltung** mit Datei-Upload und Vorschau der aktuellen Icons.
 
 Zusätzlich registriert der Cog die Mitglieder-Seite **Raids** (`/me/raids`) – siehe „Anmeldung über die Website“.
@@ -123,6 +124,17 @@ Das Dashboard nutzt **dieselbe Funktion wie `[p]raid create`**: gleiche Prüfung
 ### Event bearbeiten
 
 „Bearbeiten“ in der Event-Tabelle ändert Titel, Beschreibung, Termin, Anmeldeschluss, Wiederholung und Limits – wie die Befehle `[p]raid title/time/description/deadline/recurrence/maxsignups/rolelimit`. Die vorhandene Discord-Nachricht wird bearbeitet, Anmeldungen bleiben erhalten. Spiel und Kanal lassen sich nachträglich nicht ändern; bei abgeschlossenen Events ist der Termin gesperrt. Wird der Termin verschoben, werden die Erinnerungen neu gesendet.
+
+### Neu posten
+
+Fehlt die Event-Nachricht in Discord – weil jemand sie gelöscht hat, das Posten beim Anlegen fehlgeschlagen ist
+(fehlende Rechte) oder der Kanal gelöscht wurde –, zeigt die Event-Tabelle ein Badge **„Nachricht fehlt“** und den
+Knopf **„Neu posten“** (gleiche Rechte wie die anderen Event-Aktionen). Er nutzt dieselbe Prüfung und Post-Logik
+wie das Anlegen: Kanal des Events (existiert er nicht mehr: der Standard-Anmelde-Kanal), Bot-Rechte „Kanal ansehen“,
+„Nachrichten senden“, „Links einbetten“ – fehlen sie, erscheint eine rote Meldung. Die neue Nachricht enthält das
+aktuelle Roster, ihre ID ersetzt die alte. Dasselbe per Befehl: `[p]raid repost <id>` (eine noch vorhandene alte
+Nachricht wird dabei gelöscht, damit es keine Doppelten gibt). Gelöschte Nachrichten erkennt der Cog automatisch
+(Discord-Ereignis „Nachricht gelöscht“ bzw. beim nächsten Aktualisieren).
 
 ### Alte Events aufräumen
 
@@ -163,6 +175,66 @@ Was Mitglieder dort sehen und tun können:
 - Geändert werden nur die eigenen Daten; fremde Server oder Events in nicht sichtbaren Kanälen werden
   serverseitig abgelehnt. WebCore begrenzt Mitglieder-Aktionen auf 30 pro Minute.
 
+## Öffentliche API für Launcher & Website
+
+Kommende Raids lassen sich ohne Login als JSON abrufen – z. B. für einen Launcher oder die Community-Website:
+
+```
+GET /api/public/raids/<server-id>?limit=10
+```
+
+- **Standardmäßig aus.** Pro Server im Dashboard unter **Launcher & Website** einschalten („Kommende Raids öffentlich
+  abrufbar machen“). Dort stehen die fertige Adresse und eine Beispiel-Antwort.
+- Ist die API aus oder der Server unbekannt, kommt immer dieselbe Antwort `404 {"error": "not_found"}`.
+- Die Adresse ist **öffentlich**: ausgegeben werden nur kommende (nicht abgeschlossene) Events in Kanälen, die
+  **@everyone sehen darf**, und **keine Nutzernamen oder -IDs** (auch nicht die Raidleitung) – nur die Belegung als Zahlen.
+- `limit` 1–50 (Standard 10), sortiert nach Start. CORS `*`, bis zu 60 s zwischengespeichert, 60 Anfragen/Minute pro IP
+  (WebCore). Das Dashboard muss dafür öffentlich erreichbar sein (Reverse-Proxy mit HTTPS, siehe WebCore-README).
+
+```json
+{
+  "server": "Matters Community",
+  "events": [
+    {
+      "id": "rh-0001",
+      "title": "Mythic Undermine",
+      "game": "WoW – Retail",
+      "start": "2026-10-01T18:00:00Z",
+      "deadline": null,
+      "signups": 14,
+      "max": 20,
+      "full": false,
+      "roles": {
+        "tank":   {"label": "Tanks",  "emoji": "🛡️", "signups": 2, "max": 2},
+        "healer": {"label": "Heiler", "emoji": "✚",  "signups": 3, "max": 4},
+        "mdps":   {"label": "Nahkampf", "emoji": "⚔️", "signups": 5, "max": null},
+        "rdps":   {"label": "Fernkampf", "emoji": "🏹", "signups": 4, "max": null}
+      },
+      "other": {"bench": 1, "late": 0, "tentative": 2, "absence": 0},
+      "closed": false,
+      "url": "https://discord.com/channels/123/456/789"
+    }
+  ]
+}
+```
+
+`signups` = Plätze im Roster, `closed` = Anmeldung geschlossen oder Anmeldeschluss vorbei, `url` = Link zur
+Event-Nachricht (ohne Nachricht: zum Kanal). Rollen-Beschriftungen folgen der Server-Sprache.
+
+```bash
+curl https://dash.example.org/api/public/raids/123456789012345678?limit=5
+```
+
+```js
+const res = await fetch("https://dash.example.org/api/public/raids/123456789012345678?limit=5");
+if (res.ok) {
+  const { events } = await res.json();
+  for (const e of events) {
+    console.log(`${e.title} – ${new Date(e.start).toLocaleString("de-DE")} – ${e.signups}/${e.max ?? "∞"}`);
+  }
+}
+```
+
 ## Spec-Icons
 
 Eigene Icons je Spezialisierung werden als **Application-Emojis** an der Bot-Anwendung hinterlegt – botweit nutzbar, ohne Server-Emoji-Slots und ohne Einrichtung pro Server. Sie erscheinen im Spec-Auswahlmenü und in jeder Roster-Zeile (im Klassen-Dropdown wird das Icon der Standard-Spec als Anker genutzt).
@@ -180,3 +252,5 @@ Ein Spiel ist in `games.py` ein reiner Datenblock (Rollen, Klassen, Specs, Farbe
 ## Datenspeicherung
 
 Pro Event werden Anmeldungen (Discord-ID, Anzeigename, Klasse/Spec, Rolle, Status, Zeitpunkt) gespeichert, pro Nutzer die zuletzt gewählte Spec je Spiel/Klasse sowie eine Teilnahme-Statistik. Daten werden beim Löschen eines Events (auch durch das automatische Aufräumen), beim Entfernen des Cogs oder beim Verlassen des Servers entfernt.
+
+Die öffentliche API (falls eingeschaltet) gibt keine personenbezogenen Daten aus – nur Event-Daten und Belegungszahlen.

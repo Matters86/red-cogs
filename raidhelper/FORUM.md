@@ -34,6 +34,7 @@ Voraussetzung: der Cog `webcore` ist installiert und eingerichtet.
 | `[p]raid close <id>` | Anmeldung schließen. | Manager / Manage Server |
 | `[p]raid reopen <id>` | Anmeldung wieder öffnen. | Manager / Manage Server |
 | `[p]raid delete <id>` | Event samt Nachricht löschen. | Manager / Manage Server |
+| `[p]raid repost <id>` | Event-Nachricht neu posten (z. B. wenn sie gelöscht wurde); Anmeldungen bleiben. | Manager / Manage Server |
 | `[p]raid add <id> <mitglied> <klasse> <spec>` | Mitglied manuell eintragen. | Manager / Manage Server |
 | `[p]raid remove <id> <mitglied>` | Mitglied aus einem Event entfernen. | Manager / Manage Server |
 | `[p]raid export <id>` | Anmeldungen als CSV exportieren. | Manager / Manage Server |

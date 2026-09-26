@@ -145,12 +145,9 @@ def _fmt_ts(ts) -> str:
 
 
 def render_audit(entries: list, *, page_names: dict, guild_names: dict) -> str:
-    """Audit-Log-Tabelle (neueste zuerst) mit Client-seitigem Filter."""
+    """Audit-Log als ``ui.table`` (auf dem Handy Karten) mit Suche und Server-Filter (Client-seitig)."""
     if not entries:
-        return (
-            "<div class='card-x'><div class='wc-empty'><i class='bi bi-journal-text'></i>"
-            "<div>Noch keine Änderungen über das Dashboard protokolliert.</div></div></div>"
-        )
+        return ui.card(None, ui.empty("bi-journal-text", "Noch keine Änderungen über das Dashboard protokolliert."))
     guild_opts = "".join(
         f"<option value='{_esc(gid)}'>{_esc(name)}</option>"
         for gid, name in sorted(guild_names.items(), key=lambda kv: kv[1].lower())
@@ -161,33 +158,39 @@ def render_audit(entries: list, *, page_names: dict, guild_names: dict) -> str:
         gname = guild_names.get(str(gid)) or e.get("guild_name") or ("—" if not gid else str(gid))
         page = page_names.get(e.get("page")) or e.get("page") or "—"
         ok = e.get("ok", True)
-        badge = "<span class='wc-badge ok'>OK</span>" if ok else "<span class='wc-badge bad'>abgelehnt</span>"
-        rows.append(
-            f"<tr data-guild='{_esc(gid or '')}'>"
-            f"<td class='mono' style='white-space:nowrap'>{_esc(_fmt_ts(e.get('ts')))}</td>"
-            f"<td><div class='wc-who'>{_esc(e.get('user_name') or '?')}<small class='mono'>{_esc(e.get('user_id') or '')}</small></div></td>"
-            f"<td>{_esc(gname)}</td>"
-            f"<td>{_esc(page)}</td>"
-            f"<td class='mono'>{_esc(e.get('action') or '—')}</td>"
-            f"<td>{badge} <span class='wc-muted'>{_esc(e.get('result') or '')}</span></td>"
-            "</tr>"
-        )
-    return (
-        "<div class='card-x'>"
-        "<div class='wc-toolbar'>"
-        "<input id='wc-audit-q' type='search' placeholder='Suchen (Nutzer, Seite, Aktion …)'>"
-        f"<select id='wc-audit-g'><option value=''>Alle Server</option>{guild_opts}</select>"
-        f"<span class='wc-hint'>{len(entries)} Einträge · die letzten 300 werden aufbewahrt</span>"
+        badge = ui.badge("OK", "ok") if ok else ui.badge("abgelehnt", "bad")
+        rows.append(ui.row(
+            f"<span class='mono nowrap'>{_esc(_fmt_ts(e.get('ts')))}</span>",
+            f"<div class='wc-who'>{_esc(e.get('user_name') or '?')}<small class='mono'>{_esc(e.get('user_id') or '')}</small></div>",
+            _esc(gname),
+            _esc(page),
+            f"<span class='mono'>{_esc(e.get('action') or '—')}</span>",
+            f"{badge} <span class='wc-muted'>{_esc(e.get('result') or '')}</span>",
+            attrs={"data-guild": gid or ""},
+        ))
+    tools = (
+        "<div class='wc-table-tools'>"
+        "<div class='wc-search'><i class='bi bi-search'></i>"
+        "<input id='wc-audit-q' type='search' placeholder='Suchen (Nutzer, Seite, Aktion …)' aria-label='Suchen'></div>"
+        f"<select class='wc-input' id='wc-audit-g' aria-label='Server' style='width:auto;max-width:100%'>"
+        f"<option value=''>Alle Server</option>{guild_opts}</select>"
         "</div>"
-        "<div class='wc-scroll'><table class='table' id='wc-audit'>"
-        "<thead><tr><th>Zeit</th><th>Nutzer</th><th>Server</th><th>Seite</th><th>Aktion</th><th>Ergebnis</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table></div></div>"
-        "<script>(function(){var q=document.getElementById('wc-audit-q'),g=document.getElementById('wc-audit-g');"
-        "function f(){var t=q.value.toLowerCase(),gv=g.value;"
+    )
+    table = ui.table(["Zeit", "Nutzer", "Server", "Seite", "Aktion", "Ergebnis"], rows, id="wc-audit")
+    body = (
+        tools + table
+        + f"<p class='wc-hint' style='margin:10px 0 0'><span id='wc-audit-n'>{len(entries)}</span> Einträge · "
+        "die letzten 300 werden aufbewahrt</p>"
+        "<script>(function(){var q=document.getElementById('wc-audit-q'),g=document.getElementById('wc-audit-g'),"
+        "n=document.getElementById('wc-audit-n');"
+        "function f(){var t=q.value.toLowerCase(),gv=g.value,c=0;"
         "document.querySelectorAll('#wc-audit tbody tr').forEach(function(r){"
         "var ok=(!t||r.textContent.toLowerCase().indexOf(t)>-1)&&(!gv||r.dataset.guild===gv);"
-        "r.style.display=ok?'':'none';});}q.addEventListener('input',f);g.addEventListener('change',f);})();</script>"
+        "r.style.display=ok?'':'none';if(ok)c++;});n.textContent=c;}"
+        "q.addEventListener('input',f);g.addEventListener('change',f);})();</script>"
     )
+    return ui.card("Protokoll", body, icon="bi-journal-text",
+                   desc="Jede speichernde Dashboard-Aktion und jeder abgelehnte Zugriff – neueste zuerst.")
 
 
 # --------------------------------------------------------------------------- #
@@ -273,4 +276,327 @@ def render_member_home(*, guild, member, pages: list) -> str:
     else:
         parts.append(ui.card(None, ui.empty("bi-inboxes", "Noch keine Seiten verfügbar",
                                             "Sobald ein Modul Seiten für Mitglieder anbietet, erscheinen sie hier.")))
+    return "".join(parts)
+
+
+# --------------------------------------------------------------------------- #
+#  Bot-Status
+# --------------------------------------------------------------------------- #
+def _kv(rows) -> str:
+    return "<dl class='wc-kv'>" + "".join(f"<dt>{_esc(k)}</dt><dd>{v}</dd>" for k, v in rows) + "</dl>"
+
+
+def _links(items, prefix: str) -> str:
+    if not items:
+        return "<span class='wc-muted'>—</span>"
+    return "<div class='wc-keys'>" + "".join(
+        f"<a href='{_esc(prefix + slug)}'><code>{_esc(label)}</code></a>" if prefix else f"<code>{_esc(label)}</code>"
+        for slug, label in items
+    ) + "</div>"
+
+
+def render_status(info: dict) -> str:
+    """Owner-Seite „Bot-Status“. ``info`` kommt aus ``WebCore._collect_status``."""
+    proc = info["process"]
+    errs = info["errors"]
+    err_tone = "bad" if errs["error"] else ("warn" if errs["warning"] else "ok")
+    head = ui.hero(
+        "bi-activity", "",
+        "Zustand des Bots auf einen Blick: Laufzeit, Verbindung, Ressourcen, Versionen und welche Module "
+        "welche Dashboard-Seiten anbieten.",
+        actions=ui.button("Aktualisieren", icon="bi-arrow-clockwise", kind="ghost", href="/status", small=True),
+    )
+    lat = info["latency"]
+    stats = ui.stats([
+        ("Laufzeit", info["uptime"], "bi-clock-history", f"seit {info['started']}", None),
+        ("Latenz", f"{lat} ms" if lat is not None else "—", "bi-wifi", "Discord-Gateway",
+         None if lat is None else ("ok" if lat < 250 else "warn")),
+        ("Server", info["guild_count"], "bi-hdd-network", None, None),
+        ("Mitglieder", info["member_total"], "bi-people", f"{info['user_count']} Nutzer im Cache", None),
+        ("Cogs", info["cog_count"], "bi-puzzle", f"{info['page_count']} Dashboard-Seiten", None),
+        ("Fehler", errs["error"], "bi-bug", f"+ {errs['warning']} Warnung(en) im Protokoll", err_tone),
+    ])
+
+    if proc.get("source") == "psutil":
+        prows = [
+            ("Arbeitsspeicher", f"<span class='mono'>{proc['rss_mb']} MB</span>"
+             + (f" <span class='wc-muted'>({proc['mem_pct']} % des Systems)</span>" if proc.get("mem_pct") is not None else "")),
+            ("CPU", f"<span class='mono'>{proc['cpu_pct']} %</span>"
+             + (f" <span class='wc-muted'>({proc['cpu_count']} Kerne)</span>" if proc.get("cpu_count") else "")),
+            ("Threads", f"<span class='mono'>{_esc(proc.get('threads', '—'))}</span>"),
+            ("Prozess-ID", f"<span class='mono'>{_esc(proc.get('pid', '—'))}</span>"),
+            ("Messung", "psutil"),
+        ]
+    elif proc.get("source") == "resource":
+        prows = [
+            ("Arbeitsspeicher (Spitze)", f"<span class='mono'>{proc['rss_mb']} MB</span>"),
+            ("CPU-Zeit gesamt", f"<span class='mono'>{_esc(proc['cpu_time'])}</span>"),
+            ("Threads", f"<span class='mono'>{_esc(proc.get('threads', '—'))}</span>"),
+            ("Prozess-ID", f"<span class='mono'>{_esc(proc.get('pid', '—'))}</span>"),
+            ("Messung", "resource <span class='wc-muted'>(psutil nicht installiert – nur Spitzenwerte)</span>"),
+        ]
+    else:
+        prows = [("Messung", "<span class='wc-muted'>nicht verfügbar auf diesem System</span>")]
+    process_card = ui.card("Prozess", _kv(prows), icon="bi-cpu", desc="Ressourcen des Bot-Prozesses.")
+    versions = ui.card("Versionen", _kv([(k, f"<span class='mono'>{_esc(v)}</span>") for k, v in info["versions"]]),
+                       icon="bi-box-seam", desc="Laufzeitumgebung und Bibliotheken.")
+
+    rows = []
+    for c in info["cogs"]:
+        origin = ui.badge("Red-Core", "info") if c["core"] else ui.badge(c["package"] or "Modul", "muted")
+        rows.append(ui.row(
+            f"<div class='wc-cell-title'>{_esc(c['name'])}</div>",
+            origin,
+            f">{_esc(c['commands']) if c['commands'] is not None else '—'}",
+            _links(c["pages"], "/cogs/"),
+            _links(c["member_pages"], "/me/"),
+            _links(c["apis"], ""),
+            attrs={"data-core": "1" if c["core"] else "0"},
+        ))
+    cog_table = ui.table(["Cog", "Herkunft", ">Befehle", "Dashboard-Seiten", "Mein Bereich", "Öffentliche API"],
+                         rows, search=True, search_placeholder="Cog suchen …", id="wc-cogs",
+                         empty_text="Keine Cogs geladen.")
+    cogs_card = ui.card("Geladene Cogs", cog_table, icon="bi-puzzle",
+                        desc="Alle geladenen Cogs und was sie bei WebCore registriert haben "
+                             "(Team-Seiten unter /cogs, Mitglieder-Seiten unter /me, öffentliche API unter /api/public).")
+
+    if errs["recent"]:
+        items = "".join(
+            f"<li><span class='wc-pill {'bad' if r['levelno'] >= 40 else 'warn'}'>{_esc(r['level'])}</span>"
+            f"<span style='min-width:0'><b>{_esc(r['source'])}</b> <span class='wc-muted'>{_esc(r['time'])}</span>"
+            f"<div class='wc-msg'>{_esc(r['message'][:200])}</div></span></li>"
+            for r in errs["recent"]
+        )
+        err_body = f"<ul class='wc-list'>{items}</ul>"
+    else:
+        err_body = ui.empty("bi-check2-circle", "Keine Warnungen oder Fehler seit dem Start des Protokolls.")
+    err_card = ui.card("Letzte Meldungen", err_body, icon="bi-bug",
+                       actions=ui.button("Fehlerprotokoll", icon="bi-arrow-right", kind="ghost", href="/errors", small=True))
+    return head + stats + ui.columns(process_card, versions) + err_card + "<div style='height:16px'></div>" + cogs_card
+
+
+# --------------------------------------------------------------------------- #
+#  Fehlerprotokoll
+# --------------------------------------------------------------------------- #
+_LEVEL_TONE = {"WARNING": "warn", "ERROR": "bad", "CRITICAL": "bad"}
+
+
+def render_errors(records: list, *, total: int, sources: list, level: str, source: str, query: str,
+                  csrf: str, active: bool, capacity: int) -> str:
+    """Fehlerprotokoll: Filter (GET), Tabelle (auf dem Handy Karten), Leeren (POST + Bestätigung)."""
+    head = ui.hero(
+        "bi-bug", "",
+        "Warnungen und Fehler aller Cogs (Logger <span class='mono'>red.*</span>) seit dem Laden von WebCore – "
+        f"nur im Arbeitsspeicher, höchstens {int(capacity)} Einträge. Tokens und Passwörter werden maskiert.",
+    )
+    if not active:
+        head += ui.callout("Das Fehlerprotokoll ist gerade nicht aktiv (WebCore wurde ohne Protokoll-Handler gestartet).",
+                           tone="warn")
+    level_items = [("WARNING", "ab Warnung"), ("ERROR", "ab Fehler"), ("CRITICAL", "nur kritisch")]
+    filters = ui.form(
+        "/errors",
+        ui.grid(
+            ui.field("Stufe", ui.select("level", level_items, level, none_label="Alle Stufen")),
+            ui.field("Quelle (Cog)", ui.select("source", [(s, s) for s in sources], source, none_label="Alle Quellen")),
+            ui.field("Suche", ui.text_input("q", query, placeholder="Text in Meldung/Traceback …", type="search")),
+            cols=3,
+        )
+        + ui.actions(ui.button("Filtern", icon="bi-funnel"),
+                     ui.button("Zurücksetzen", icon="bi-x-lg", kind="ghost", href="/errors")),
+        csrf="", method="get",
+    )
+    rows = []
+    for r in records:
+        tb = ""
+        if r.get("traceback"):
+            tb = (f"<details class='wc-trace'><summary>Traceback</summary>"
+                  f"<pre>{_esc(r['traceback'])}</pre></details>")
+        rows.append(ui.row(
+            f"<span class='mono nowrap'>{_esc(r['time'])}</span>",
+            ui.badge(r["level"], _LEVEL_TONE.get(r["level"], "muted")),
+            f"<div class='wc-cell-title'>{_esc(r['source'])}</div><div class='wc-cell-sub mono'>{_esc(r['logger'])}</div>",
+            f"<div class='wc-msg'>{_esc(r['message'])}</div>{tb}",
+            attrs={"data-level": r["level"]},
+        ))
+    filtered = bool(level or source or query)
+    shown = f"{len(records)} von {total}" if filtered else f"{total}"
+    table = ui.table(["Zeit", "Stufe", "Quelle", "Meldung"], rows, id="wc-errors",
+                     empty_text="Keine passenden Einträge." if filtered else "Keine Warnungen oder Fehler protokolliert.")
+    clear = ui.form(
+        "/errors", ui.button("Leeren", icon="bi-trash3", kind="danger", small=True),
+        csrf=csrf, hidden={"form": "clear"},
+        confirm="Alle Einträge des Fehlerprotokolls löschen? Das lässt sich nicht rückgängig machen.",
+    ) if total else ""
+    card = ui.card(f"Einträge ({shown})", table, icon="bi-list-ul", actions=clear,
+                   desc="Neueste zuerst. Traceback per Klick aufklappen.")
+    return head + ui.card("Filter", filters, icon="bi-funnel") + "<div style='height:16px'></div>" + card
+
+
+# --------------------------------------------------------------------------- #
+#  Sichern & Wiederherstellen
+# --------------------------------------------------------------------------- #
+def _key_list(keys, limit: int = 12) -> str:
+    if not keys:
+        return "<span class='wc-muted'>—</span>"
+    shown = "".join(f"<code>{_esc(k)}</code>" for k in keys[:limit])
+    more = f" <span class='wc-muted'>+{len(keys) - limit}</span>" if len(keys) > limit else ""
+    return f"<div class='wc-keys'>{shown}{more}</div>"
+
+
+def _fmt_iso(value) -> str:
+    try:
+        dt = datetime.fromisoformat(str(value))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone().strftime("%d.%m.%Y %H:%M")
+    except (TypeError, ValueError):
+        return str(value or "—")
+
+
+def render_backup_preview(*, guild, data: dict, plan: dict, token: str, csrf: str, filename: str) -> str:
+    """Vorschau eines hochgeladenen Backups mit Bestätigung."""
+    src_id, src_name = data.get("guild_id"), data.get("guild_name") or "?"
+    info = _kv([
+        ("Datei", f"<span class='mono'>{_esc(filename or 'backup.json')}</span>"),
+        ("Erstellt", _esc(_fmt_iso(data.get("created")))),
+        ("Quelle", f"{_esc(src_name)} <span class='wc-muted mono'>{_esc(src_id)}</span>"),
+        ("Ziel", f"<b>{_esc(guild.name)}</b> <span class='wc-muted mono'>{guild.id}</span>"),
+    ])
+    notes = ""
+    if str(src_id) != str(guild.id):
+        notes += ui.callout(
+            "Die Sicherung stammt von <b>einem anderen Server</b>. Einstellungen werden übernommen, aber "
+            "<b>Kanal- und Rollen-IDs passen dann nicht</b> – prüfe danach Kanäle und Rollen in den Modulen.",
+            tone="warn")
+    if plan["missing"]:
+        notes += ui.callout("Nicht geladen (werden übersprungen): " + ", ".join(_esc(m) for m in plan["missing"]),
+                            tone="info")
+    rows, unchanged = [], []
+    for item in plan["cogs"]:
+        if item["status"] == "ok" and not any(
+                sc and (sc["changed"] or sc["unknown"] or sc["type_errors"] or sc["secret"])
+                for sc in (item.get("guild"), item.get("global"))):
+            unchanged.append(item["name"])
+            continue
+        if item["status"] != "ok":
+            why = "anderer Cog (identifier passt nicht)" if item["status"] == "identifier" else "ungültiger Eintrag"
+            rows.append(ui.row(f"<div class='wc-cell-title'>{_esc(item['name'])}</div>", ui.badge("übersprungen", "bad"),
+                               f"<span class='wc-muted'>{_esc(why)}</span>", "—", "—"))
+            continue
+        for scope_key, scope_label in (("guild", "Server"), ("global", "Botweit")):
+            sc = item.get(scope_key)
+            if sc is None:
+                continue
+            problems = []
+            if sc["unknown"]:
+                problems.append("<div class='wc-cell-sub'>unbekannt, wird ignoriert:</div>" + _key_list(sc["unknown"]))
+            if sc["type_errors"]:
+                problems.append("<div class='wc-cell-sub'>falscher Typ, wird ignoriert:</div>" + _key_list(
+                    [f"{k} ({want} erwartet, {got})" for k, want, got in sc["type_errors"]]))
+            if sc["secret"]:
+                problems.append("<div class='wc-cell-sub'>geschützt (Secret), wird ignoriert:</div>" + _key_list(sc["secret"]))
+            badge = ui.badge(f"{len(sc['changed'])} Änderung(en)", "warn") if sc["changed"] else ui.badge("unverändert", "ok")
+            rows.append(ui.row(
+                f"<div class='wc-cell-title'>{_esc(item['name'])}</div><div class='wc-cell-sub'>{scope_label}</div>",
+                badge,
+                _key_list(sc["changed"]),
+                f">{len(sc['same'])}",
+                "".join(problems) or "<span class='wc-muted'>—</span>",
+                attrs={"data-scope": scope_key},
+            ))
+    table = ui.table(["Cog", "Status", "Wird überschrieben", ">Gleich", "Hinweise"], rows, id="wc-import-plan",
+                     empty_text=("Keine Änderungen – alle Einstellungen sind bereits so." if unchanged
+                                 else "Die Sicherung enthält keine Einstellungen geladener Cogs."))
+    if unchanged:
+        table += ("<p class='wc-hint' style='margin:10px 0 0'><b>Unverändert</b> (bereits identisch): "
+                  + ", ".join(_esc(n) for n in unchanged) + "</p>")
+    glob = ""
+    if plan["has_global"]:
+        glob = ui.switch("include_global", "Botweite Einstellungen übernehmen", False,
+                         desc="Gilt für alle Server. Secrets (Tokens, Passwörter) sind nie in der Sicherung und "
+                              "bleiben unverändert.")
+    confirm_form = ui.form(
+        "/backup",
+        glob + ui.actions(
+            ui.button("Import ausführen", icon="bi-upload", kind="danger", name="form", value="confirm",
+                      confirm=f"Einstellungen auf „{guild.name}“ jetzt überschreiben? Rückgängig ist möglich, "
+                              "solange der Bot läuft."),
+            ui.button("Abbrechen", icon="bi-x-lg", kind="ghost", name="form", value="cancel",
+                      attrs={"formnovalidate": True}),
+        ),
+        csrf=csrf, hidden={"guild": guild.id, "preview": token},
+    )
+    body = info + "<div style='height:12px'></div>" + notes + table + ui.divider() + confirm_form
+    return ui.card("Vorschau: diese Einstellungen werden überschrieben", body, icon="bi-eye", tone="warn",
+                   desc="Es wird erst etwas geändert, wenn du den Import bestätigst.")
+
+
+def render_backup(*, guild, cogs: list, csrf: str, undo: list, preview: str = "") -> str:
+    """Owner-Seite „Sichern & Wiederherstellen“. cogs: [(name, n_guild_keys, n_global_keys)],
+    undo: [{"id", "time", "user", "cogs", "keys", "source"}]."""
+    head = ui.hero(
+        "bi-cloud-arrow-down", "",
+        f"Server-Einstellungen aller Module von <b>{_esc(guild.name)}</b> als JSON-Datei sichern und wieder "
+        "einspielen – z. B. vor größeren Umbauten oder um einen zweiten Server gleich einzurichten.",
+    )
+    if cogs:
+        items = "".join(
+            f"<li><i class='bi bi-puzzle'></i><span style='min-width:0'><b>{_esc(n)}</b> "
+            f"<span class='wc-muted'>– {int(g)} Server-Einstellung(en)"
+            + (f", {int(gl)} botweit" if gl else "") + "</span></span></li>"
+            for n, g, gl in cogs
+        )
+        cog_list = f"<ul class='wc-list'>{items}</ul>"
+    else:
+        cog_list = ui.empty("bi-puzzle", "Kein geladenes Modul mit Dashboard-Seite und Einstellungen.")
+    export = ui.card(
+        "Sichern (Export)",
+        cog_list + ui.divider() + ui.form(
+            "/backup",
+            ui.switch("include_global", "Botweite Einstellungen mitsichern", False,
+                      desc="Einstellungen, die für alle Server gelten – immer <b>ohne</b> Tokens, Secrets und "
+                           "Passwörter.")
+            + ui.actions(ui.button("JSON herunterladen", icon="bi-download")),
+            csrf=csrf, hidden={"form": "export", "guild": guild.id},
+        ),
+        icon="bi-download", desc="Enthält alle Server-Einstellungen der Module mit Dashboard-Seite.",
+    )
+    restore = ui.card(
+        "Wiederherstellen (Import)",
+        ui.form(
+            f"/backup?guild={guild.id}",
+            ui.grid(ui.field("Sicherungsdatei (.json, höchstens 2 MB)",
+                             "<input class='wc-input' type='file' name='backup' accept='.json,application/json' required>",
+                             help="Zuerst siehst du eine Vorschau, was überschrieben wird. Nur Einstellungen, die das "
+                                  "Modul kennt, werden übernommen."), cols=1)
+            + ui.actions(ui.button("Vorschau anzeigen", icon="bi-eye")),
+            csrf=csrf, hidden={"form": "preview", "guild": guild.id}, enctype="multipart/form-data",
+        ),
+        icon="bi-upload", desc=f"Spielt eine Sicherung auf <b>{_esc(guild.name)}</b> ein (auch von einem anderen Server).",
+    )
+    parts = [head]
+    if preview:
+        parts.append(preview + "<div style='height:16px'></div>")
+    if undo:
+        rows = []
+        for u in undo:
+            rows.append(ui.row(
+                f"<span class='mono nowrap'>{_esc(u['time'])}</span>",
+                _esc(u["user"]),
+                _esc(u["source"]),
+                _key_list(u["cogs"], limit=6),
+                f">{int(u['keys'])}",
+                ui.form("/backup", ui.button("Rückgängig", icon="bi-arrow-counterclockwise", kind="ghost", small=True),
+                        csrf=csrf, hidden={"form": "undo", "guild": guild.id, "undo": u["id"]},
+                        confirm="Die Einstellungen dieses Imports auf den Stand davor zurücksetzen? "
+                                "Spätere Änderungen an denselben Einstellungen gehen dabei verloren."),
+            ))
+        parts.append(ui.card(
+            "Rückgängig machen",
+            ui.table(["Zeit", "Durch", "Quelle", "Cogs", ">Einstellungen", ""], rows, id="wc-undo"),
+            icon="bi-arrow-counterclockwise",
+            desc="Vor jedem Import wird der Ist-Zustand im Arbeitsspeicher vorgehalten – bis zum Neustart des Bots "
+                 "bzw. Neuladen von WebCore.",
+        ) + "<div style='height:16px'></div>")
+    parts.append(ui.columns(export, restore))
     return "".join(parts)

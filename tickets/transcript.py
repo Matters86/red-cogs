@@ -8,6 +8,7 @@ eigene Seite ausliefern kann.
 from __future__ import annotations
 
 import html
+import re
 from datetime import datetime, timezone
 
 import discord
@@ -56,6 +57,52 @@ _PAGE = """<!DOCTYPE html>
 </html>"""
 
 
+# Jede Nachricht endet mit dieser Marke; zusammen mit ``data-uid`` lassen sich die Nachrichten
+# eines Nutzers exakt finden (Inhalte sind escaped – "<!--" kann darin nicht vorkommen).
+MSG_END = "<!--/msg-->"
+
+
+def _person(name, uid) -> str:
+    """Name im Kopf, mit Nutzer-ID markiert (für die Datenlöschung)."""
+    esc = html.escape(str(name))
+    try:
+        uid = int(uid or 0)
+    except (TypeError, ValueError):
+        uid = 0
+    return f"<span data-uid='{uid}'>{esc}</span>" if uid else esc
+
+
+def redact_user(doc: str, user_id: int, label: str) -> tuple[str, int]:
+    """Schwärzt einen Nutzer in einem gespeicherten Transcript.
+
+    Ersetzt seine Nachrichten (Name, Inhalt, Anhänge), Kopf-Einträge mit seiner ID und
+    Erwähnungen ``<@id>`` durch ``label``. Gibt ``(neues_html, anzahl_ersetzungen)`` zurück.
+    Transcripts von vor dieser Version haben keine ``data-uid`` – dort werden nur
+    Erwähnungen ersetzt (Anzeigenamen sind nicht eindeutig zuzuordnen).
+    """
+    uid = int(user_id)
+    lab = html.escape(label)
+    count = 0
+
+    def _msg(m):
+        nonlocal count
+        count += 1
+        return ("<div class='msg' data-uid='0'><div class='av'>?</div><div class='body'>"
+                f"<span class='name'>{lab}</span><span class='time'>{m.group(1)}</span>"
+                "<div class='content'><i>Nachricht entfernt (Datenlöschung)</i></div>"
+                "</div></div>" + MSG_END)
+
+    doc = re.sub(
+        rf"<div class='msg' data-uid='{uid}'>.*?<span class='time'>([^<]*)</span>.*?{re.escape(MSG_END)}",
+        _msg, doc, flags=re.S,
+    )
+    doc, n = re.subn(rf"<span data-uid='{uid}'>[^<]*</span>", lab, doc)
+    count += n
+    doc, n = re.subn(rf"&lt;@!?{uid}&gt;", "@" + lab, doc)
+    count += n
+    return doc, count
+
+
 def _initials(name: str) -> str:
     parts = [p for p in name.split() if p]
     if not parts:
@@ -94,12 +141,12 @@ async def build_transcript(channel: discord.abc.Messageable, meta: dict) -> str:
                     extras += f"<div class='embed'><b>{title}</b><br>{desc}</div>"
 
             rows.append(
-                "<div class='msg'>"
+                f"<div class='msg' data-uid='{int(getattr(author, 'id', 0) or 0)}'>"
                 f"<div class='av'>{avatar_initials}</div>"
                 "<div class='body'>"
                 f"<span class='name'>{name}</span><span class='time'>{time}</span>"
                 f"<div class='content'>{content}</div>{extras}"
-                "</div></div>"
+                "</div></div>" + MSG_END
             )
     except discord.HTTPException:
         rows.append("<div class='empty'>Historie konnte nicht vollständig gelesen werden.</div>")
@@ -107,7 +154,7 @@ async def build_transcript(channel: discord.abc.Messageable, meta: dict) -> str:
     title = html.escape(f"Ticket #{meta.get('num', '?')} – {meta.get('channel_name', '')}")
     meta_lines = []
     if meta.get("owner"):
-        meta_lines.append(f"Inhaber: {html.escape(str(meta['owner']))}")
+        meta_lines.append(f"Inhaber: {_person(meta['owner'], meta.get('owner_id'))}")
     if meta.get("reason"):
         meta_lines.append(f"Grund: {html.escape(str(meta['reason']))}")
     if meta.get("opened"):
@@ -115,7 +162,7 @@ async def build_transcript(channel: discord.abc.Messageable, meta: dict) -> str:
     if meta.get("closed"):
         meta_lines.append(f"Geschlossen: {html.escape(str(meta['closed']))}")
     if meta.get("closed_by"):
-        meta_lines.append(f"Geschlossen von: {html.escape(str(meta['closed_by']))}")
+        meta_lines.append(f"Geschlossen von: {_person(meta['closed_by'], meta.get('closed_by_id'))}")
     meta_html = " &middot; ".join(meta_lines) or "—"
 
     messages_html = "".join(rows) or "<div class='empty'>Keine Nachrichten.</div>"

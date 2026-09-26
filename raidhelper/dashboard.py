@@ -1,16 +1,16 @@
 """WebCore-Dashboard für den RaidHelper-Cog.
 
 Aufgaben (gleiches Muster wie tickets/dashboard.py):
-* GET                     -> Seite mit Reitern: Events · Einstellungen · Texte · Spec-Icons
+* GET                     -> Seite mit Reitern: Events · Einstellungen · Texte · Launcher & Website · Spec-Icons
 * GET ?event=<id>         -> Roster eines Events (read-only)
 * GET ?edit=<id>          -> Event bearbeiten (Formular)
 * POST form=create        -> Neues Event anlegen + posten (dieselbe Funktion wie ``[p]raid create``)
 * POST form=edit          -> Event ändern + Discord-Nachricht bearbeiten (``RaidHelper.update_event``)
 * POST form=settings      -> Einstellungen speichern  (Post/Redirect/Get)
-* POST form=action        -> Event schließen/öffnen/löschen
+* POST form=action        -> Event schließen/öffnen/löschen/neu posten (``RaidHelper.repost_event``)
 * POST form=icons         -> Spec-Icons hochladen/entfernen (nur Bot-Owner)
 
-Die Mitglieder-Seite „Raids“ (``/me/raids``) liegt in ``member.py``.
+Die Mitglieder-Seite „Raids“ (``/me/raids``) liegt in ``member.py``, die öffentliche API in ``public.py``.
 
 Aufbau mit dem UI-Baukasten von WebCore (``request.app["webcore"].ui``) – kein
 eigenes CSS. Datumsangaben werden in der Server-Zeitzone gerendert (kein
@@ -20,6 +20,7 @@ Discord-``<t:>`` im Web).
 from __future__ import annotations
 
 import html
+import json
 import re
 import time
 from datetime import datetime, timezone
@@ -30,6 +31,7 @@ from aiohttp import web
 
 from . import games
 from .embed import signup_counts
+from .public import build_payload as build_public_payload, public_base
 from .strings import LANGUAGES, OVERRIDABLE_KEYS, STRINGS, role_name, t
 
 _EMOJI_RE = re.compile(r"<(a?):([A-Za-z0-9_]+):(\d+)>")
@@ -273,7 +275,8 @@ async def _render(cog, request):
                _render_events(ui, conf, events, guild, tz_name, csrf, now), count=len(events))
         + ui.tab("neu", "Neues Event", "bi-calendar-plus",
                  _render_create(ui, guild, conf, tz_name, csrf, _load_draft(cog, request, "create")))
-        + _render_settings(ui, guild, conf, tz_name, csrf, portal=await _portal_state(request, guild))
+        + _render_settings(ui, guild, conf, tz_name, csrf, portal=await _portal_state(request, guild),
+                           public=await public_base(request))
         + ui.tab("icons", "Spec-Icons", "bi-person-badge", icons, count=len(spec_emojis) if full else None)
     )
     return {"title": "Raidplaner", "content": bar + head + body}
@@ -291,7 +294,55 @@ async def _portal_state(request, guild) -> bool | None:
     return bool(portal.get(str(guild.id)))
 
 
-def _render_settings(ui, guild, conf, tz_name, csrf, *, portal: bool | None = None) -> str:
+def _render_public(ui, guild, conf, base: str, public_host: bool) -> str:
+    """Karte „Für Launcher & Website freigeben“ (Schalter + URL + Beispiel) – wie beim Changelog."""
+    json_url = f"{base}/api/public/raids/{guild.id}"
+    inp = ui.text_input("", json_url, attrs={"readonly": True, "onclick": "this.select()"})
+    copy = ui.button("", icon="bi-clipboard", kind="ghost", type="button",
+                     attrs={"title": "Kopieren", "onclick": "navigator.clipboard&&navigator.clipboard.writeText("
+                            "this.previousElementSibling.value);this.querySelector('i').className='bi bi-check2'"})
+    example = build_public_payload(guild, conf, limit=1)
+    if not example["events"]:
+        example["events"] = [{
+            "id": "r1", "title": "Mythic Undermine", "game": "WoW – Retail",
+            "start": "2026-10-01T18:00:00Z", "deadline": None, "signups": 14, "max": 20, "full": False,
+            "roles": {"tank": {"label": "Tanks", "emoji": "🛡️", "signups": 2, "max": 2},
+                      "healer": {"label": "Heiler", "emoji": "✚", "signups": 3, "max": 4}},
+            "other": {"bench": 1, "late": 0, "tentative": 2, "absence": 0},
+            "closed": False, "url": f"https://discord.com/channels/{guild.id}/123/456",
+        }]
+    example_json = json.dumps(example, ensure_ascii=False, indent=2)
+    state = ui.badge("freigegeben", "ok") if conf.get("public_api") else ui.badge("aus", "muted")
+    hint = ui.callout(
+        "Damit ein Launcher oder eine Website die Daten abrufen kann, muss das Dashboard <b>öffentlich erreichbar</b> "
+        "sein (Reverse-Proxy mit HTTPS, siehe WebCore-README). Ohne Freigabe – oder für unbekannte Server – antwortet "
+        "die Adresse mit <code>404</code>. Die Adresse ist <b>für jeden abrufbar</b>: ausgegeben werden nur kommende "
+        "Events aus Kanälen, die <b>@everyone</b> sehen darf, mit Titel, Spiel, Termin und Belegung als Zahlen – "
+        "keine Namen oder IDs von Mitgliedern.",
+        tone="info" if public_host else "warn",
+    )
+    if not public_host:
+        hint += ui.callout(
+            f"Die Adresse unten stammt von <code>{_esc(base)}</code> – das sieht nicht nach einer öffentlichen "
+            "HTTPS-Adresse aus. Trage in WebCore die öffentliche Redirect-URI ein, dann stimmt der Link.", tone="warn")
+    body = (
+        ui.switches(ui.switch("public_api", "Kommende Raids öffentlich abrufbar machen", conf.get("public_api"),
+                              desc="JSON-Schnittstelle für diesen Server freigeben (Standard: aus)."))
+        + ui.divider()
+        + ui.field("JSON-Adresse", f"<div class='wc-input-group'>{inp}{copy}</div>",
+                   help="Parameter: <code>?limit=1–50</code> (Standard 10). Antwort wird bis zu 60 Sekunden "
+                        "zwischengespeichert.")
+        + hint
+        + ui.field("Beispiel-Antwort",
+                   f"<textarea class='wc-input mono' rows='16' readonly>{_esc(example_json)}</textarea>",
+                   help="Nächstes öffentliches Event dieses Servers (bzw. ein Beispiel, solange es keines gibt).")
+    )
+    return ui.card("Für Launcher & Website freigeben", body, icon="bi-broadcast", actions=state,
+                   desc="Öffentliche Schnittstelle, mit der z. B. dein Launcher die nächsten Raids anzeigt.")
+
+
+def _render_settings(ui, guild, conf, tz_name, csrf, *, portal: bool | None = None,
+                     public: tuple[str, bool] | None = None) -> str:
     text_items = [(c.id, f"#{c.name}") for c in guild.text_channels]
 
     general = ui.card("Allgemein", ui.grid(
@@ -353,9 +404,22 @@ def _render_settings(ui, guild, conf, tz_name, csrf, *, portal: bool | None = No
         "/cogs/raidhelper",
         ui.tab("einstellungen", "Einstellungen", "bi-sliders",
                  general + reminders + member_card + cleanup + save)
-        + ui.tab("texte", "Texte", "bi-chat-left-text", texts + save),
+        + ui.tab("texte", "Texte", "bi-chat-left-text", texts + save)
+        + ui.tab("launcher", "Launcher & Website", "bi-broadcast",
+                 _render_public(ui, guild, conf, *(public or ("", False))) + save),
         csrf=csrf, hidden={"form": "settings", "guild": guild.id}, savebar=True,
     )
+
+
+def _message_missing(guild, event: dict) -> bool:
+    """Fehlt die Discord-Nachricht des Events (nie gepostet/Posten fehlgeschlagen, gelöscht, Kanal weg)?
+
+    Gelöschte Nachrichten merkt sich der Cog über ``on_raw_message_delete`` bzw. beim Aktualisieren
+    (``message_id`` -> ``None``) – hier also keine Discord-Anfrage pro Event.
+    """
+    if not event.get("message_id"):
+        return True
+    return not event.get("channel_id") or guild.get_channel(event["channel_id"]) is None
 
 
 def _render_events(ui, conf, events: dict, guild, tz_name: str, csrf: str, now: int) -> str:
@@ -397,9 +461,21 @@ def _render_events(ui, conf, events: dict, guild, tz_name: str, csrf: str, now: 
             csrf=csrf, hidden={**hidden, "action": "delete"},
             confirm=f"Event „{e.get('title') or eid}“ und seine Discord-Nachricht werden gelöscht.",
         )
+        repost = ""
+        missing = _message_missing(guild, e)
+        if missing:
+            repost = ui.form(
+                "/cogs/raidhelper",
+                ui.button("Neu posten", icon="bi-send", kind="accent", small=True,
+                          attrs={"title": "Die Event-Nachricht fehlt in Discord (gelöscht oder Posten "
+                                          "fehlgeschlagen) – jetzt neu posten"}),
+                csrf=csrf, hidden={**hidden, "action": "repost"},
+            )
         cap = e.get("max_signups")
         roster_txt = f"{roster} / {int(cap)}" if cap else str(roster)
         status = ui.badge("geschlossen", "muted") if closed else ui.badge("offen", "ok")
+        if missing:
+            status += " " + ui.badge("Nachricht fehlt", "warn")
         rows.append(ui.row(
             f"<div class='wc-cell-title'>{_esc(e.get('title') or '—')}</div>"
             f"<div class='wc-cell-sub'><span class='mono'>{_esc(eid)}</span> · {_esc(games.game_label(e.get('game')))}</div>",
@@ -408,7 +484,7 @@ def _render_events(ui, conf, events: dict, guild, tz_name: str, csrf: str, now: 
             f"<span class='mono'>{_esc(roster_txt)}</span>"
             f"<div class='wc-cell-sub'>{total} Rückmeldung{'' if total == 1 else 'en'}</div>",
             status,
-            f"><div class='wc-row-actions'>{roster_btn}{edit_btn}{toggle}{delete}</div>",
+            f"><div class='wc-row-actions'>{repost}{roster_btn}{edit_btn}{toggle}{delete}</div>",
         ))
     table = ui.card(
         "Events", ui.table(["Event", "Start", "Im Roster", "Status", ">"], rows,
@@ -416,7 +492,8 @@ def _render_events(ui, conf, events: dict, guild, tz_name: str, csrf: str, now: 
         icon="bi-calendar-event",
         desc=f"Zeiten in der Zeitzone <b>{_esc(tz_name)}</b>. „Bearbeiten“ ändert Titel, "
              "Termin und Limits – die Discord-Nachricht wird mitgeändert. „Schließen“ beendet nur die "
-             "Anmeldung, das Event bleibt bestehen.",
+             "Anmeldung, das Event bleibt bestehen. Fehlt die Nachricht in Discord (gelöscht oder Posten "
+             "fehlgeschlagen), erscheint „Neu posten“ – Anmeldungen bleiben erhalten.",
         actions=ui.goto("Neues Event", "neu", icon="bi-calendar-plus", kind="accent"),
     )
     return hint + table
@@ -709,6 +786,7 @@ async def _handle_post(cog, request):
         await gconf.reminders.set("reminders" in data)
         await gconf.ping_signed_up.set("ping_signed_up" in data)
         await gconf.member_page.set("member_page" in data)
+        await gconf.public_api.set("public_api" in data)
         overrides = {}
         for key in OVERRIDABLE_KEYS:
             val = (data.get(f"ovr_{key}") or "").strip()
@@ -733,6 +811,16 @@ async def _handle_post(cog, request):
 
     if form == "edit":
         return await _post_edit(cog, request, guild, data)
+
+    if form == "action" and data.get("action") == "repost":
+        # Gleiche Rechte wie die anderen Event-Aktionen (POST = Server mit „Bearbeiten“),
+        # gleiche Prüf-/Post-Logik wie beim Anlegen (``RaidHelper.repost_event``).
+        from .raidhelper import EventInputError  # zur Laufzeit (vermeidet Import-Zyklus)
+        try:
+            await cog.repost_event(guild, str(data.get("event_id") or ""))
+        except EventInputError as err:
+            raise web.HTTPFound(f"/cogs/raidhelper?guild={guild.id}&err=" + quote(_err_text(err)))
+        raise web.HTTPFound(f"/cogs/raidhelper?guild={guild.id}&ok=" + quote("Event-Nachricht neu gepostet"))
 
     if form == "action":
         event_id = data.get("event_id")

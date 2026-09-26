@@ -18,18 +18,22 @@ Danach `webcore` einrichten (siehe [`webcore/README.md`](webcore/README.md)).
 
 | Cog | Beschreibung |
 |---|---|
-| [`webcore`](webcore/) | Zentrales Web-Dashboard (aiohttp, Discord-OAuth2) mit Rollen-Rechten (Ansehen/Bearbeiten je Seite), globalem Server-Wechsler und Audit-Log. Andere Cogs klinken sich ein. |
+| [`webcore`](webcore/) | Zentrales Web-Dashboard (aiohttp, Discord-OAuth2) mit Rollen-Rechten (Ansehen/Bearbeiten je Seite), globalem Server-Wechsler, Audit-Log, Bot-Status mit Fehlerprotokoll und Sichern & Wiederherstellen. Andere Cogs klinken sich ein. |
 | [`example`](example/) | Vorlage: Hybrid-Befehl + automatische Dashboard-Seite. |
 | [`autoroom`](autoroom/) | Autovoiceroom: automatische temporäre Voicechannels, voll per Dashboard konfigurierbar. |
 | [`autorole`](autorole/) | Automatische Rollenvergabe bei Beitritt + Self-Service-Rollen-Panels (Buttons/Dropdown). |
 | [`changelog`](changelog/) | Server-Updates (Changelogs) per Modal als einheitliches Embed posten – mit Kategorien, optionalem Rollen-Ping und Dashboard-Historie. |
 | [`commands`](commands/) | Listet alle geladenen Cogs und Befehle im Dashboard – mit Stufen und Mitglieds-Prüfung. |
 | [`fivemadmin`](fivemadmin/) | FiveM-Adminpanel (QBox): Support-, Moderations- und Admin-Aktionen per Discord-Befehl und eigenem Live-Webpanel (Login per Discord), gemeinsame Action-Queue, Audit-Log und Not-Aus. Dazu die Dashboard-Seite „FiveM-Admin“ für die Verwaltung (Not-Aus, Sperren, Panel-Rechte, Einstellungen, Ein-Klick-Anmeldung im Live-Panel). |
+| [`giveaways`](giveaways/) | Gewinnspiele mit persistentem Teilnahme-Button, Rollen-Voraussetzungen, Mindest-Mitgliedschaft, Bonus-Losen, fairer automatischer Auslosung (auch nach Downtime), Reroll, Dashboard und „Mein Bereich → Gewinnspiele“. |
 | [`guard`](guard/) | Spamschutz, Honeypot und Raid-Notmodus – mehrsprachig und per Dashboard steuerbar. |
+| [`levels`](levels/) | Levelsystem: XP für Nachrichten und Voice, Level-Up-Meldungen, Rollen-Belohnungen mit Hierarchie-Schutz, Rangkarte (`[p]rank`), Rangliste – Dashboard „Level“ und Mitgliederseite „Mein Level“. |
 | [`onlyimagevideo`](onlyimagevideo/) | Macht Kanäle zu Nur-Medien-Kanälen: löscht Nachrichten ohne Bild/Video/GIF (auch Tenor-/Giphy-Links, Sticker), Threads erben die Regel, mit Dashboard. |
 | [`organigram`](organigram/) | Postet Server-Organigramme als Bild (5 Muster), Embed oder Text – mit Live-Vorschau im Dashboard. |
 | [`poll`](poll/) | Mehrsprachige Umfragen: Abstimmung per Button, Live-Ergebnis, Einzel-/Mehrfachauswahl, anonym/öffentlich, Auto-Ende, CSV-Export und Dashboard. |
 | [`raidhelper`](raidhelper/) | Mehrsprachiger Raid-Planer: Anmeldung per Button, Roster, Erinnerungen, Wiederholung, CSV-Export und Dashboard. |
+| [`scheduler`](scheduler/) | Geplante Nachrichten (Text/Embed, Rollen-Ping): einmalig, täglich, Wochentage, monatlich, Intervall – mit Zeitzone/Sommerzeit, Auto-Pause bei Fehlern, Dashboard mit Vorschau und „Jetzt testen“. |
+| [`serverstats`](serverstats/) | Server-Statistik ohne Personendaten: Beitritte, Abgänge, Mitglieder, Nachrichten und Voice-Zeit je Kanal – Dashboard „Statistik“ mit Diagrammen (7/30/90 Tage), Top-Kanälen, CSV-Export und `[p]stats`. |
 | [`sticky`](sticky/) | Hält eine Nachricht am unteren Ende eines Kanals fest – mit Webhook-Modus, Platzhaltern und Dashboard. |
 | [`tickets`](tickets/) | Mehrsprachiges Ticketsystem mit Panels, Team-Zuordnung je Grund, Transcripts und Dashboard. |
 | [`twitchlive`](twitchlive/) | Twitch-Live-Benachrichtigungen: genau eine Meldung pro Stream mit Vorschaubild, Rollen-Ping, eigener Nachricht, „war live“-Bearbeitung nach Stream-Ende, optionaler Live-Rolle und Dashboard. |
@@ -49,12 +53,13 @@ Neben den Team-Seiten bietet WebCore zwei Zugänge für alle anderen:
 
 - **Mein Bereich (`/me`)** – normale Server-Mitglieder melden sich per Discord an und sehen nur ihre
   eigenen Daten: **Raids** (anmelden, Status ändern, abmelden), **Umfragen** (abstimmen),
-  **Rollen** (Self-Service-Rollen wie an den Panels) und **Meine Tickets** (eigene Tickets und
+  **Rollen** (Self-Service-Rollen wie an den Panels), **Mein Level**, **Gewinnspiele** und **Meine Tickets** (eigene Tickets und
   Transcripts, optional neues Ticket öffnen). Pro Server einschaltbar (`[p]webcore portal on` bzw.
   *Zugriff & Rollen*); jede Modul-Seite lässt sich zusätzlich im jeweiligen Dashboard ausblenden.
 - **Öffentliche API (`/api/public/…`)** – ohne Login, mit CORS und Rate-Limit, z. B. die
-  **Changelog-API** (`/api/public/changelog/<server-id>` als JSON bzw. `/rss`) für einen
-  Spiele-Launcher oder die eigene Website.
+  **Changelog-API** (`/api/public/changelog/<server-id>` als JSON bzw. `/rss`), der **Live-Status**
+  (`/api/public/twitch/<server-id>`) und **kommende Raids** (`/api/public/raids/<server-id>`) für einen
+  Spiele-Launcher oder die eigene Website – jeweils pro Server im Dashboard freizuschalten.
 
 Details, Einrichtung und die Regeln für Cog-Entwickler stehen in [`webcore/README.md`](webcore/README.md)
 („Mein Bereich“, „Mitglieder-Seiten“, „öffentliche API“), die Changelog-API in

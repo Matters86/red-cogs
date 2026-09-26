@@ -51,6 +51,12 @@ Red-Instanz im System-Temp an und löscht sie am Ende wieder.
 | `wl_test_welcome.py` | welcome: Beitritt/Verlassen, Willkommensbild mit Avatar, DM, Befehle, Dashboard mit Vorschau |
 | `wl_test_warns.py` | warns: Punkte, Verfall, automatische Maßnahmen mit Hierarchie-Schutz, DM/Log, Befehle, Dashboard |
 | `fivem_functest.py` | fivemadmin: WebCore-Seite, Panel-Rechte/Presets, SSO, keine Secrets im HTML |
+| `fx_test.py` | tickets: `red_delete_data_for_user` (alle requester, Transcripts schwärzen/löschen) · raidhelper: „Neu posten“ · öffentliche APIs `/api/public/raids` und `/api/public/twitch` (aus = 404, keine Nutzerdaten, versteckte Kanäle, CORS, nur Cache) |
+| `ws_test.py` | WebCore: Bot-Status, Fehlerprotokoll (Handler am Logger `red`, Secrets maskiert, kein doppelter Handler), Sichern & Wiederherstellen (Export ohne Secrets, Import mit Vorschau/Bestätigung/Rückgängig, Limits), Audit-Log als Tabelle – nur Owner, CSRF |
+| `st_test.py` | serverstats: Zählung (Bots/Webhooks/AFK ausgenommen), Puffer/Flush, Voice-Zeit, Aufbewahrung, keine Personendaten, SVG-Diagramme, CSV-Export, Befehle, Dashboard-Rechte |
+| `lv_test.py` | levels: XP/Cooldown/Levelkurve, Voice-XP-Regeln, Level-Up-Meldung, Belohnungen mit Hierarchie/Selbst-Hochstufung, Rangkarte, Rangliste, Befehle, Team-Dashboard, `/me/level`, Datenlöschung |
+| `gv_test.py` | giveaways: Teilnahme-Regeln, persistente Views nach Neustart, faire gewichtete Auslosung, Nachholen nach Downtime, Reroll/Ende/Abbruch, Ping nur Gewinner, Rechte, Dashboard, `/me/gewinnspiele`, Datenlöschung |
+| `sc_test.py` | scheduler: nächster Termin für alle Typen inkl. Sommerzeitwechsel Europe/Berlin und Monatsende, Downtime-Regel (< 10 min), Auto-Pause nach 5 Fehlern, allowed_mentions nur Ping-Rolle, Dashboard-Formulare/Vorschau, Befehle, Rechte |
 
 ## Bausteine (Harnesses)
 
@@ -66,6 +72,10 @@ Red-Instanz im System-Temp an und löscht sie am Ende wieder.
 | `tw_harness.py` | twitchlive mit `FakeTwitch` (Helix-Nachbau, kein Netz) |
 | `wl_harness.py` | welcome + warns, DMs aufgezeichnet |
 | `fivem_harness.py` | fivemadmin ohne eigenen Webserver, SQLite im Temp-Ordner |
+| `ws_harness.py` | WebCore mit Demo-Cog `WsDemo` (Secret-Keys), `bot.cogs`, installiertem Fehlerprotokoll |
+| `st_harness.py`, `lv_harness.py` | serverstats bzw. levels (Voice-Kanäle Gaming/AFK, Belohnungsrollen, aufgezeichnete Rollen/DMs, Mein Bereich) |
+| `gv_harness.py` | giveaways: `bot.add_view`-Aufzeichnung, Sendungen mit allowed_mentions, Kanal-Sichtbarkeit, `joined_at`, Fake-Interaktionen |
+| `sc_harness.py` | scheduler: Sendungen mit allowed_mentions, `chan.fail_next` für Sendefehler, Beispieldaten |
 
 Login wird in allen Harnesses per Header `X-Test-User: <id>` (oder `?_as=<id>`) simuliert:
 1 = Bot-Owner, 11 Lena (Support), 12 Tom (Moderator), 13 Kai (VIP, nur Mitglied), 14 Mia (Support + Raidleitung).

@@ -1,0 +1,21 @@
+{
+    "name": "Giveaways",
+    "short": "Gewinnspiele mit Teilnahme-Button, Voraussetzungen, Bonus-Losen, fairer Auslosung und Dashboard.",
+    "description": "Gewinnspiele direkt in Red: Preis, Beschreibung, Kanal, Laufzeit (Dauer oder Datum/Uhrzeit) und Anzahl Gewinner festlegen, optional benötigte und ausgeschlossene Rollen, Mindest-Mitgliedschaftsdauer und Bonus-Lose für Rollen. Teilnahme per persistentem Button (übersteht Neustarts), erneuter Klick = austreten mit Rückfrage. Automatische Auslosung per kryptografisch sicherem Zufall (secrets.SystemRandom) – auch nachgeholt, wenn der Bot beim Ende offline war. Gewinner-Ansage pingt ausschließlich die Gewinner. Vorzeitig beenden, abbrechen, einzelne oder alle Gewinner neu auslosen. Komplett über das WebCore-Dashboard verwaltbar, Mitglieder nehmen auf Wunsch auch unter „Mein Bereich → Gewinnspiele“ teil. Mehrsprachig (Deutsch/Englisch).",
+    "tags": [
+        "giveaway",
+        "gewinnspiel",
+        "verlosung",
+        "buttons",
+        "dashboard",
+        "i18n"
+    ],
+    "requirements": [
+        "tzdata"
+    ],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert pro Gewinnspiel die Discord-IDs und Anzeigenamen der Teilnehmenden mit Beitrittszeitpunkt, die Discord-IDs der Gewinner (und neu ausgeloster, ersetzter Gewinner) sowie die Discord-ID der Person, die das Gewinnspiel gestartet hat. Beendete Gewinnspiele werden nach der eingestellten Aufbewahrungszeit (Standard 90 Tage) automatisch gelöscht. Auf Anfrage (Red-Datenlöschung) werden Teilnahmen und Gewinner-Einträge entfernt und die Veranstalter-ID anonymisiert."
+}

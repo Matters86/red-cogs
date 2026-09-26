@@ -40,6 +40,9 @@
           <div class="nav-section">Verwaltung</div>
           <a class="nav-link {% if active_page == 'access' %}active{% endif %}" href="/access"><i class="bi bi-person-lock"></i> Zugriff &amp; Rollen</a>
           <a class="nav-link {% if active_page == 'audit' %}active{% endif %}" href="/audit"><i class="bi bi-journal-text"></i> Audit-Log</a>
+          <a class="nav-link {% if active_page == 'status' %}active{% endif %}" href="/status"><i class="bi bi-activity"></i> Bot-Status</a>
+          <a class="nav-link {% if active_page == 'errors' %}active{% endif %}" href="/errors"><i class="bi bi-bug"></i> Fehlerprotokoll</a>
+          <a class="nav-link {% if active_page == 'backup' %}active{% endif %}" href="/backup"><i class="bi bi-cloud-arrow-down"></i> Sichern &amp; Wiederherstellen</a>
         {% endif %}
       {% endif %}
       {% if show_member_nav %}

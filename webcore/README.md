@@ -15,6 +15,10 @@ Dashboard-Seiten zu registrieren. Neue Cogs erscheinen automatisch in der Naviga
 - **Öffentliche API** (`/api/public/…`) für Launcher/Websites – ohne Login, mit CORS, Cache und Rate-Limit.
 - Einheitliche, übersichtliche Seiten (Reiter, Kennzahlen, Hilfetexte, Speicherleiste) über das
   gemeinsame UI-Kit; mobil bedienbar.
+- **Bot-Status & Fehlerprotokoll** (nur Owner): Laufzeit, Latenz, RAM/CPU, Versionen, geladene Cogs mit
+  ihren Seiten – und alle Warnungen/Fehler der Cogs mit Traceback, Secrets maskiert.
+- **Sichern & Wiederherstellen** (nur Owner): Server-Einstellungen aller Module als JSON sichern und mit
+  Vorschau, Bestätigung und „Rückgängig“ wieder einspielen.
 - Login-Seite, Nutzer-Menü mit Avatar und Rolle, Toast-Meldungen.
 
 ## Installation
@@ -83,7 +87,8 @@ Im Dashboard unter **Verwaltung → Zugriff & Rollen** (nur Bot-Owner):
   vergeben lassen (Autorole-Beitrittsrollen/-Panels, Ticket-Inhaberrolle), wenn die Rolle
   **unter ihrer eigenen höchsten Rolle** liegt und **keine Moderations-/Verwaltungsrechte** hat.
 - Botweite Einstellungen (z. B. Spec-Icons im Raidplaner, versteckte Befehle) und die Seiten
-  „Zugriff & Rollen“ und „Audit-Log“ bleiben dem Owner vorbehalten.
+  „Zugriff & Rollen“, „Audit-Log“, „Bot-Status“, „Fehlerprotokoll“ und „Sichern & Wiederherstellen“
+  bleiben dem Owner vorbehalten.
 - Wichtig: „Bearbeiten“ gibt **alle** Einstellungen einer Seite frei (bei Tickets z. B. auch die
   Admin-Rollen des Ticketsystems). Vergib es nur an Rollen, denen du das zutraust.
 
@@ -91,7 +96,8 @@ Im Dashboard unter **Verwaltung → Zugriff & Rollen** (nur Bot-Owner):
 
 **Verwaltung → Audit-Log** zeigt jede speichernde Aktion im Dashboard: Zeit, Nutzer, Server,
 Seite, Aktion und Ergebnis – auch abgelehnte Versuche ohne Bearbeitungsrecht. Aufbewahrt werden
-die letzten 300 Einträge; Suche und Server-Filter sind eingebaut.
+die letzten 300 Einträge; Suche und Server-Filter sind eingebaut. Auf dem Handy erscheint jeder
+Eintrag als Karte.
 
 ### Audit-Log nach Discord
 
@@ -102,6 +108,70 @@ Erwähnung, **ohne Ping**), Seite, Aktion und Ergebnis – grün für OK, rot f�
 Das Posten läuft im Hintergrund; ist der Kanal weg oder fehlen dem Bot Rechte, wird das nur im
 Bot-Log vermerkt, das Dashboard arbeitet normal weiter. Einträge ohne Server (z. B. botweite
 Einstellungen) werden nicht gepostet.
+
+## Bot-Status
+
+**Verwaltung → Bot-Status** (nur Bot-Owner und Allowlist, alle anderen bekommen 403):
+
+- Kennzahlen: Laufzeit, Discord-Latenz, Anzahl Server und Mitglieder, geladene Cogs, Fehler/Warnungen.
+- **Prozess:** Arbeitsspeicher, CPU-Last, Threads, Prozess-ID – über `psutil` (kommt mit Red). Fehlt es,
+  zeigt WebCore über das Python-Modul `resource` den Spitzenwert des Speichers und die CPU-Zeit.
+- **Versionen:** Python, Red-DiscordBot, discord.py, aiohttp, Betriebssystem, Shards.
+- **Geladene Cogs:** Tabelle (mit Suche, auf dem Handy als Karten) mit Herkunft (Red-Core oder Paket),
+  Anzahl Befehle und was der Cog bei WebCore registriert hat: Dashboard-Seiten (`/cogs/…`),
+  Mitglieder-Seiten (`/me/…`) und öffentliche APIs (`/api/public/…`).
+- Die letzten fünf Meldungen aus dem Fehlerprotokoll mit Link dorthin.
+
+## Fehlerprotokoll
+
+**Verwaltung → Fehlerprotokoll** (nur Owner/Allowlist): Beim Laden hängt WebCore einen `logging.Handler`
+an den Logger `red`. Damit landen alle **Warnungen, Fehler und kritischen Meldungen** der Cogs
+(`red.<cog>`, `red.red-cogs.<cog>`, Red selbst) im Protokoll – mit Zeit, Stufe, Quelle (Cog) und Logger,
+Meldung und **aufklappbarem Traceback**.
+
+- Nur im **Arbeitsspeicher**, höchstens **500 Einträge** (älteste fallen raus). Nach einem Neustart des Bots
+  ist es leer; bei `[p]reload webcore` werden die Einträge übernommen.
+- Filter nach **Stufe** (ab Warnung / ab Fehler / nur kritisch) und **Quelle**, **Suche** in Meldung und
+  Traceback. **Leeren** löscht alle Einträge (mit Rückfrage, landet im Audit-Log).
+- **Secrets werden maskiert** (`••••••`), bevor etwas gespeichert oder angezeigt wird: das Bot-Token, das
+  OAuth-Client-Secret von WebCore, API-Keys aus `[p]set api`, Secret-Einstellungen der Cogs sowie typische
+  Muster wie `token=…`, `client_secret=…`, `password: …`, `Authorization: …` und `Bearer …`.
+- Alles wird HTML-escaped angezeigt. Beim Entladen wird der Handler wieder entfernt; es hängt nie mehr
+  als einer am Logger (auch nicht nach mehrfachem Neuladen).
+
+## Sichern & Wiederherstellen
+
+**Verwaltung → Sichern & Wiederherstellen** (nur Owner/Allowlist). Server oben rechts wählen.
+
+**Sichern:** „JSON herunterladen“ speichert die **Server-Einstellungen aller geladenen Module mit
+Dashboard-Seite** (generisch über deren Red-`Config`) als Datei:
+
+```json
+{"format": "red-cogs-backup", "version": 1, "created": "2026-09-26T12:00:00+00:00",
+ "guild_id": 1000, "guild_name": "Matters Community",
+ "cogs": {"Tickets": {"identifier": "846215097433", "guild": {"language": "de", "…": "…"}}}}
+```
+
+Optional „Botweite Einstellungen mitsichern“ (Feld `global` je Cog). **Secrets sind nie enthalten:**
+Schlüssel mit *secret*, *token*, *password*/*passwort*, *api_key* oder *key* im Namen werden – auch
+verschachtelt – weggelassen.
+
+**Wiederherstellen:**
+
+1. Datei hochladen (JSON, höchstens **2 MB**) → **Vorschau**: je Cog, welche Einstellungen überschrieben
+   werden, welche gleich bleiben, welche **ignoriert** werden (unbekannte Schlüssel, falscher Typ,
+   geschützte Secrets) und welche Cogs nicht geladen sind. Es wird noch nichts geändert.
+2. **Import ausführen** (mit Rückfrage). Übernommen werden nur Schlüssel, die im Default-Schema des
+   Cogs existieren und grob den richtigen Typ haben (Text/Zahl/Ja-Nein/Liste/Objekt). Vorhandene Secrets
+   bleiben unverändert. Botweite Einstellungen nur, wenn in der Vorschau angehakt.
+3. **Anderer Server:** Eine Sicherung darf auch auf einem anderen Server eingespielt werden (z. B. zweiten
+   Server gleich einrichten). Die Vorschau warnt dann: **Kanal- und Rollen-IDs passen nicht** – danach in
+   den Modulen prüfen.
+4. **Rückgängig:** Vor jedem Import hält WebCore den Ist-Zustand der betroffenen Einstellungen vor (die
+   letzten 5 Importe je Server, nur im Arbeitsspeicher – bis zum Neustart bzw. Neuladen von WebCore).
+
+Export, Import und Rückgängig landen im **Audit-Log**. Cogs mit anderem `identifier` als in der Datei
+(gleicher Name, anderer Cog) werden übersprungen.
 
 ## Mein Bereich (Mitglieder-Bereich)
 
