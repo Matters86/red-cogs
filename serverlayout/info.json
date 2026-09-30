@@ -1,0 +1,22 @@
+{
+    "name": "ServerLayout",
+    "short": "Server-Layout (Rollen, Kanäle, Einstellungen) speichern und auf einen anderen oder denselben Server laden – mit Vorschau und automatischer Sicherung.",
+    "description": "Speichert das Layout eines Discord-Servers als JSON-Datei: Rollen (Name, Farbe, Rechte, Reihenfolge, @everyone), Kategorien und Kanäle (Text, Ankündigung, Sprache, Stage, Forum inkl. Tags, Thema, Slowmode, NSFW, Bitrate/Nutzerlimit, Berechtigungs-Überschreibungen für Rollen) und Server-Einstellungen (Name, Icon, Banner, Verifizierung, Filter, Benachrichtigungen, AFK-/System-/Regel-/Update-Kanal). Laden auf einen anderen oder denselben Server in zwei Modi: „Ergänzen“ (legt Fehlendes an, passt Gleichnamiges an, löscht nichts) oder „Exakt angleichen“ (löscht zusätzlich Überzähliges – nur mit Bestätigung per Server-Name). Vorher immer eine Vorschau (angelegt/geändert/gelöscht/übersprungen mit Gründen und Warnungen) und automatisch eine Sicherung des Ziel-Servers. Ausführung als Hintergrund-Task mit Fortschritt, Abbrechen und Bericht; Discord-Grenzen (Bot-Rechte, Rollen-Hierarchie, Community, Boost-Stufe, Limits) werden vorher geprüft. Keine Nachrichten, Mitglieder, Emojis, Bans oder Webhooks. Bedienung per Befehl oder im WebCore-Dashboard (Download/Upload der Layout-Datei).",
+    "tags": [
+        "layout",
+        "vorlage",
+        "template",
+        "backup",
+        "rollen",
+        "kanäle",
+        "server",
+        "dashboard",
+        "i18n"
+    ],
+    "requirements": [],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert nur die Struktur von Servern (Rollen, Kanäle, Berechtigungen, Server-Einstellungen inkl. Icon/Banner) sowie die Discord-ID der Person, die ein Layout gespeichert, hochgeladen oder geladen hat. Überschreibungen für einzelne Mitglieder werden mit deren Discord-ID nur zur Info mitgeschrieben (nie angewendet). Auf Anfrage (Red-Datenlöschung) werden Ersteller- und Nutzer-IDs anonymisiert und Mitglieder-Überschreibungen dieser Person entfernt. Keine Nachrichten, keine Mitgliederlisten."
+}

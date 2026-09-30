@@ -1,0 +1,20 @@
+{
+    "name": "Ideas",
+    "short": "Ideen-Sammler: eigenes Forum, Einreichen per Formular, Status-Workflow fürs Team, Umfragen aus Ideen und Dashboard.",
+    "description": "Mitglieder reichen Ideen über einen angepinnten Button im Ideen-Forum (Kategorie-Auswahl + Formular) oder unter „Mein Bereich → Ideen“ ein. Jede Idee wird ein eigener Forum-Beitrag „#12 · Titel“ mit Embed und Status-Tag (Neu, In Prüfung, Geplant, Umgesetzt, Abgelehnt, Zusammengeführt). Das Team setzt Status mit Begründung (Antwort im Beitrag, optional DM an den Einreicher, bei Umgesetzt/Abgelehnt optional schließen/archivieren), führt Duplikate zusammen, bearbeitet oder löscht Ideen und startet aus mehreren Ideen eine Umfrage über den Poll-Cog. Schutz: Wartezeit, max. offene Ideen, Sperrliste, Duplikat-Hinweis. Manuell erstellte Beiträge werden auf Wunsch übernommen. Komplett über das WebCore-Dashboard verwaltbar inkl. CSV-Export. Mehrsprachig (Deutsch/Englisch).",
+    "tags": [
+        "ideen",
+        "ideas",
+        "suggestions",
+        "vorschläge",
+        "forum",
+        "dashboard",
+        "i18n"
+    ],
+    "requirements": [],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert pro Idee Titel, Beschreibung, Kategorie, die Discord-ID und den Anzeigenamen der einreichenden Person, Status-Verlauf mit Discord-IDs/Anzeigenamen der Team-Mitglieder, die den Status geändert oder kommentiert haben, sowie Verknüpfungen zu Forum-Beitrag und Umfragen. Pro Mitglied wird der Zeitpunkt der letzten Einreichung (Wartezeit) gespeichert, pro Server eine Liste gesperrter Discord-IDs. Auf Anfrage (Red-Datenlöschung) werden Einreicher- und Team-IDs samt Namen anonymisiert, der Sperrlisten-Eintrag und der Zeitstempel entfernt; die Idee selbst bleibt als Community-Beitrag erhalten."
+}
