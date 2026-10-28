@@ -1,54 +1,5 @@
 # FiveM-Adminpanel (`fivemadmin`)
 
-## Supportausbau v2 – 28.10.2026
-
-Supportfälle mit Nummer, Zuständigkeit, Übergabe, Kommentaren und Bildern;
-QA-Bug-ID als Referenz ohne Duplikat und ohne fremde QA-Rechte. Falländerungen
-sind versioniert und wiederholte identische Anfragen erstellen keinen zweiten
-Eintrag. Fotos: JPEG/PNG/WebP, höchstens 4 MiB, acht je Fall; authentifizierter
-Abruf nur im ausgewählten Serverprofil. Bilder werden erst auf Wunsch geladen.
-
-Fahrzeugakte für private, Leasing- und Fraktionsfahrzeuge mit persistenter ID,
-Halterzuordnung, Garage, eindeutiger Runtimebeobachtung und gespeicherter letzter
-Position. Registertreffer sind keine Nutzungsberechtigung. Geführte Leseprüfungen
-für Schlüssel, Kofferraum, Tanken/Kanister und Nebenjobs liefern bestätigte
-Beobachtungen und ausdrückliche unbekannte Punkte. Berichte lassen sich am Fall
-speichern. Keine automatische Freigabe, Auszahlung oder Fahrzeugänderung.
-
-Dev und Live sind echte getrennte Profile mit eigenen SQLite-Dateien/Queues,
-Bridge-Schlüsseln, Fällen, Medien und Zuständen. Web, Discord und WebCore verlangen
-eine explizite Auswahl. Die bisherigen Daten bleiben im unzugeordneten Profil
-legacy. Neue Profile übernehmen keine alten Queues oder Bans. Vor dem Laden
-unbedingt die beiliegende Einrichtung/Bestandsübernahme lesen.
-
-Bot-Owner bindet ein Profil im gewünschten Discordserver mit
-`[p]ap profile bind dev Entwicklung` / `[p]ap profile bind live Live`.
-Keys kommen aus separaten Bot-Umgebungsvariablen ADMINPANEL_DEV_KEY und
-ADMINPANEL_LIVE_KEY. Niemals Schlüsselwerte in Discordbefehle schreiben.
-Discordauswahl: `[p]ap server dev` bzw. `[p]ap server live`; Webauswahl oben.
-ap_bridge 1.2.0 braucht den passenden adminpanel_profile-Convar und Schlüssel.
-
-Die bisherigen Support/Moderator/Admin-Presets erhalten die drei Supportrechte;
-Editor allein erhält sie nicht. Discord-Guild-Bindung und aktuelle Rollen werden
-serverseitig geprüft. Keine Gleichsetzung mit dem Ingame-Server-Editor.
-
-Schemaerweiterungen sind additiv. Frühere pending-Aufträge werden beim erstmaligen
-Profilupgrade als profile_queue_hold markiert und nicht automatisch abgearbeitet.
-Die alte Cog-Version filtert diese Spalte nicht: alte Version niemals unbesehen
-gegen die neue Datenbank starten. Keine manuelle Freigabe von Altaufträgen ohne
-Prüfung ihrer Ausführungsbelege. Alte Daten bleiben vollständig erhalten.
-
-Vor Aktivierung vollständigen Red-Cog-Datenordner inklusive support_media,
-profiles und Red-Konfiguration sichern. Die tägliche SQLite-Sicherung allein
-enthält keine Bilddateien. Ein Prozessabbruch vor dem Foto-DB-Commit kann eine
-nicht referenzierte Datei hinterlassen; sie wird nicht öffentlich ausgeliefert.
-
-Lokale Modultests mit temporärer SQLite, tatsächlichen Lua-Modulen und dem
-installierten FiveM-JSON-Serializer sowie Browser-Vertragsprüfungen sind vorhanden.
-Echter Discord-Login, echte Dev-/Live-Schlüsselkonfiguration und Ingame-Abnahme
-stehen aus. LIMIT begrenzt Ergebnismengen, keine garantierte SQL-Laufzeit;
-reale Abfragezeiten und Ressourcenlast auf Dev prüfen. Kein gemessener Lag-Fix.
-
 ## Update 28.10.2026 – DNP Admin Zentrale
 
 Das Webpanel/PWA hat den blauen DNP-Look, aufklappbare Werkzeuggruppen, eine

@@ -110,8 +110,6 @@ def _fmt_age(seconds: float) -> str:
 
 def _redirect(guild, *, ok: str | None = None, err: str | None = None) -> dict:
     url = f"{BASE}?guild={guild.id}" if guild is not None else f"{BASE}?"
-    if db.current_profile():
-        url += "&server_profile=" + quote(db.current_profile())
     if err:
         url += "&err=" + quote(err)
     elif ok:
@@ -191,12 +189,11 @@ def _pick_guild(guilds, raw):
 async def _settings(cog) -> dict:
     """Wirksame globale Einstellungen (Config-Wert, sonst ENV/Standard) – ohne Secrets."""
     conf = await cog.config.all()
-    profile = cog.profiles.items.get(db.current_profile())
-    api_key = profile.key if profile else None
+    api_key = conf.get("api_key") or DEFAULT_API_KEY
     return {
-        "locked": await cog.profile_locked(),
-        "audit_channel": await cog.profile_setting("audit_channel"),
-        "alert_channel": await cog.profile_setting("alert_channel"),
+        "locked": bool(conf.get("locked")),
+        "audit_channel": conf.get("audit_channel"),
+        "alert_channel": conf.get("alert_channel"),
         "public_url": (conf.get("public_url") or DEFAULT_PUBLIC_URL or "").rstrip("/"),
         "public_url_raw": conf.get("public_url"),
         "money_max": int(conf.get("money_max") or DEFAULT_MONEY_MAX),
@@ -212,40 +209,9 @@ async def _settings(cog) -> dict:
 #  Einstiegspunkt
 # --------------------------------------------------------------------------- #
 async def dashboard_handler(cog, request):
-    data = await request.post() if request.method == "POST" else request.query
-    guilds = await _visible_guilds(request)
-    guild = _pick_guild(guilds, data.get("guild"))
-    profile = cog.profiles.select(data.get("server_profile"), guild.id) if guild is not None else None
-    if profile is None:
-        if request.method == "POST":
-            return {"redirect": BASE + "?err=" + quote("Serverprofil ausdrücklich auswählen; keine Aktion ausgeführt")}
-        return await _profile_selection(cog, request, guilds, guild)
-    actor = await _actor(cog, request, guild)
-    if not actor.perms:
-        return {"title": TITLE, "content": request.app["webcore"].ui.callout("Keine Panel-Rechte in dieser Discord-Guild.", tone="warn")}
-    request["profile"] = profile.public(internal=True)
-    with db.profile_scope(profile.id):
-        if request.method == "POST":
-            return await _handle_post(cog, request)
-        return await _render(cog, request)
-
-
-async def _profile_selection(cog, request, guilds, guild=None):
-    ui = request.app["webcore"].ui
-    selected = guild or (guilds[0] if guilds else None)
-    profiles = []
-    if selected is not None:
-        actor = await _actor(cog, request, selected)
-        if actor.perms:
-            profiles = cog.profiles.for_guild(selected.id)
-    form = ui.form(BASE,
-                   ui.field("Discord-Guild", ui.select("guild", [(g.id, g.name) for g in guilds],
-                                                      selected.id if selected else "", autosubmit=True))
-                   + ui.field("FiveM-Serverprofil", ui.select("server_profile", [("", "Bitte auswählen")]
-                              + [(profile.id, profile.label) for profile in profiles], ""))
-                   + ui.button("Profil öffnen"), csrf="", method="get")
-    return {"title": TITLE, "content": ui.card("Serverprofil wählen", form,
-            desc="Dev, Live und unzugeordneter Altbestand sind getrennt. Es wird kein Server automatisch gewählt.")}
+    if request.method == "POST":
+        return await _handle_post(cog, request)
+    return await _render(cog, request)
 
 
 # --------------------------------------------------------------------------- #
@@ -284,10 +250,7 @@ async def _render(cog, request):
         "Aktionen im Spiel (Teleport, Heilen, Geld …) laufen weiterhin im <b>Live-Panel</b> – "
         "Anmeldung dort mit einem Klick unter „Übersicht“.",
         actions=bar + live_btn,
-    ) + ui.form(BASE, ui.field("Serverprofil", ui.select("server_profile",
-          [(profile.id, profile.label) for profile in cog.profiles.for_guild(guild.id)],
-          db.current_profile(), autosubmit=True)), csrf="", method="get", hidden={"guild": guild.id}) \
-      + ui.stats(_stats(state, pending, bans, st, actor.perms))
+    ) + ui.stats(_stats(state, pending, bans, st, actor.perms))
 
     body = (
         ui.tab("uebersicht", "Übersicht", "bi-speedometer2",
@@ -386,7 +349,7 @@ def _render_live_card(ui, guild, actor, st, gconf, csrf, readonly) -> str:
                 ui.button("Nur öffnen", icon="bi-box-arrow-up-right", kind="ghost",
                           href=st["public_url"] + "/", attrs={"target": "_blank", "rel": "noopener"}),
             ),
-            csrf=csrf, hidden={"server_profile": db.current_profile(), "form": "sso", "guild": guild.id},
+            csrf=csrf, hidden={"form": "sso", "guild": guild.id},
         )
     return ui.card(
         "Live-Panel", mine + action, icon="bi-box-arrow-in-right",
@@ -404,12 +367,12 @@ def _render_lockdown_card(ui, guild, actor, st, pending, csrf) -> str:
                           "schalten – wie bei <code>[p]ap lockdown</code>.", tone="info")
     elif locked:
         ctrl = ui.form(BASE, ui.actions(ui.button("Lockdown aufheben", icon="bi-unlock")),
-                       csrf=csrf, hidden={"server_profile": db.current_profile(), "form": "lockdown", "state": "off", "guild": guild.id},
+                       csrf=csrf, hidden={"form": "lockdown", "state": "off", "guild": guild.id},
                        confirm="Lockdown aufheben? Panel-Aktionen und Befehle sind danach wieder möglich.")
     else:
         n = len(pending)
         ctrl = ui.form(BASE, ui.actions(ui.button("Lockdown aktivieren", icon="bi-sign-stop", kind="danger")),
-                       csrf=csrf, hidden={"server_profile": db.current_profile(), "form": "lockdown", "state": "on", "guild": guild.id},
+                       csrf=csrf, hidden={"form": "lockdown", "state": "on", "guild": guild.id},
                        confirm=f"Not-Aus aktivieren? Alle Aktionen werden sofort gesperrt und {n} offene(r) "
                                f"Auftrag/Aufträge verworfen.")
     return ui.card(
@@ -426,7 +389,7 @@ def _setup_checks(cog, guild, st, gconf, state, permissions=()) -> list[tuple[st
         out.append(("bad", "<b>Lockdown ist aktiv</b> – alle handelnden Aktionen sind gesperrt."))
     if not st["api_key_set"]:
         out.append(("bad", "Kein <b>API-Key</b> gesetzt – die Bridge ist gesperrt (HTTP 503). "
-                           "Profil-Key-Umgebungsvariable durch den Bot-Owner zuordnen lassen."))
+                           "Per Discord erzeugen: <code>[p]ap config key</code>."))
     if getattr(cog, "runner", None) is None:
         out.append(("warn", f"Der <b>Webserver des Live-Panels</b> läuft nicht (Port {_esc(st['web_port'])}). "
                             "Bot-Log prüfen, ggf. <code>[p]reload fivemadmin</code>."))
@@ -569,7 +532,7 @@ def _render_bans(ui, guild, actor, bans, csrf) -> str:
             btn = ui.form(
                 BASE,
                 ui.button("Entbannen", icon="bi-unlock", kind="danger", small=True),
-                csrf=csrf, hidden={"server_profile": db.current_profile(), "form": "unban", "guild": guild.id, "cid": cid},
+                csrf=csrf, hidden={"form": "unban", "guild": guild.id, "cid": cid},
                 confirm=f"Sperre für {b.get('name') or cid} ({cid}) aufheben? Der Spieler kann sofort wieder verbinden.",
             )
         rows.append(ui.row(
@@ -661,7 +624,7 @@ def _render_rights(ui, guild, actor, gconf, csrf) -> str:
     note = ui.callout("Du kannst nur Presets vergeben oder entziehen, die <b>nicht mehr Rechte</b> haben als du selbst.",
                       tone="info")
     form = ui.form(BASE, roles_card + users_card + ui.save_row(), csrf=csrf,
-                   hidden={"server_profile": db.current_profile(), "form": "rights", "guild": guild.id}, savebar=True)
+                   hidden={"form": "rights", "guild": guild.id}, savebar=True)
     return presets + note + form
 
 
@@ -706,7 +669,7 @@ def _render_settings(ui, guild, actor, st, csrf) -> str:
         return ui.badge("gesetzt", "ok") if ok else ui.badge("nicht gesetzt", "warn")
 
     cmd_rows = [
-        ui.row("Profil-Key (Bridge)", state_badge(st["api_key_set"]), "<code>[p]ap profile keyenv</code>"),
+        ui.row("API-Key (Bridge)", state_badge(st["api_key_set"]), "<code>[p]ap config key</code>"),
         ui.row("Discord-Login (OAuth)", state_badge(st["oauth_set"]), "<code>[p]ap config oauth</code>"),
         ui.row("Web-Port", f"<span class='mono'>{_esc(st['web_port'])}</span>", "<code>[p]ap config port</code>"),
         ui.row("Bind-Adresse", f"<span class='mono'>{_esc(st['web_host'])}</span>", "<code>[p]ap config bind</code>"),
@@ -720,10 +683,10 @@ def _render_settings(ui, guild, actor, st, csrf) -> str:
 
     if can:
         form = ui.form(BASE, channels + limits + url + ui.save_row(), csrf=csrf,
-                       hidden={"server_profile": db.current_profile(), "form": "settings", "guild": guild.id}, savebar=True)
-        return ui.callout("Kanäle gelten für das <b>ausgewählte Profil</b>; URL und Limits gelten botweit.",
+                       hidden={"form": "settings", "guild": guild.id}, savebar=True)
+        return ui.callout("Diese Einstellungen gelten <b>botweit</b> – für den FiveM-Server und alle Discord-Server.",
                           tone="info") + form + cmd_card
-    note = ui.callout("Kanäle gelten für das ausgewählte Profil, URL und Limits botweit. Ändern kann sie nur der Bot-Owner.", tone="info")
+    note = ui.callout("Diese Einstellungen gelten <b>botweit</b> – ändern kann sie nur der Bot-Owner.", tone="info")
     return note + channels + limits + url + cmd_card
 
 
@@ -762,7 +725,7 @@ async def _post_sso(cog, guild, actor, data):
     token = await asyncio.to_thread(
         db.create_login_token, str(actor.member.id), str(guild.id), actor.member.display_name
     )
-    return {"redirect": f"{st['public_url']}/?login={quote(token)}&server_profile={quote(db.current_profile())}"}
+    return {"redirect": f"{st['public_url']}/?login={quote(token)}"}
 
 
 async def _post_lockdown(cog, guild, actor, data):
@@ -954,10 +917,7 @@ async def _post_settings(cog, guild, actor, data):
     # Erst in den bisherigen Audit-Kanal (falls er gerade abgeschaltet/verlegt wird) …
     await cog._audit(text)
     for key, value, _ in changes:
-        if key in ("audit_channel", "alert_channel"):
-            await cog.set_profile_setting(key, value)
-        else:
-            await getattr(cog.config, key).set(value)
+        await getattr(cog.config, key).set(value)
     # … und in einen neuen Audit-Kanal ebenfalls.
     if any(c[0] == "audit_channel" and c[1] for c in changes):
         await cog._audit(text)
