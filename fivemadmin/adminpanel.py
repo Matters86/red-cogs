@@ -30,7 +30,6 @@ import json
 import math
 import os
 import logging
-import hmac
 import time
 import secrets
 import urllib.parse
@@ -42,6 +41,7 @@ from redbot.core import commands, Config
 from redbot.core.data_manager import cog_data_path
 
 from . import db
+from .serverprofiles import Profiles, PROFILE_ID, ENV_NAME, ALLOWED_PROFILES
 
 log = logging.getLogger("red.adminpanel")
 
@@ -67,7 +67,8 @@ SENSITIVE_ACTIONS = {
 # Berechtigungen
 # ------------------------------------------------------------------
 
-_SUPPORT = {"view_players", "teleport", "heal", "revive", "car_to_garage", "view_inventory", "message"}
+_SUPPORT = {"view_players", "teleport", "heal", "revive", "car_to_garage", "view_inventory", "message",
+            "support_cases", "support_vehicles", "support_diagnostics"}
 _MODERATOR = _SUPPORT | {"kick", "ban", "announce", "view_logs", "notes", "setjob"}
 _ADMIN = _MODERATOR | {"money", "items", "view_stats", "park_all", "audit"}
 
@@ -103,7 +104,12 @@ ACTION_PERMISSION = {
     "park_all": "park_all",
     "ban": "ban",
     "diag": "server_status",
+    "support_vehicle_search": "support_vehicles",
+    "support_vehicle_case": "support_vehicles",
+    "support_diagnose": "support_diagnostics",
 }
+READ_ACTIONS = {"diag", "get_stats", "get_inventory", "get_vehicles", "search_player",
+                "support_vehicle_search", "support_vehicle_case", "support_diagnose"}
 
 
 def project_actions(actions, permissions):
@@ -112,6 +118,7 @@ def project_actions(actions, permissions):
         "id", "action_type", "target", "target_name", "params", "status", "result",
         "created_by", "created_at", "completed_at", "result_review_required",
         "result_review_reason", "audit_delivery", "audit_claimed_at", "audit_completed_at",
+        "profile_queue_hold",
     )
     projected = []
     for action in actions:
@@ -168,6 +175,63 @@ def project_bridge_health(state):
     }
 
 
+def support_action_params(action_type, params, profile_id):
+    def vehicle_id():
+        value = params.get("vehicle_id")
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 2147483647:
+            raise ValueError("vehicle_id_invalid")
+        return value
+
+    def text(name, maximum, *, required=False):
+        value = params.get(name)
+        if value is None and not required:
+            return None
+        if not isinstance(value, str) or not value.strip() or len(value.strip()) > maximum:
+            raise ValueError(name + "_invalid")
+        return value.strip()
+
+    clean = {"server_id": profile_id, "profile": profile_id, "schema_version": 1}
+    if action_type == "support_vehicle_search":
+        if "kind" in params:
+            raise ValueError("use_kinds_array")
+        clean["query"] = text("query", 50, required=True)
+        if len(clean["query"]) < 2:
+            raise ValueError("query_invalid")
+        limit = params.get("limit", 20)
+        cursor = params.get("cursor", 0)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
+            raise ValueError("limit_invalid")
+        if isinstance(cursor, bool) or not isinstance(cursor, int) or not 0 <= cursor <= 2147483647:
+            raise ValueError("cursor_invalid")
+        clean.update(limit=limit, cursor=cursor)
+        kinds = params.get("kinds")
+        if kinds is not None:
+            if (not isinstance(kinds, list) or not kinds or len(kinds) > 3
+                    or any(kind not in ("private", "faction", "lease") for kind in kinds)):
+                raise ValueError("kinds_invalid")
+            if len(set(kinds)) != len(kinds):
+                raise ValueError("kinds_invalid")
+            clean["kinds"] = list(kinds)
+    elif action_type == "support_vehicle_case":
+        clean["vehicle_id"] = vehicle_id()
+        for name, maximum in (("expected_plate", 15), ("citizenid", 50)):
+            value = text(name, maximum)
+            if value is not None:
+                clean[name] = value
+    elif action_type == "support_diagnose":
+        topic = params.get("topic")
+        if topic not in ("keys", "trunk", "fuel", "civil_jobs"):
+            raise ValueError("topic_invalid")
+        clean["topic"] = topic
+        if topic == "civil_jobs":
+            clean["citizenid"] = text("citizenid", 50, required=True)
+        else:
+            clean["vehicle_id"] = vehicle_id()
+    else:
+        raise ValueError("unsupported_action")
+    return clean
+
+
 class AdminPanel(commands.Cog):
     """FiveM-Server-Verwaltung per Discord und Webbrowser."""
 
@@ -177,6 +241,7 @@ class AdminPanel(commands.Cog):
         self.config.register_guild(
             role_map={},   # {role_id(str): preset_name}
             user_map={},   # {user_id(str): preset_name} – Einzelpersonen-Zugriffe
+            profile_selection={},  # Discord-Befehle: explizite Auswahl pro Nutzer/Guild
         )
         self.config.register_global(
             alert_channel=None,
@@ -190,6 +255,7 @@ class AdminPanel(commands.Cog):
             item_max=None,
             oauth_client_id=None,
             oauth_client_secret=None,
+            server_profiles={},  # trusted Guild-Bindung + Key-ENV je Profil; nie Browserwerte
         )
         # OAuth-CSRF-States (state -> Ablaufzeit), kurzlebig, nur im RAM
         self._oauth_states: dict = {}
@@ -200,12 +266,17 @@ class AdminPanel(commands.Cog):
         self.public_url = DEFAULT_PUBLIC_URL
         self.money_max = DEFAULT_MONEY_MAX
         self.item_max = DEFAULT_ITEM_MAX
+        self.profiles = Profiles(legacy_key=self.api_key)
+        self._profile_config_lock = asyncio.Lock()
+        self._settings_ready = asyncio.Event()
         try:
             path = db.set_data_dir(cog_data_path(self))
             log.info("AdminPanel-DB: %s", path)
-        except Exception:  # noqa: BLE001 – lieber alter Ort als gar nicht laden
-            log.exception("AdminPanel: DB-Umzug in den Datenordner fehlgeschlagen – nutze alten Speicherort")
-        db.init_db()
+        except Exception:
+            log.exception("AdminPanel: Datenverzeichnis nicht verfügbar; Start abgebrochen")
+            raise
+        db.init_db(auth=True)
+        db.configure_profiles({"legacy": db.DB_PATH})
         self.runner: web.AppRunner | None = None
         self._web_task = self.bot.loop.create_task(self._start_webserver())
         self._backup_task = self.bot.loop.create_task(self._backup_loop())
@@ -218,14 +289,60 @@ class AdminPanel(commands.Cog):
         self.public_url = (await self.config.public_url() or DEFAULT_PUBLIC_URL).rstrip("/")
         self.money_max = await self.config.money_max() or DEFAULT_MONEY_MAX
         self.item_max = await self.config.item_max() or DEFAULT_ITEM_MAX
+        await self._refresh_profiles()
+        self._settings_ready.set()
+
+    async def _refresh_profiles(self):
+        configured = await self.config.server_profiles()
+        self.profiles = Profiles(configured, self.api_key)
+        paths = {"legacy": db.DB_PATH}
+        for profile in self.profiles.items.values():
+            if profile.id != "legacy" and profile.guild_id is not None:
+                path = db.DB_PATH.parent / "profiles" / profile.id / "adminpanel.sqlite3"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                paths[profile.id] = path
+        db.configure_profiles(paths)
+        for profile_id in paths:
+            with db.profile_scope(profile_id):
+                db.init_db()
+
+    async def profile_setting(self, name):
+        profile_id = db.current_profile()
+        if profile_id is None:
+            raise RuntimeError("server_profile_scope_required")
+        record = self.profiles.raw.get(profile_id, {})
+        if name in record:
+            return record[name]
+        if profile_id == "legacy":
+            return await getattr(self.config, name)()
+        return False if name == "locked" else None
+
+    async def profile_locked(self):
+        return (await self.profile_setting("locked")) is True
+
+    async def set_profile_setting(self, name, value):
+        profile_id = db.current_profile()
+        if profile_id is None:
+            raise RuntimeError("server_profile_scope_required")
+        async with self._profile_config_lock:
+            records = await self.config.server_profiles()
+            records = dict(records) if isinstance(records, dict) else {}
+            record = dict(records.get(profile_id) or {})
+            record[name] = value
+            records[profile_id] = record
+            await self.config.server_profiles.set(records)
+            await self._refresh_profiles()
+
+    def profile_channel(self, channel_id):
+        profile = self.profiles.items.get(db.current_profile())
+        channel = self.bot.get_channel(int(channel_id)) if channel_id else None
+        if not profile or not profile.guild_id or not channel:
+            return None
+        return channel if str(getattr(getattr(channel, "guild", None), "id", "")) == profile.guild_id else None
 
     def _key_ok(self, provided: str) -> bool:
-        """Konstanter-Zeit-Vergleich gegen Timing-Angriffe.
-        Solange kein echter Key gesetzt ist (Default 'CHANGE_ME' oder leer),
-        wird JEDER Zugriff abgelehnt statt den Platzhalter zu akzeptieren."""
-        if not self.api_key or self.api_key == "CHANGE_ME":
-            return False
-        return hmac.compare_digest(str(provided or ""), self.api_key)
+        """Kompatibler Helfer: nur ein eindeutig zugeordnetes Profil akzeptieren."""
+        return self.profiles.for_bridge(provided) is not None
 
     # --------------------------------------------------------------
     # WebCore-Dashboard (Verwaltungsseite; das Live-Panel bleibt eigenständig)
@@ -276,12 +393,17 @@ class AdminPanel(commands.Cog):
         # Stündlich prüfen, ob das jüngste Backup älter als 24 h ist. Vorher wurde
         # erst 24 h NACH jedem Laden gesichert – bei häufigem [p]reload also nie.
         await self.bot.wait_until_ready()
+        await self._settings_ready.wait()
         while True:
             try:
-                age = await asyncio.to_thread(db.newest_backup_age)
-                if age is None or age >= 24 * 3600:
-                    path, count = await asyncio.to_thread(db.backup_db)
-                    log.info(f"AdminPanel DB-Backup erstellt: {path} ({count} Backups vorhanden)")
+                for profile_id in self.profiles.items:
+                    if profile_id != "legacy" and self.profiles.items[profile_id].guild_id is None:
+                        continue
+                    with db.profile_scope(profile_id):
+                        age = await asyncio.to_thread(db.newest_backup_age)
+                        if age is None or age >= 24 * 3600:
+                            path, count = await asyncio.to_thread(db.backup_db)
+                            log.info("AdminPanel DB-Backup Profil %s erstellt (%s Backups)", profile_id, count)
                 await asyncio.sleep(3600)
             except asyncio.CancelledError:
                 break
@@ -359,6 +481,7 @@ class AdminPanel(commands.Cog):
         app.router.add_get("/api/auth/discord", self.http_oauth_start)
         app.router.add_get("/api/auth/callback", self.http_oauth_callback)
         app.router.add_get("/api/panel/state", self.http_panel_state)
+        app.router.add_get("/api/panel/profiles", self.http_panel_profiles)
         app.router.add_get("/api/panel/catalog", self.http_panel_catalog)
         app.router.add_get("/api/panel/player_history", self.http_player_history)
         app.router.add_post("/api/panel/notes", self.http_add_note)
@@ -375,6 +498,8 @@ class AdminPanel(commands.Cog):
         app.router.add_post("/api/bridge/sync", self.http_bridge_sync)
         app.router.add_post("/api/bridge/catalog", self.http_bridge_catalog)
         app.router.add_post("/api/actions/result", self.http_bridge_result)
+        from . import support
+        support.register_routes(self, app)
 
         self.runner = web.AppRunner(app)
         await self.runner.setup()
@@ -394,23 +519,26 @@ class AdminPanel(commands.Cog):
                 log.warning(f"Port {self.web_port} noch belegt ({e}) – neuer Versuch in 2s…")
                 await asyncio.sleep(2)
         log.info(f"AdminPanel Webserver läuft auf {self.web_host}:{self.web_port}")
-        if self.api_key == "CHANGE_ME":
+        if not any(profile.enabled and profile.key for profile in self.profiles.items.values()):
             log.warning(
-                "⚠️ Kein API-Key gesetzt (Default 'CHANGE_ME')! Der Kanal zur FiveM-Bridge ist ungeschützt. "
-                "Setze ihn per Discord: `!ap config key` (generiert einen und schickt ihn dir per DM)."
+                "Kein gültiger Profil-Key konfiguriert; Bridge-Zugriffe bleiben gesperrt. "
+                "Profil an die Ziel-Guild binden und vorhandene Key-Umgebungsvariable zuordnen."
             )
 
     @web.middleware
     async def _auth_middleware(self, request: web.Request, handler):
         path = request.path
         if path.startswith("/api/bridge/") or path.startswith("/api/actions/"):
-            # Kein echter API-Key gesetzt -> Bridge-Kanal komplett dicht (503),
-            # statt den Platzhalter 'CHANGE_ME' als gültig durchzuwinken.
-            if not self.api_key or self.api_key == "CHANGE_ME":
+            if not any(profile.enabled and profile.key for profile in self.profiles.items.values()):
                 return web.json_response(
                     {"error": "bridge disabled: no API key configured"}, status=503)
-            if not self._key_ok(request.headers.get("X-API-Key")):
+            profile = self.profiles.for_bridge(request.headers.get("X-API-Key"),
+                                                request.headers.get("X-Server-Profile"))
+            if profile is None:
                 return web.json_response({"error": "unauthorized"}, status=401)
+            request["profile"] = profile.public(internal=True)
+            with db.profile_scope(profile.id):
+                return await handler(request)
         elif path.startswith("/api/panel/"):
             session = await asyncio.to_thread(db.get_session, request.headers.get("X-Session", ""))
             if not session:
@@ -421,6 +549,17 @@ class AdminPanel(commands.Cog):
             request["session"] = session
             request["member"] = member
             request["perms"] = perms
+            if path == "/api/panel/profiles":
+                return await handler(request)
+            profile_id = request.headers.get("X-Server-Profile")
+            if not profile_id:
+                return web.json_response({"error": "server_selection_required"}, status=409)
+            profile = self.profiles.select(profile_id, member.guild.id)
+            if profile is None:
+                return web.json_response({"error": "server_profile_forbidden"}, status=403)
+            request["profile"] = profile.public(internal=True)
+            with db.profile_scope(profile.id):
+                return await handler(request)
         return await handler(request)
 
     @web.middleware
@@ -430,6 +569,8 @@ class AdminPanel(commands.Cog):
             resp.headers.setdefault("X-Frame-Options", "DENY")
             resp.headers.setdefault("X-Content-Type-Options", "nosniff")
             resp.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+            if request.path.startswith("/api/"):
+                resp.headers["Cache-Control"] = "no-store"
             return resp
         try:
             return _apply(await handler(request))
@@ -554,17 +695,25 @@ class AdminPanel(commands.Cog):
             "permissions": sorted(perms),
         })
 
+    async def http_panel_profiles(self, request: web.Request):
+        return web.json_response({
+            "profiles": [profile.public() for profile in self.profiles.for_guild(request["member"].guild.id)],
+            "selected": None,
+        })
+
     async def http_panel_state(self, request: web.Request):
         perms = request["perms"]
         state = await asyncio.to_thread(db.get_server_state)
         recent_actions = await asyncio.to_thread(db.get_recent_actions)
         payload = {
             "permissions": sorted(perms),
+            "actorId": str(request["member"].id),
             "name": request["session"]["display_name"],
             "actions": project_actions(recent_actions, perms),
             "server": None,
             "limits": {"money": self.money_max, "item": self.item_max},
-            "locked": await self.config.locked(),
+            "locked": await self.profile_locked(),
+            "profile": {key: request["profile"][key] for key in ("id", "label", "environment")},
             "is_admin": await self.is_panel_admin(request["member"]),
         }
         if state:
@@ -609,8 +758,16 @@ class AdminPanel(commands.Cog):
         if not target:
             return web.json_response({"error": "target fehlt"}, status=400)
 
+        if action_type in {"support_vehicle_search", "support_vehicle_case", "support_diagnose"}:
+            if target != "*":
+                return web.json_response({"error": "support_target_must_be_star"}, status=400)
+            try:
+                params = support_action_params(action_type, params, request["profile"]["id"])
+            except ValueError as exc:
+                return web.json_response({"error": str(exc)}, status=400)
+
         # Lockdown: nur noch Diagnose erlaubt, alle handelnden Aktionen blockiert
-        if action_type != "diag" and await self.config.locked():
+        if action_type not in READ_ACTIONS and await self.profile_locked():
             return web.json_response({"error": "🔒 Panel im Lockdown – Aktionen gesperrt"}, status=423)
 
         # Wert-Validierung + Sicherheits-Limits – analog zu den Discord-Befehlen.
@@ -685,15 +842,17 @@ class AdminPanel(commands.Cog):
             for b in active_bans
         ]
         # Im Lockdown werden keine offenen Aktionen ausgeliefert (Not-Aus).
-        actions = [] if await self.config.locked() else await asyncio.to_thread(db.get_pending_actions)
+        actions = await asyncio.to_thread(db.get_pending_actions)
+        if await self.profile_locked():
+            actions = [action for action in actions if action["action_type"] in READ_ACTIONS]
         return web.json_response({"actions": actions, "bans": bans})
 
     async def _dispatch_alerts(self, events: list):
         """Postet alert-/warn-Events sofort in den konfigurierten Discord-Channel."""
-        channel_id = await self.config.alert_channel()
+        channel_id = await self.profile_setting("alert_channel")
         if not channel_id:
             return
-        channel = self.bot.get_channel(int(channel_id))
+        channel = self.profile_channel(channel_id)
         if not channel:
             return
         colors = {"alert": discord.Color.red(), "warn": discord.Color.orange()}
@@ -988,19 +1147,19 @@ class AdminPanel(commands.Cog):
         Rückgabe: Anzahl verworfener Aufträge (beim Aufheben 0).
         """
         if enabled:
-            await self.config.locked.set(True)
+            await self.set_profile_setting("locked", True)
             dropped = await asyncio.to_thread(db.cancel_pending_actions, f"Verworfen durch Lockdown ({by})")
             await self._audit(f"🔒 **LOCKDOWN AKTIVIERT** von {by} · {dropped} offene Aufträge verworfen")
             return dropped
-        await self.config.locked.set(False)
+        await self.set_profile_setting("locked", False)
         await self._audit(f"🔓 Lockdown aufgehoben von {by}")
         return 0
 
     async def _audit(self, text: str):
-        channel_id = await self.config.audit_channel()
+        channel_id = await self.profile_setting("audit_channel")
         if not channel_id:
             return False
-        channel = self.bot.get_channel(int(channel_id))
+        channel = self.profile_channel(channel_id)
         if channel:
             try:
                 await channel.send(text)
@@ -1032,13 +1191,38 @@ class AdminPanel(commands.Cog):
             detail = ("permanent" if hrs <= 0 else f"{hrs}h") + f" · {params.get('reason', '')}"
         status_icon = "✅" if action["status"] == "done" else "❌"
         return await self._audit(
-            f"{icons.get(action['action_type'], '•')} **{action['action_type']}** {status_icon}\n"
+            f"[{db.current_profile()}] {icons.get(action['action_type'], '•')} **{action['action_type']}** {status_icon}\n"
             f"Ziel: `{action['target']}` · {detail}\nDurch: {who}"
         )
 
     # --------------------------------------------------------------
     # Discord-Commands
     # --------------------------------------------------------------
+
+    async def cog_before_invoke(self, ctx):
+        command = getattr(getattr(ctx, "command", None), "qualified_name", "")
+        if command == "ap" or command in ("ap server", "ap login", "ap profile") or command.startswith(("ap profile ", "ap roles")):
+            return
+        if command == "ap config" or command.startswith("ap config "):
+            if not await self.bot.is_owner(ctx.author):
+                raise commands.CheckFailure("Botweite Einstellungen dürfen nur Bot-Owner ändern.")
+            return
+        if ctx.guild is None:
+            raise commands.CheckFailure("Serverprofil nur innerhalb der zugeordneten Discord-Guild auswählen.")
+        selected = await self.config.guild(ctx.guild).profile_selection()
+        profile = self.profiles.select(selected.get(str(ctx.author.id)), ctx.guild.id)
+        if profile is None or not await self.member_permissions(ctx.author):
+            raise commands.CheckFailure("Zuerst mit ap server <Profil> ein erlaubtes Serverprofil auswählen.")
+        manager = db.profile_scope(profile.id)
+        manager.__enter__()
+        ctx._adminpanel_profile_scope = manager
+        ctx.adminpanel_profile = profile.public(internal=True)
+
+    async def cog_after_invoke(self, ctx):
+        manager = getattr(ctx, "_adminpanel_profile_scope", None)
+        if manager is not None:
+            del ctx._adminpanel_profile_scope
+            manager.__exit__(None, None, None)
 
     async def _require(self, ctx: commands.Context, permission: str, *, acting: bool = True) -> bool:
         """Rechte-Check für Discord-Befehle. ``acting=True``: Befehl legt eine Aktion
@@ -1050,7 +1234,7 @@ class AdminPanel(commands.Cog):
         if permission not in perms:
             await ctx.send("❌ Dafür fehlt dir die Berechtigung.")
             return False
-        if acting and await self.config.locked():
+        if acting and await self.profile_locked():
             await ctx.send("🔒 Panel im Lockdown – Aktionen sind gesperrt.")
             return False
         return True
@@ -1058,6 +1242,68 @@ class AdminPanel(commands.Cog):
     @commands.group(name="ap")
     async def ap(self, ctx: commands.Context):
         """Adminpanel-Befehle."""
+
+    @ap.command(name="server")
+    @commands.guild_only()
+    async def ap_server(self, ctx: commands.Context, profile_id: str = None):
+        """Explizites Serverprofil für nachfolgende Discord-Befehle auswählen."""
+        if ctx.guild is None or not await self.member_permissions(ctx.author):
+            return await ctx.send("Keine Panel-Berechtigung in dieser Discord-Guild.")
+        available = self.profiles.for_guild(ctx.guild.id)
+        if profile_id is None:
+            text = ", ".join(f"{profile.id}: {profile.label}" for profile in available) or "keine gebundenen Profile"
+            return await ctx.send("Serverprofile: " + text + ". Auswahl: ap server <Profil>.")
+        profile = self.profiles.select(profile_id, ctx.guild.id)
+        if profile is None:
+            return await ctx.send("Dieses Serverprofil ist dieser Discord-Guild nicht freigegeben.")
+        value = await self.config.guild(ctx.guild).profile_selection()
+        value[str(ctx.author.id)] = profile.id
+        await self.config.guild(ctx.guild).profile_selection.set(value)
+        await ctx.send(f"Serverprofil ausgewählt: {profile.label} ({profile.id}).")
+
+    @ap.group(name="profile")
+    @commands.guild_only()
+    async def ap_profile(self, ctx: commands.Context):
+        """Owner-Konfiguration: bind / keyenv. Keine Secrets im Chat."""
+
+    @ap_profile.command(name="bind")
+    async def ap_profile_bind(self, ctx: commands.Context, profile_id: str, *, label: str = ""):
+        if ctx.guild is None or not await self.bot.is_owner(ctx.author):
+            return await ctx.send("Profilbindungen dürfen nur Bot-Owner in der Ziel-Guild festlegen.")
+        if profile_id not in ALLOWED_PROFILES:
+            return await ctx.send("Ungültige Profilkennung.")
+        async with self._profile_config_lock:
+            records = await self.config.server_profiles()
+            records = dict(records) if isinstance(records, dict) else {}
+            record = dict(records.get(profile_id) or {})
+            if record.get("guild_id") and str(record["guild_id"]) != str(ctx.guild.id):
+                return await ctx.send("Bereits an eine andere Guild gebunden; keine automatische Umbindung.")
+            record.update(guild_id=str(ctx.guild.id), label=(label.strip() or profile_id)[:64])
+            record.setdefault("enabled", True)
+            if profile_id != "legacy":
+                record.setdefault("key_env", "ADMINPANEL_" + profile_id.upper().replace("-", "_") + "_KEY")
+            records[profile_id] = record
+            await self.config.server_profiles.set(records)
+            await self._refresh_profiles()
+        await ctx.send(f"Profil {profile_id} explizit an diese Guild gebunden. Daten/Queues wurden nicht verschoben.")
+
+    @ap_profile.command(name="keyenv")
+    async def ap_profile_keyenv(self, ctx: commands.Context, profile_id: str, variable: str):
+        if ctx.guild is None or not await self.bot.is_owner(ctx.author):
+            return await ctx.send("Schlüsselzuordnungen dürfen nur Bot-Owner festlegen.")
+        if not PROFILE_ID.fullmatch(profile_id) or not ENV_NAME.fullmatch(variable):
+            return await ctx.send("Nur Profilkennung und Name einer vorhandenen Umgebungsvariable angeben; keine Schlüsselwerte.")
+        async with self._profile_config_lock:
+            records = await self.config.server_profiles()
+            record = dict(records.get(profile_id) or {}) if isinstance(records, dict) else {}
+            if str(record.get("guild_id", "")) != str(ctx.guild.id):
+                return await ctx.send("Profil zuerst explizit an diese Guild binden.")
+            record["key_env"] = variable
+            records = dict(records)
+            records[profile_id] = record
+            await self.config.server_profiles.set(records)
+            await self._refresh_profiles()
+        await ctx.send("Umgebungsvariable dem Profil zugeordnet. Kein Schlüsselwert wird angezeigt oder erzeugt.")
 
     # ---- Login ----
 
@@ -1305,9 +1551,11 @@ class AdminPanel(commands.Cog):
     async def ap_logchannel(self, ctx: commands.Context, channel: discord.TextChannel = None):
         """Setzt den Channel für Missbrauchs-Alerts. Ohne Angabe: ausschalten."""
         if channel is None:
-            await self.config.alert_channel.set(None)
+            await self.set_profile_setting("alert_channel", None)
             return await ctx.send("🔕 Alert-Channel deaktiviert.")
-        await self.config.alert_channel.set(channel.id)
+        if str(channel.guild.id) != self.profiles.items[db.current_profile()].guild_id:
+            return await ctx.send("Kanal gehört nicht zur freigegebenen Profil-Guild.")
+        await self.set_profile_setting("alert_channel", channel.id)
         await ctx.send(f"🚨 Alerts (Geld-/Item-Sprünge, Dupe-Muster) gehen jetzt nach {channel.mention}.")
 
     @ap.command(name="find")
@@ -1449,9 +1697,11 @@ class AdminPanel(commands.Cog):
     async def ap_auditchannel(self, ctx: commands.Context, channel: discord.TextChannel = None):
         """Setzt den Channel für das Admin-Audit-Log (Geld, Items, Bans …). Ohne Angabe: aus."""
         if channel is None:
-            await self.config.audit_channel.set(None)
+            await self.set_profile_setting("audit_channel", None)
             return await ctx.send("🔕 Audit-Log deaktiviert.")
-        await self.config.audit_channel.set(channel.id)
+        if str(channel.guild.id) != self.profiles.items[db.current_profile()].guild_id:
+            return await ctx.send("Kanal gehört nicht zur freigegebenen Profil-Guild.")
+        await self.set_profile_setting("audit_channel", channel.id)
         await ctx.send(f"📋 Admin-Aktionen (Geld, Items, Bans, Job/Gang) werden jetzt nach {channel.mention} geloggt. "
                        f"Tipp: einen Channel wählen, auf den die Admins selbst **keinen** Schreib-/Löschzugriff haben.")
 
@@ -1475,7 +1725,7 @@ class AdminPanel(commands.Cog):
     async def ap_config_show(self, ctx: commands.Context):
         """Zeigt die aktuellen Einstellungen."""
         key = self.api_key
-        key_disp = "❌ nicht gesetzt (CHANGE_ME)" if key == "CHANGE_ME" else f"✓ gesetzt (…{key[-4:]})"
+        key_disp = "❌ nicht gesetzt" if not key or key == "CHANGE_ME" else "✓ Legacy-Key gesetzt (verdeckt)"
         url = self.public_url or "— (Login nur per Token)"
         embed = discord.Embed(title="AdminPanel – Einstellungen")
         embed.add_field(name="API-Key (Bridge)", value=key_disp, inline=False)
@@ -1489,29 +1739,16 @@ class AdminPanel(commands.Cog):
 
     @ap_config.command(name="key")
     async def ap_config_key(self, ctx: commands.Context, custom_key: str = None):
-        """Generiert einen neuen API-Key (oder setzt einen eigenen) und schickt ihn per DM."""
+        """Keine Schlüsselwerte im Chat/DM; Profile nutzen vorhandene Key-ENVs."""
         if custom_key:
             # Eigener Key stand im Befehl -> Nachricht sofort löschen (Secret nicht im Chat lassen)
             try:
                 await ctx.message.delete()
             except discord.HTTPException:
                 pass
-        key = custom_key or secrets.token_hex(32)
-        await self.config.api_key.set(key)
-        self.api_key = key
-        try:
-            await ctx.author.send(
-                f"🔑 **Neuer AdminPanel API-Key:**\n```{key}```\n"
-                f"Trage ihn in deine `server.cfg` ein:\n"
-                f"```set adminpanel_key \"{key}\"```\n"
-                f"Danach die Resource neu starten: `restart ap_bridge` (oder Server-Neustart). "
-                f"Bis dahin kann sich die FiveM-Bridge nicht mehr verbinden."
-            )
-            note = "🔑 Neuer API-Key generiert und dir per DM geschickt."
-        except discord.Forbidden:
-            note = ("🔑 Key gesetzt, aber ich kann dir keine DM schicken. "
-                    "Aktiviere DMs und nutze `!ap config key` erneut, oder hol ihn dir sicher aus der Bot-Config.")
-        await ctx.send(note + " ⚠️ Vergiss nicht, `server.cfg` anzupassen und `ap_bridge` neu zu starten.")
+        await ctx.send("Der vorhandene Legacy-Key bleibt erhalten. Für ein Serverprofil eine sichere "
+                       "Umgebungsvariable außerhalb Discords konfigurieren und ap profile keyenv "
+                       "<Profil> <Variablenname> verwenden. Hier wird kein Key erzeugt oder angezeigt.")
 
     @ap_config.command(name="url")
     async def ap_config_url(self, ctx: commands.Context, url: str):
@@ -1630,7 +1867,7 @@ class AdminPanel(commands.Cog):
     async def ap_lockdown(self, ctx: commands.Context, state: str = None):
         """NOT-AUS: sperrt sofort alle Panel-Aktionen. `!ap lockdown on` / `off`"""
         if state is None:
-            current = await self.config.locked()
+            current = await self.profile_locked()
             return await ctx.send(f"Lockdown ist aktuell **{'AN 🔒' if current else 'aus'}**. "
                                   f"Umschalten mit `!ap lockdown on` / `off`.")
         if state.lower() in ("on", "an", "1", "true"):

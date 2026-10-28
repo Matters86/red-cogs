@@ -11,7 +11,8 @@ import shutil
 import sqlite3
 import time
 import uuid
-from contextlib import closing
+from contextlib import closing, contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Optional
 
@@ -20,6 +21,9 @@ from typing import Optional
 # set_data_dir() verlegt sie beim Laden in Reds Datenordner (cog_data_path).
 _LEGACY_DIR = Path(__file__).parent
 DB_PATH = _LEGACY_DIR / "adminpanel.sqlite3"
+_PROFILE = ContextVar("adminpanel_server_profile", default=None)
+_PROFILE_PATHS = {}
+_PROFILE_SCOPING_REQUIRED = False
 
 LOGIN_TOKEN_TTL = 300        # 5 Minuten gültig
 SESSION_TTL = 12 * 3600      # 12 Stunden
@@ -48,14 +52,51 @@ def set_data_dir(data_dir) -> Path:
     return new_path
 
 
-def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+def configure_profiles(paths):
+    """Nur vertrauenswürdige Konfiguration, niemals ein Request-Dateipfad."""
+    global _PROFILE_PATHS, _PROFILE_SCOPING_REQUIRED
+    _PROFILE_PATHS = {key: Path(value) for key, value in paths.items()}
+    _PROFILE_SCOPING_REQUIRED = True
+
+
+def current_profile():
+    return _PROFILE.get()
+
+
+def current_db_path(*, auth=False):
+    if auth:
+        return DB_PATH
+    profile = current_profile()
+    if profile in _PROFILE_PATHS:
+        return _PROFILE_PATHS[profile]
+    if _PROFILE_SCOPING_REQUIRED:
+        raise RuntimeError("server_profile_scope_required")
+    return DB_PATH  # Nur vor Konfiguration/Legacy-Migration, nie als Request-Default.
+
+
+def profile_data_dir():
+    return current_db_path().parent
+
+
+@contextmanager
+def profile_scope(profile_id):
+    if profile_id not in _PROFILE_PATHS:
+        raise ValueError("unknown_server_profile")
+    token = _PROFILE.set(profile_id)
+    try:
+        yield profile_id
+    finally:
+        _PROFILE.reset(token)
+
+
+def get_conn(*, auth=False):
+    conn = sqlite3.connect(current_db_path(auth=auth))
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def init_db():
-    with closing(get_conn()) as conn:
+def init_db(*, auth=False):
+    with closing(get_conn(auth=auth)) as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS actions (
                 id TEXT PRIMARY KEY,
@@ -142,9 +183,14 @@ def init_db():
             ("audit_delivery", "TEXT"),
             ("audit_claimed_at", "REAL"),
             ("audit_completed_at", "REAL"),
+            ("profile_queue_hold", "INTEGER NOT NULL DEFAULT 0"),
         ):
             if name not in columns:
                 conn.execute(f"ALTER TABLE actions ADD COLUMN {name} {definition}")
+                if name == "profile_queue_hold":
+                    conn.execute("UPDATE actions SET profile_queue_hold = 1 WHERE status = 'pending'")
+        from . import support_store
+        support_store.install(conn)
         conn.commit()
 
 
@@ -167,7 +213,7 @@ def add_action(action_type: str, target: str, params: Optional[str], created_by:
 def get_pending_actions():
     with closing(get_conn()) as conn:
         rows = conn.execute(
-            "SELECT * FROM actions WHERE status = 'pending' ORDER BY created_at ASC"
+            "SELECT * FROM actions WHERE status = 'pending' AND profile_queue_hold = 0 ORDER BY created_at ASC"
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -319,7 +365,7 @@ def cancel_pending_actions(reason: str) -> int:
 
 def newest_backup_age() -> Optional[float]:
     """Alter des jüngsten Backups in Sekunden (None = noch keins)."""
-    backup_dir = DB_PATH.parent / "backups"
+    backup_dir = current_db_path().parent / "backups"
     files = sorted(backup_dir.glob("adminpanel_*.sqlite3")) if backup_dir.is_dir() else []
     if not files:
         return None
@@ -467,13 +513,14 @@ def backup_db(keep: int = 14):
     """Kopiert die DB konsistent in einen backups/-Ordner, behält die letzten `keep`."""
     from datetime import datetime
 
-    backup_dir = DB_PATH.parent / "backups"
+    selected_path = current_db_path()
+    backup_dir = selected_path.parent / "backups"
     backup_dir.mkdir(exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     dest = backup_dir / f"adminpanel_{stamp}.sqlite3"
 
     # sqlite backup-API für konsistente Kopie (auch bei laufenden Schreibvorgängen)
-    with closing(sqlite3.connect(DB_PATH)) as src, closing(sqlite3.connect(dest)) as dst:
+    with closing(sqlite3.connect(selected_path)) as src, closing(sqlite3.connect(dest)) as dst:
         with dst:
             src.backup(dst)
 
@@ -492,7 +539,7 @@ def backup_db(keep: int = 14):
 
 def create_login_token(user_id: str, guild_id: str, display_name: str) -> str:
     token = secrets.token_urlsafe(32)
-    with closing(get_conn()) as conn:
+    with closing(get_conn(auth=True)) as conn:
         conn.execute(
             "INSERT INTO login_tokens (token, user_id, guild_id, display_name, expires_at) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -505,7 +552,7 @@ def create_login_token(user_id: str, guild_id: str, display_name: str) -> str:
 def redeem_login_token(token: str):
     """Löst einen Login-Token ein und erzeugt eine Session. Gibt Session-Dict oder None zurück."""
     now = time.time()
-    with closing(get_conn()) as conn:
+    with closing(get_conn(auth=True)) as conn:
         row = conn.execute(
             "SELECT * FROM login_tokens WHERE token = ? AND used = 0 AND expires_at > ?",
             (token, now),
@@ -532,7 +579,7 @@ def redeem_login_token(token: str):
 
 def get_session(token: str):
     now = time.time()
-    with closing(get_conn()) as conn:
+    with closing(get_conn(auth=True)) as conn:
         conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now,))
         conn.execute("DELETE FROM login_tokens WHERE expires_at <= ?", (now,))
         conn.commit()

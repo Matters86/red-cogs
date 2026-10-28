@@ -1,5 +1,31 @@
 # Changelog
 
+## 28.10.2026 – Supportausbau v2, Testbuild
+
+- Servergetrennte Supportfälle mit Nummer, Übernahme, Zuweisung, Übergabe,
+  Status, Kommentaren und authentifizierten Bildanhängen.
+- QA-Bug-Referenz und gespeicherte Berichte aus tatsächlich abgeschlossenen
+  Leseaufträgen; kein frei erfundener Clientbericht.
+- Gemeinsame Fahrzeugakte für Privat-, Leasing- und Fraktionsfahrzeuge,
+  persistente ID, Halterlink, Garage und gekennzeichnete Standortbeobachtung.
+- Geführte Leseprüfungen für Schlüssel, Kofferraum, Kraftstoff und Nebenjobs.
+- Echte Dev-/Live-Isolation für SQLite/Queue/State/Keys/Medien, explizite
+  Profilwahl in Web, Discord und WebCore; Schlüssel nicht im Browser.
+- Additive Supporttabellen und actions.profile_queue_hold; alte pending-Aufträge
+  bleiben erhalten, werden beim Profilupgrade aber nicht automatisch ausgeführt.
+- ap_bridge 1.2.0 mit Profiltransport und begrenzten neuen Leseaktionen.
+- Keine Ressourcen-/Bot-Neustarts oder tatsächliche Dev-/Live-Datenmigration
+  durch die Entwicklungsarbeit. Quellcode vorher gesichert.
+
+### Grenzen und Installation
+
+Legacy-Bestand wird nicht automatisch auf Dev oder Live verschoben. Profile und
+separate Schlüssel vor Nutzung konfigurieren; Anleitung befolgen. Kein echter
+Discord-/FiveM-Test, keine automatische Reparatur/Freigabe/Auszahlung. Nicht
+vorhandene Leseexporte bleiben unbekannt (insbesondere Schlüsselablauf, private
+Kofferraumsperren und Nebenjob-Abrechnungsjournale). QR-/Weblink zur QA-App ist
+nicht erfunden; die gespeicherte Bug-ID bleibt eine Referenz.
+
 ## 28.10.2026 – DNP Admin Zentrale, Testbuild
 
 - DNP-Blau, klare Navigation, mobile Spieleransicht und aufklappbare Werkzeuge.
