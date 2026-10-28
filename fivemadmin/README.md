@@ -1,5 +1,84 @@
 # FiveM-Adminpanel (`fivemadmin`)
 
+## Supportausbau v2 – 28.10.2026
+
+Supportfälle mit Nummer, Zuständigkeit, Übergabe, Kommentaren und Bildern;
+QA-Bug-ID als Referenz ohne Duplikat und ohne fremde QA-Rechte. Falländerungen
+sind versioniert und wiederholte identische Anfragen erstellen keinen zweiten
+Eintrag. Fotos: JPEG/PNG/WebP, höchstens 4 MiB, acht je Fall; authentifizierter
+Abruf nur im ausgewählten Serverprofil. Bilder werden erst auf Wunsch geladen.
+
+Fahrzeugakte für private, Leasing- und Fraktionsfahrzeuge mit persistenter ID,
+Halterzuordnung, Garage, eindeutiger Runtimebeobachtung und gespeicherter letzter
+Position. Registertreffer sind keine Nutzungsberechtigung. Geführte Leseprüfungen
+für Schlüssel, Kofferraum, Tanken/Kanister und Nebenjobs liefern bestätigte
+Beobachtungen und ausdrückliche unbekannte Punkte. Berichte lassen sich am Fall
+speichern. Keine automatische Freigabe, Auszahlung oder Fahrzeugänderung.
+
+Dev und Live sind echte getrennte Profile mit eigenen SQLite-Dateien/Queues,
+Bridge-Schlüsseln, Fällen, Medien und Zuständen. Web, Discord und WebCore verlangen
+eine explizite Auswahl. Die bisherigen Daten bleiben im unzugeordneten Profil
+legacy. Neue Profile übernehmen keine alten Queues oder Bans. Vor dem Laden
+unbedingt die beiliegende Einrichtung/Bestandsübernahme lesen.
+
+Bot-Owner bindet ein Profil im gewünschten Discordserver mit
+`[p]ap profile bind dev Entwicklung` / `[p]ap profile bind live Live`.
+Keys kommen aus separaten Bot-Umgebungsvariablen ADMINPANEL_DEV_KEY und
+ADMINPANEL_LIVE_KEY. Niemals Schlüsselwerte in Discordbefehle schreiben.
+Discordauswahl: `[p]ap server dev` bzw. `[p]ap server live`; Webauswahl oben.
+ap_bridge 1.2.0 braucht den passenden adminpanel_profile-Convar und Schlüssel.
+
+Die bisherigen Support/Moderator/Admin-Presets erhalten die drei Supportrechte;
+Editor allein erhält sie nicht. Discord-Guild-Bindung und aktuelle Rollen werden
+serverseitig geprüft. Keine Gleichsetzung mit dem Ingame-Server-Editor.
+
+Schemaerweiterungen sind additiv. Frühere pending-Aufträge werden beim erstmaligen
+Profilupgrade als profile_queue_hold markiert und nicht automatisch abgearbeitet.
+Die alte Cog-Version filtert diese Spalte nicht: alte Version niemals unbesehen
+gegen die neue Datenbank starten. Keine manuelle Freigabe von Altaufträgen ohne
+Prüfung ihrer Ausführungsbelege. Alte Daten bleiben vollständig erhalten.
+
+Vor Aktivierung vollständigen Red-Cog-Datenordner inklusive support_media,
+profiles und Red-Konfiguration sichern. Die tägliche SQLite-Sicherung allein
+enthält keine Bilddateien. Ein Prozessabbruch vor dem Foto-DB-Commit kann eine
+nicht referenzierte Datei hinterlassen; sie wird nicht öffentlich ausgeliefert.
+
+Lokale Modultests mit temporärer SQLite, tatsächlichen Lua-Modulen und dem
+installierten FiveM-JSON-Serializer sowie Browser-Vertragsprüfungen sind vorhanden.
+Echter Discord-Login, echte Dev-/Live-Schlüsselkonfiguration und Ingame-Abnahme
+stehen aus. LIMIT begrenzt Ergebnismengen, keine garantierte SQL-Laufzeit;
+reale Abfragezeiten und Ressourcenlast auf Dev prüfen. Kein gemessener Lag-Fix.
+
+## Update 28.10.2026 – DNP Admin Zentrale
+
+Das Webpanel/PWA hat den blauen DNP-Look, aufklappbare Werkzeuggruppen, eine
+touchfreundliche Spieleransicht und lokales Abmelden. Vorhandene Aktionen,
+Rollen-Presets und Endpunkte bleiben bestehen. DNP-Hauptfraktionen werden durch
+die vorhandenen Job-/Gang-Befehle nicht automatisch neu zugewiesen.
+
+Panelkontakt, Bridgekontakt und gemeldete Ausführungsbereitschaft werden getrennt
+angezeigt. DB-Ping ist eine Stichprobe mit Alter, kein dauerhaft gemessener Livewert.
+Fehlende Statusfelder älterer Bridges bleiben unbestätigt. Aktualisierung ohne
+überlappende Abfragen, mit Fehlerpause und ohne regelmäßigen Abruf im Hintergrund.
+
+Aktionsergebnisse werden in allen geänderten Ausgaben nach dem konkreten Recht
+gefiltert. Wiederholte identische Abschlussmeldungen ändern weder Ergebnis noch
+Ban-Frist; Widersprüche bleiben prüfpflichtig. Abschluss und Ban werden gemeinsam
+gespeichert. Auditversand wird einmal reserviert; nach unbestätigtem Versand oder
+Prozessabbruch erfolgt kein blinder Neuversand. Eine Auditnachricht kann deshalb
+fehlen und muss geprüft werden. Es gibt keine Exactly-once-Zusage für Discord.
+
+Vor dem Laden: Red-Datenordner/SQLite und Red-Konfiguration zusätzlich sichern;
+die mitgelieferte Quellcodesicherung enthält diese laufenden Daten nicht.
+SQLite wird beim Laden nur um fehlende Spalten ergänzt; es wird nichts geleert
+und keine alte Queue automatisch freigegeben. Keine alte und neue Instanz parallel
+starten. Details im CHANGELOG.md und der beiliegenden Installationsanleitung.
+
+Offline getestet: 33 Backendtests mit temporärer SQLite, 87 vollständige
+Browserprüfungen und 44 Prüfungen mit tatsächlichen Backend-Testantworten.
+Discord-Login, echte Bridgeaufträge, WebCore und PWA-Installation sind noch auf
+einer Testinstanz abzunehmen. Kein gemessener FiveM-Hitch-Gewinn behauptet.
+
 Verwaltung eines **FiveM-Servers (QBox)** per Discord-Befehl **und** eigenem Webpanel. Beide
 Wege schreiben in dieselbe **Action-Queue**; der FiveM-Server holt die Aufträge über die
 Bridge-Resource `ap_bridge` per HTTP ab und meldet das Ergebnis zurück.
@@ -10,8 +89,8 @@ Bridge-Resource `ap_bridge` per HTTP ab und meldet das Ergebnis zurück.
   der Spielerakte, Spielersuche (auch offline).
 - **Admin:** Geld und Items geben/nehmen (mit Limits pro Aktion), Job/Gang setzen, Statistiken,
   Audit-Log.
-- **Webpanel** (installierbar als App/PWA) mit Tabs Spieler, Statistiken, Server, Audit und
-  Protokoll; Login per Einmal-Link (`[p]ap login`) oder „Mit Discord anmelden" (OAuth2).
+- **Webpanel** (installierbar als App/PWA) mit Tabs Spieler, Wirtschaft, Serverstatus, Kontrolle und
+  Aktivitäten; Login per Einmal-Link (`[p]ap login`) oder „Mit Discord anmelden" (OAuth2).
 - **Rechte live aus Discord:** Jede Anfrage prüft die aktuellen Rollen – Rolle entzogen =
   sofort kein Zugriff mehr.
 - **Sicherheit:** Not-Aus (`lockdown`), Audit-Channel für heikle Aktionen, Missbrauchs-Alerts,

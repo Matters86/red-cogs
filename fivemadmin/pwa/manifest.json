@@ -1,13 +1,13 @@
 {
-  "name": "DNP Admin",
+  "name": "DNP Admin Zentrale",
   "short_name": "DNP Admin",
-  "description": "DNP Server-Verwaltung",
+  "description": "DNP Roleplay – Serververwaltung",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#0E141B",
-  "theme_color": "#0E141B",
+  "background_color": "#101b2b",
+  "theme_color": "#172e47",
   "icons": [
     {
       "src": "/icons/icon-192.png",
