@@ -32,6 +32,7 @@ import os
 import logging
 import time
 import secrets
+import hashlib
 import urllib.parse
 
 import aiohttp
@@ -44,6 +45,32 @@ from . import db
 from .serverprofiles import Profiles, PROFILE_ID, ENV_NAME, ALLOWED_PROFILES
 
 log = logging.getLogger("red.adminpanel")
+
+# This identifies the loaded Python module independently of a later source copy.
+PANEL_BUILD = "2026-10-29-support-v2.2"
+try:
+    with open(__file__, "rb") as _module_source:
+        LOADED_MODULE_SHA256 = hashlib.sha256(_module_source.read()).hexdigest()
+except OSError:
+    LOADED_MODULE_SHA256 = None
+
+
+def _frontend_payload():
+    """Read only this installed cog's HTML; never config, database or network."""
+    with open(os.path.join(os.path.dirname(__file__), "panel.html"), "rb") as source:
+        return source.read()
+
+
+def _frontend_version():
+    try:
+        payload = _frontend_payload()
+    except OSError:
+        digest = None
+    else:
+        digest = hashlib.sha256(payload).hexdigest()
+    return {"build": PANEL_BUILD, "loaded_module_sha256": LOADED_MODULE_SHA256,
+            "html_sha256": digest, "frontend": "panel.html"}
+
 
 # ENV dienen nur noch als DEFAULTS. Zur Laufzeit überschreiben die per
 # Discord-Befehl gesetzten Config-Werte diese (self.api_key usw.).
@@ -195,8 +222,21 @@ def support_action_params(action_type, params, profile_id):
         if "kind" in params:
             raise ValueError("use_kinds_array")
         clean["query"] = text("query", 50, required=True)
-        if len(clean["query"]) < 2:
+        query_kind = params.get("query_kind")
+        if query_kind is not None and query_kind not in ("vehicleId", "plate", "citizenid"):
+            raise ValueError("query_kind_invalid")
+        query = clean["query"]
+        numeric_id = query.isascii() and query.isdigit() and query == str(int(query)) and 1 <= int(query) <= 2147483647
+        if query_kind == "vehicleId" and not numeric_id:
+            raise ValueError("vehicle_id_invalid")
+        if query_kind == "citizenid" and (not query.isascii() or not query.replace("_", "").replace("-", "").isalnum()):
+            raise ValueError("citizenid_invalid")
+        if query_kind == "plate" and (not query.isascii() or not 2 <= len(query) <= 15 or not query.replace(" ", "").isalnum()):
+            raise ValueError("plate_invalid")
+        if len(query) < 2 and not numeric_id and query_kind != "citizenid":
             raise ValueError("query_invalid")
+        if query_kind is not None:
+            clean["query_kind"] = query_kind
         limit = params.get("limit", 20)
         cursor = params.get("cursor", 0)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
@@ -229,6 +269,27 @@ def support_action_params(action_type, params, profile_id):
             clean["vehicle_id"] = vehicle_id()
     else:
         raise ValueError("unsupported_action")
+    return clean
+
+
+def parking_action_params(target, params):
+    """Validate the existing parking contract; final identity/garage checks are server-owned."""
+    def plate(value):
+        return isinstance(value, str) and 1 <= len(value.strip()) <= 15 and value.strip().isascii() and value.replace(" ", "").isalnum()
+    if not plate(target) or not isinstance(params, dict) or set(params) - {"garage", "vehicle_id", "expected_plate"}:
+        raise ValueError("parking_target_invalid")
+    garage = params.get("garage", "")
+    expected = params.get("expected_plate", target)
+    if not isinstance(garage, str) or len(garage.strip()) > 100 or any(ord(c) < 32 for c in garage) or not plate(expected):
+        raise ValueError("parking_params_invalid")
+    if expected.upper().replace(" ", "") != target.upper().replace(" ", ""):
+        raise ValueError("parking_plate_mismatch")
+    clean = {"garage": garage.strip(), "expected_plate": expected.strip()}
+    if "vehicle_id" in params:
+        value = params["vehicle_id"]
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 2147483647:
+            raise ValueError("parking_vehicle_id_invalid")
+        clean["vehicle_id"] = value
     return clean
 
 
@@ -569,8 +630,10 @@ class AdminPanel(commands.Cog):
             resp.headers.setdefault("X-Frame-Options", "DENY")
             resp.headers.setdefault("X-Content-Type-Options", "nosniff")
             resp.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
-            if request.path.startswith("/api/"):
+            if request.path == "/" or request.path.startswith("/api/"):
                 resp.headers["Cache-Control"] = "no-store"
+            elif request.path in ("/sw.js", "/manifest.json"):
+                resp.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
             return resp
         try:
             return _apply(await handler(request))
@@ -591,9 +654,11 @@ class AdminPanel(commands.Cog):
     # ---------------- Browser-Endpoints ----------------
 
     async def http_index(self, request: web.Request):
-        html_path = os.path.join(os.path.dirname(__file__), "panel.html")
-        with open(html_path, "r", encoding="utf-8") as f:
-            return web.Response(text=f.read(), content_type="text/html")
+        payload = _frontend_payload()
+        return web.Response(body=payload, content_type="text/html", charset="utf-8", headers={
+            "X-DNP-Panel-Build": PANEL_BUILD,
+            "X-DNP-Panel-HTML-SHA256": hashlib.sha256(payload).hexdigest(),
+        })
 
     # ---------------- Discord OAuth2 ("Mit Discord anmelden") ----------------
 
@@ -763,6 +828,12 @@ class AdminPanel(commands.Cog):
                 return web.json_response({"error": "support_target_must_be_star"}, status=400)
             try:
                 params = support_action_params(action_type, params, request["profile"]["id"])
+            except ValueError as exc:
+                return web.json_response({"error": str(exc)}, status=400)
+
+        if action_type == "car_to_garage":
+            try:
+                params = parking_action_params(target, params)
             except ValueError as exc:
                 return web.json_response({"error": str(exc)}, status=400)
 
@@ -1201,6 +1272,10 @@ class AdminPanel(commands.Cog):
 
     async def cog_before_invoke(self, ctx):
         command = getattr(getattr(ctx, "command", None), "qualified_name", "")
+        if command == "ap version":
+            if not await self.bot.is_owner(ctx.author):
+                raise commands.CheckFailure("Die Versionsdiagnose ist nur für Bot-Owner.")
+            return
         if command == "ap" or command in ("ap server", "ap login", "ap profile") or command.startswith(("ap profile ", "ap roles")):
             return
         if command == "ap config" or command.startswith("ap config "):
@@ -1242,6 +1317,21 @@ class AdminPanel(commands.Cog):
     @commands.group(name="ap")
     async def ap(self, ctx: commands.Context):
         """Adminpanel-Befehle."""
+
+    @ap.command(name="version")
+    @commands.is_owner()
+    async def ap_version(self, ctx: commands.Context):
+        """Geladenen Cog und ausgelieferte HTML-Datei rein lesend unterscheiden."""
+        if not await self.bot.is_owner(ctx.author):
+            return await ctx.send("Die Versionsdiagnose ist nur für Bot-Owner.")
+        info = _frontend_version()
+        await ctx.send(
+            "DNP Admin Zentrale · " + info["build"]
+            + "\nCog-Quelldatei beim Laden SHA-256: `" + (info["loaded_module_sha256"] or "nicht bestätigt") + "`"
+            + "\nHTML SHA-256: `" + (info["html_sha256"] or "nicht lesbar") + "`"
+            + "\nFrontend: panel.html; unabhängig von der FiveM-Bridge."
+            + "\nReine Versionsleseprüfung – keine Serveraktion, kein Reload, keine Datenänderung."
+        )
 
     @ap.command(name="server")
     @commands.guild_only()
@@ -1416,11 +1506,15 @@ class AdminPanel(commands.Cog):
         await ctx.send("✅ Ansage angelegt.")
 
     @ap.command(name="car2garage")
-    async def ap_car2garage(self, ctx: commands.Context, plate: str, garage: str = "downtown"):
+    async def ap_car2garage(self, ctx: commands.Context, plate: str, garage: str = ""):
         """Packt ein Fahrzeug per Kennzeichen in eine Garage."""
         if not await self._require(ctx, "car_to_garage"):
             return
-        await asyncio.to_thread(db.add_action, "car_to_garage", plate, json.dumps({"garage": garage}),
+        try:
+            params = parking_action_params(plate, {"garage": garage})
+        except ValueError:
+            return await ctx.send("Kennzeichen oder Garage ist ungültig. Es wurde kein Auftrag angelegt.")
+        await asyncio.to_thread(db.add_action, "car_to_garage", plate, json.dumps(params),
                                 f"discord:{ctx.author.display_name}")
         await ctx.send(f"✅ `{plate}` → Garage `{garage}` angelegt.")
 
@@ -1706,7 +1800,7 @@ class AdminPanel(commands.Cog):
                        f"Tipp: einen Channel wählen, auf den die Admins selbst **keinen** Schreib-/Löschzugriff haben.")
 
     @ap.command(name="parkall")
-    async def ap_parkall(self, ctx: commands.Context, fallback_garage: str = "downtown"):
+    async def ap_parkall(self, ctx: commands.Context, fallback_garage: str = ""):
         """Parkt ALLE gespawnten Spieler-Fahrzeuge in die nächste Garage ein. Besetzte Fahrzeuge bleiben stehen."""
         if not await self._require(ctx, "park_all"):
             return

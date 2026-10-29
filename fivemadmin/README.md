@@ -1,3 +1,64 @@
+# Releaseprüfung 29.10.2026 – Support v2.2
+
+Dieser Quellbuild behebt bestätigte Zuordnungs- und Antwortfehler. Er ist kein Nachweis einer auf der Synology geladenen oder im Spiel getesteten Version. Alle 18 ursprünglichen Cog-Dateien sind vor der Änderung separat gesichert.
+
+## Änderungen
+
+- Fahrzeug-/Inventarantworten und Spielerakten sind an die tatsächlich geöffnete Person gebunden. Späte Antworten dürfen nach Charakter-, Profil-, Rollen- oder Modalwechsel keine andere Akte überschreiben.
+- Beim Aktenwechsel verschwinden alte Bannaktionen und fremde Notizentwürfe sofort. Speichern einer Notiz sperrt weitere gleichzeitige Klicks; unklare Antworten werden nicht automatisch erneut gesendet.
+- Kaputte oder unbestätigte Leseantworten ergeben eine Fehlermeldung, kein erfundenes leeres Inventar, keine leere Fahrzeugliste und keine erfolgreiche Diagnose.
+- Eine fehlgeschlagene Geldsummen-Abfrage wird nicht als 0 angezeigt. Cash/Bank und Messzeit müssen bestätigt sein; ohne bestätigte Firmen-/Fraktionssumme bleibt der Gesamtwert ausdrücklich unbekannt.
+- Die Fahrzeugsuche übermittelt ihre tatsächliche Suchart (`query_kind`): persistente ID exakt, Kennzeichenpräfix oder exakte CitizenID. IDs 1 bis 9 funktionieren. Abfragen ohne Suchart bleiben als alter Vertrag kompatibel; die dazugehörige Bridge führt kanonische numerische IDs ebenfalls exakt aus.
+- Die vorhandene Spielerfahrzeugliste zeigt die persistente ID und bindet Einparken an ID plus erwartetes Kennzeichen. Ohne bestätigte ID bleibt dieser Listenbutton gesperrt. Das separate Kennzeichenformular bleibt ein serverseitig eindeutig zu prüfender Altpfad. Kein neuer Reparatur-/Berechtigungsweg wurde eingeführt.
+- Garagenvorschläge stammen ausschließlich vom ausgewählten Server. Eine anfänglich leere Liste wird frühestens nach 60 Sekunden über den vorhandenen Aktualisierungsweg erneut geprüft. Es gibt keinen weiteren Poll-Loop und kein erfundenes Standardziel. Der alte Discord-Standard „downtown“ wurde entfernt; leer bedeutet serverseitige sichere Auswahl.
+- Verspätete Profilanfragen entfernen keine neue laufende Doppelklicksperre mehr. Die Discord-Benutzersuche hält ihre Ergebnisse an der aktuellen Eingabe fest. Tabellen bleiben auf schmalen Displays innerhalb ihres eigenen Scrollbereichs.
+
+## Verbindlicher Installations- und Konfigurationsabgleich
+
+1. **Tatsächlich geladene NAS-Kopie bestimmen.** Die öffentliche, rein lesende Prüfung von 12:41 am 29.10. zeigte noch exakt die ursprüngliche Oberfläche vor dem 28.10. (HTML-SHA `d382bdba4af90cc8e272b416958d7c4e40a8f8e177cfca0824e4d415afb57f6c`). Damit war dort alter HTML-Quellstand ausgeliefert; es ist kein Nachweis eines bloßen iPhone-Caches. Development-/Downloader-Ordner und von Red geladener Cog können verschiedene Verzeichnisse sein. Keine NAS-Datei und kein laufender Bot wurden durch diese Prüfung geändert.
+2. **Vorher vollständige Sicherung:** geladener Cog, Red-Konfiguration und tatsächlicher Cog-Datenordner einschließlich SQLite/WAL, `profiles`, `support_media` und Sicherungen. Eine neue Ressourcen-ZIP ersetzt keine Red-Datensicherung.
+3. **Bestehenden Server zuerst eindeutig zuordnen.** Der vorgefundene Dev-Konfigurationsausschnitt enthielt weder `adminpanel_profile` noch `adminpanel_server_id`. Die alten Daten bleiben daher bewusst im getrennten Bestand `legacy`; es gibt keine automatische Dev-/Live-Übernahme. Vor Aktivierung feststellen, welcher bisherige Server diesen Bestand verwendet. Nur für diesen Bestandsserver bindet der Bot-Owner in der richtigen Discord-Guild beispielsweise `[p]ap profile bind legacy Bestand`. Kein gemeinsames Legacy-Profil unbesehen für Dev und Live verwenden.
+4. **Dev und Live bewusst getrennt einrichten:** eigene Profilbindungen, SQLite-Dateien/Queues und getrennte vorhandene Schlüssel-Umgebungsvariablen. Auf FiveM müssen `adminpanel_profile` und `adminpanel_server_id` zum jeweiligen freigegebenen Profil passen. Werte im vorbereiteten Konfigurationsabgleich prüfen; keine Config-Datei blind überschreiben. Schlüsselwerte ausschließlich in der vorgesehenen Bot-/Serverumgebung hinterlegen, niemals in diesem Chat oder Discord posten. `[p]ap profile keyenv` nimmt nur den Namen einer vorhandenen Umgebungsvariable entgegen. Keine Datenbankdateien in ein anderes Profil kopieren, solange ihre Zuordnung unbestätigt ist.
+5. **Alte offene Aufträge bleiben erhalten und gesperrt:** Beim Profilupgrade werden frühere `pending`-Aufträge als `profile_queue_hold` markiert und nicht automatisch ausgeführt. Keine pauschale Freigabe/Leerung und kein Rückstart einer alten Cog-Version gegen diese erweiterte DB. Erst tatsächliche Ausführungsbelege prüfen.
+6. Nach dem Abgleich den **vollständigen** Cog aus diesem Build in die tatsächlich geladene Red-Kopie aktualisieren; danach den Cog über die normale Red-Verwaltung neu laden. Die passenden Bridge-Dateien dieses gemeinsamen Builds gehören separat auf den richtigen FiveM-Server. Das sichere Einparken und die typisierte Suche hängen von beiden Seiten ab. Das reine HTML-/CSS-Update benötigt selbst keinen FiveM-Neustart.
+7. Bot-Owner prüft `[p]ap version`: Build `2026-10-29-support-v2.2`, beim Laden erfasster Modulhash und tatsächlich ausgelieferter HTML-Hash. Die öffentliche Antwort muss `X-DNP-Panel-Build` und `X-DNP-Panel-HTML-SHA256` passend zum Paketmanifest enthalten. Dafür ist kein Schlüssel im Browser nötig. Erst danach die Handyapp neu öffnen und richtige Profilwahl/Rechte prüfen. Kein automatisches Löschen von PWA-, Cookie- oder NAS-Daten.
+
+HTML/API bleiben `no-store`; Service Worker und Manifest müssen revalidiert werden. Die eigene Handyoberfläche kommt aus `panel.html`, nicht aus dem FiveM-Bridgecode. WebCore `/cogs/fivemadmin` bleibt die getrennte Verwaltungsseite mit Link zur eigenen Oberfläche.
+
+## Prüfung und verbleibende Abnahme
+
+Vollständiger Python-Cog mit kontrollierten Red/aiohttp-Grenzen, tatsächliche SQLite-Queue/Profilisolation/Altauftrags-Sperre und die tatsächliche vollständige HTML/JS-Oberfläche wurden offline geprüft. Die Browserfälle decken verspätete Antworten, beschädigte JSON-Ergebnisse, ID-/Kennzeichenbindung, Profilwechsel, Rechtekontext und mobile Breiten ab. Es gab keine Anmeldung auf der NAS, keine Discord-Nachricht, keinen Bot-Reload, keine produktive DB-Aktion und keine Fahrzeugänderung.
+
+Nach Installation bleiben tatsächlicher Red-Dispatcher, passende Profil-/Schlüsselkonfiguration, sichere Bridge-/Garagenabläufe und Ingame-Abnahme mit Privat-/Leasing-/Fraktionsfahrzeug erforderlich. Ein angelegter Auftrag ist weiterhin kein bestätigter Erfolg. Unbestätigte Fahrzeugzustände müssen als Fehler stehen bleiben und dürfen keinen Despawn auslösen.
+
+---
+
+## Update 29.10.2026 – Versionsdiagnose der Oberfläche
+
+Die eigene Handy-/Weboberfläche kommt aus `panel.html` im **tatsächlich geladenen**
+Red-Cog. Die AP-Bridge auf FiveM liefert Daten/Aktionen, aber weder HTML noch CSS.
+Ein reines Optikupdate braucht daher kein Update oder Neustart des FiveM-Servers.
+Der WebCore-Bereich `/cogs/fivemadmin` ist eine getrennte Verwaltungsseite mit dem
+zentralen WebCore-Theme; dort ist der Link „Live-Panel öffnen“ relevant.
+
+Die Loginseite und der Bereich Server/Setup-Diagnose zeigen jetzt
+„Oberfläche: 29.10.2026 · Support v2.2“. Nur Bot-Owner können mit
+`[p]ap version` den beim Laden festgehaltenen Cog-Hash und den aktuellen HTML-Hash
+lesen, auch ohne gewähltes Serverprofil. Es werden keine Pfade, Konfigwerte,
+Schlüssel, Spielerdaten oder Datenbankinhalte ausgegeben oder verändert.
+
+HTML wird mit `no-store` ausgeliefert, Service Worker und Manifest müssen neu
+validiert werden. Die PWA-Registrierung umgeht den HTTP-Cache des Service Workers
+und fordert dessen Aktualisierung an. Ein vorgeschalteter Proxy oder ein noch
+alter installierter Service Worker ist damit **nicht** als tatsächliche Ursache
+nachgewiesen; wirkliche Paneladresse/Instanz und Reload prüfen.
+
+Vor Update echte Red-Daten/SQLite/Fotos/Konfiguration separat sichern. Den ganzen
+Cog in der tatsächlich installierten Red-Kopie aktualisieren, anschließend über
+die normale Red-Verwaltung neu laden und die Webapp neu öffnen. Development- und
+Downloader-Ordner können getrennte Kopien sein. Kein Selbstreload, keine neue
+DB-Migration und keine neue Bridgeaktion durch diese Diagnose.
+
 # FiveM-Adminpanel (`fivemadmin`)
 
 ## Supportausbau v2 – 28.10.2026

@@ -568,6 +568,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
 .server-context~#profile-content nav.tabs{top:calc(var(--server-context-height,75px) + 8px)}
 @media(max-width:720px){.support-layout{grid-template-columns:1fr}.case-browser{position:static}.case-list{max-height:50vh}.support-layout.case-open .case-browser{display:none}.support-layout:not(.case-open) .case-workspace{display:none}.case-back{display:inline-flex;margin-bottom:16px}.case-titlebar h2{font-size:21px}.case-form-grid{grid-template-columns:1fr}.case-form-grid .wide{grid-column:auto}.case-info-grid{gap:13px}.vehicle-search-fields{grid-template-columns:1fr}.vehicle-search-fields label{margin-top:0}.vehicle-records{grid-template-columns:1fr}.diag-controls{grid-template-columns:1fr}.case-operation .split{flex-direction:column;align-items:stretch}.case-operation .split>*{width:100%}.server-context{margin:0 14px 15px;gap:8px 11px;padding:12px}.server-context select{min-width:0;max-width:none;width:100%;font-size:15px}.server-context>label{flex-basis:100%}.server-context-badge{flex:1;flex-wrap:wrap;font-size:11px}.profile-state{margin:0;font-size:10px}.server-context~#profile-content nav.tabs{top:calc(var(--server-context-height,75px) + 8px)}.profile-prompt{margin:20px 14px}.report-save{align-items:stretch;flex-direction:column}.report-save>div{min-width:0}.case-photo-button{min-height:38px}.case-form-actions .btn{flex:1}.case-section h3{font-size:14px}}
 
+.modal-body,.scroll-y,#search-wrap,#roles-wrap,#users-wrap,#audit-wrap,#bans-wrap{max-width:100%;overflow-x:auto}.modal-box,.tools-grid>*{min-width:0}.report-json{max-width:100%;box-sizing:border-box}
 </style>
 </head>
 <body>
@@ -591,6 +592,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
       Android/Chrome: Menü ⋮ → „App installieren“<br>
       iPhone/Safari: Teilen <span style="font-family:var(--font-mono)">⎋</span> → „Zum Home-Bildschirm“
     </p>
+    <p class="sub" id="panel-build-gate">Oberfläche: 29.10.2026 · Support v2.2</p>
   </div>
 </div>
 
@@ -891,6 +893,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
           <button class="btn small" id="diag-btn" style="margin-left:auto">Prüfen</button>
         </div>
         <p class="hint">Prüft, ob DB, Exports, Tabellen und das Society-System zu diesem Server passen – ideal beim ersten Livegang.</p>
+        <p class="hint" id="panel-build-server">Oberfläche: 29.10.2026 · Support v2.2. Die FiveM-Bridge wird getrennt aktualisiert.</p>
         <div id="diag-wrap"><div class="empty">Noch nicht geprüft.</div></div>
       </section>
     </div>
@@ -1067,7 +1070,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   /* ---------- PWA ---------- */
 
   if ("serviceWorker" in navigator) {
-    try { navigator.serviceWorker.register("/sw.js").catch(function () {}); } catch (e) {}
+    try { navigator.serviceWorker.register("/sw.js", {updateViaCache: "none"}).then(function (registration) { return registration.update(); }).catch(function () {}); } catch (e) {}
   }
 
   // Echter Install-Button: Chrome feuert beforeinstallprompt, wenn die App
@@ -1134,13 +1137,15 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   var accessEpoch = 0;
   var playerRenderKey = null;
   var modalFocus = {};
+  var viewScopes = {};
+  var catalogRetryAt = 0;
   var READ_ACTIONS = ["diag", "get_stats", "get_inventory", "get_vehicles", "search_player", "support_vehicle_search", "support_vehicle_case", "support_diagnose"];
   var activeTab = "players";
   var statsData = null;
   var statsLoading = false;
   var catalogLoaded = false;
   var catalogMap = {};
-  var defaultGarage = "downtown";
+  // Garage suggestions come exclusively from the selected server catalog.
   var lastLogSeen = 0;
 
   var store = (function () {
@@ -1163,6 +1168,28 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
 
   function $(id) { return document.getElementById(id); }
   function can(p) { return perms.indexOf(p) !== -1; }
+
+  // Bind asynchronous UI replies to the exact visible request and server context.
+  function beginView(key, identity) {
+    var view = {key:key,identity:identity,session:sessionEpoch,access:accessEpoch,profile:profileGeneration};
+    viewScopes[key] = view;
+    return view;
+  }
+  function viewCurrent(view) {
+    return !!view && viewScopes[view.key] === view && view.session === sessionEpoch && view.access === accessEpoch && view.profile === profileGeneration
+      && (!view.key.endsWith('-modal') || !$(view.key).classList.contains('hidden'));
+  }
+  function actionObject(action) {
+    if (!action || action.result_review_required === true || typeof action.result !== 'string') throw new Error('unconfirmed_result');
+    var data = JSON.parse(action.result);
+    if (!data || typeof data !== 'object' || Array.isArray(data) || !Object.keys(data).length || data.ok === false || data.error) throw new Error('unconfirmed_result');
+    return data;
+  }
+  function actionArray(action, key) {
+    var data = actionObject(action);
+    if (!Array.isArray(data[key]) || data[key].some(function(row){return !row || typeof row !== 'object' || Array.isArray(row);})) throw new Error('unconfirmed_result');
+    return data[key];
+  }
 
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -1278,7 +1305,9 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
 
   /* ---------- Aktionen ---------- */
 
-  function createAction(type, target, params, msgId) {
+  function createAction(type, target, params, msgId, view) {
+    var context = {session:sessionEpoch,access:accessEpoch,profile:profileGeneration};
+    function feedbackCurrent(){return context.session===sessionEpoch && context.access===accessEpoch && context.profile===profileGeneration && (!view || viewCurrent(view));}
     var key = JSON.stringify([type,target,params]);
     if (actionRequests[key]) return actionRequests[key];
     var reason = isLocked && type !== "diag" ? "locked" :
@@ -1292,14 +1321,14 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     var request = api("/api/panel/action", {
       method: "POST", body: JSON.stringify({ action_type: type, target: target, params: params })
     }).then(function (data) {
-      if (msgId) setMsg(msgId, "Auftrag #" + data.id + " angelegt. Die Ausführung ist noch nicht bestätigt.", "ok");
+      if (msgId && feedbackCurrent()) setMsg(msgId, "Auftrag #" + data.id + " angelegt. Die Ausführung ist noch nicht bestätigt.", "ok");
       poll();
       return data;
     }).catch(function (e) {
       if (e.message === "unauthorized") logout(true);
-      if (msgId && e.message !== "stale_session") setMsg(msgId, e.message === "forbidden" || e.message === "locked" ? errText(e) : "Antwort nicht bestätigt. Bitte das Aktionsprotokoll prüfen, bevor du erneut sendest.", "err");
+      if (msgId && feedbackCurrent() && e.message !== "stale_session") setMsg(msgId, e.message === "forbidden" || e.message === "locked" ? errText(e) : "Antwort nicht bestätigt. Bitte das Aktionsprotokoll prüfen, bevor du erneut sendest.", "err");
       throw e;
-    }).finally(function () { delete actionRequests[key]; });
+    }).finally(function () { if (actionRequests[key] === request) delete actionRequests[key]; });
     // The same request is shared by rapid double clicks; there is no automatic action retry.
     actionRequests[key] = request;
     request.catch(function () {});
@@ -1486,7 +1515,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     // Leer = Bridge entscheidet: letzte Garage des Fahrzeugs bzw. nächste passende
     var garage = $("car-garage").value.trim();
     if (!plate) return setMsg("car-msg", "Kennzeichen angeben.", "err");
-    createAction("car_to_garage", plate, { garage: garage }, "car-msg");
+    createAction("car_to_garage", plate, { garage: garage,expected_plate:plate }, "car-msg");
   });
 
   var parkallConfirm = null;
@@ -1518,8 +1547,8 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     var text = $("ann-text").value.trim();
     if (!text) return setMsg("ann-msg", "Nachricht eingeben.", "err");
     createAction("announce", "*", { message: text }, "ann-msg").then(function () {
-      $("ann-text").value = "";
-    });
+      if($("ann-text").value.trim()===text)$("ann-text").value = "";
+    }).catch(function () {});
   });
 
   function moneyOp(op) {
@@ -1545,62 +1574,33 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   $("it-remove").addEventListener("click", function () { itemOp("remove_item"); });
 
   function loadCatalog() {
-    if (catalogLoaded || (!can("items") && !can("view_inventory"))) return;
-    catalogLoaded = true;
-    api("/api/panel/catalog").then(function (data) {
-      var items = data.items || [];
-      var html = "";
-      items.forEach(function (i) {
-        catalogMap[i.name] = i.label || i.name;
-        html += '<option value="' + esc(i.name) + '">' + esc(i.label || i.name) + '</option>';
-      });
-      $("item-list").innerHTML = html;
-      // Echte Garagen dieses Servers (matters-garage-Registry via Bridge) -> keine Phantom-Garagen
-      var g = data.garages || [];
-      var vg = $("veh-garage");
-      if (g.length) {
-        defaultGarage = g[0];
-        var gh = "";
-        g.forEach(function (name) { gh += '<option value="' + esc(name) + '"></option>'; });
-        $("garage-list").innerHTML = gh;
-        $("car-garage").placeholder = "leer = automatisch · z. B. " + g[0];
-        if (vg) vg.placeholder = "leer = automatisch · z. B. " + g[0];
-      } else {
-        // Katalog (noch) leer -- z. B. weil matters-garage beim letzten Bridge-Push
-        // noch nicht bereit war. ap_bridge sendet den Katalog inzwischen alle 5 Minuten
-        // erneut (selbstheilend), Automatik funktioniert trotzdem -- nur die
-        // Namens-Vorschlagsliste fehlt bis zum nächsten Push.
-        $("garage-list").innerHTML = "";
-        $("car-garage").placeholder = "leer = automatisch (Namensliste lädt noch, in ein paar Minuten erneut versuchen)";
-        if (vg) vg.placeholder = "leer = automatisch (Namensliste lädt noch)";
-      }
-    }).catch(function () { catalogLoaded = false; });
+    if(catalogLoaded || Date.now()<catalogRetryAt || (!can('items') && !can('view_inventory')))return;
+    catalogLoaded=true;var view=beginView('catalog');
+    api('/api/panel/catalog').then(function(data){
+      if(!viewCurrent(view))return;
+      if(!data || !Array.isArray(data.items))throw new Error('unconfirmed_catalog');
+      var items=data.items,html='';catalogMap={};
+      items.forEach(function(item){if(!item || typeof item.name!=='string')return;catalogMap[item.name]=item.label||item.name;html+='<option value="'+esc(item.name)+'">'+esc(item.label||item.name)+'</option>';});
+      $('item-list').innerHTML=html;
+      var garages=Array.isArray(data.garages)?data.garages.filter(function(name){return typeof name==='string' && name.length>0 && name.length<=96;}):[],input=$('veh-garage');
+      $('garage-list').innerHTML=garages.map(function(name){return '<option value="'+esc(name)+'"></option>';}).join('');
+      var hint=garages.length?'leer = automatisch · z. B. '+garages[0]:'leer = automatisch (Namensliste noch nicht bestätigt)';
+      $('car-garage').placeholder=hint;if(input)input.placeholder=hint;
+      if(!garages.length){catalogLoaded=false;catalogRetryAt=Date.now()+60000;}
+    }).catch(function(error){if(viewCurrent(view)){catalogLoaded=false;catalogRetryAt=Date.now()+60000;}});
   }
 
   /* ---------- Offline-Suche ---------- */
 
   function runSearch() {
-    var q = $("search-q").value.trim();
-    if (q.length < 2) {
-      $("search-wrap").innerHTML = '<div class="empty">Mindestens 2 Zeichen eingeben.</div>';
-      return;
-    }
-    $("search-btn").disabled = true;
-    $("search-wrap").innerHTML = '<div class="empty">Suche läuft…</div>';
-    createAction("search_player", q, {}).then(function (data) {
-      if (data && data.id) trackQuery(data.id, function (a) {
-        $("search-btn").disabled = false;
-        var results = [];
-        try { results = (JSON.parse(a.result || "{}").results) || []; } catch (e) {}
-        renderSearchResults(results);
-      }, function (msg) {
-        $("search-btn").disabled = false;
-        $("search-wrap").innerHTML = '<div class="empty">' + esc(msg) + '</div>';
-      });
-    }).catch(function () {
-      $("search-btn").disabled = false;
-      $("search-wrap").innerHTML = '<div class="empty">Abfrage konnte nicht angelegt werden.</div>';
-    });
+    var q=$('search-q').value.trim(),view=beginView('search-player',q);
+    if(q.length<2){$('search-btn').disabled=false;$('search-wrap').innerHTML='<div class="empty">Mindestens 2 Zeichen eingeben.</div>';return;}
+    $('search-btn').disabled=true;$('search-wrap').innerHTML='<div class="empty">Suche läuft…</div>';
+    function failed(message){if(viewCurrent(view)){$('search-btn').disabled=false;$('search-wrap').innerHTML='<div class="empty">'+esc(message)+'</div>';}}
+    createAction('search_player',q,{}).then(function(data){
+      if(!viewCurrent(view))return;
+      trackQuery(data && data.id,function(action){var rows=actionArray(action,'results');$('search-btn').disabled=false;renderSearchResults(rows);},failed,view);
+    }).catch(function(error){if(error.message!=='stale_session')failed('Abfrage konnte nicht bestätigt werden.');});
   }
   $("search-btn").addEventListener("click", runSearch);
   $("search-q").addEventListener("keydown", function (e) { if (e.key === "Enter") runSearch(); });
@@ -1661,15 +1661,20 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     $("msg-title").textContent = (name ? name + " · " : "") + cid;
     $("msg-text").value = "";
     openModal("msg-modal");
+    beginView("msg-modal",cid);
     $("msg-text").focus();
   }
   $("msg-send").addEventListener("click", function () {
     var text = $("msg-text").value.trim();
     if (!text) return setMsg("msg-msg", "Nachricht eingeben.", "err");
-    createAction("notify", msgTarget, { message: text }, "msg-msg").then(function () {
+    var view=viewScopes["msg-modal"],cid=msgTarget;
+    if(!viewCurrent(view))return;
+    createAction("notify", cid, { message: text }, "msg-msg",view).then(function () {
+      if(!viewCurrent(view))return;
+      if($("msg-text").value.trim()!==text)return;
       closeModal("msg-modal");
-      setMsg("players-msg", "Nachricht angelegt.", "ok");
-    });
+      setMsg("players-msg", "Nachrichtenauftrag angelegt; Ausführung im Protokoll prüfen.", "ok");
+    }).catch(function () {});
   });
 
   /* ---------- Ban ---------- */
@@ -1682,62 +1687,59 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     $("ban-reason").value = "";
     $("ban-duration").value = "24";
     openModal("ban-modal");
+    beginView("ban-modal",cid);
     $("ban-reason").focus();
   }
   $("ban-send").addEventListener("click", function () {
     var reason = $("ban-reason").value.trim();
     var hours = parseInt($("ban-duration").value, 10);
     if (!reason) return setMsg("ban-msg", "Grund angeben.", "err");
-    createAction("ban", banTarget, { hours: hours, reason: reason }, "ban-msg").then(function () {
+    var view=viewScopes["ban-modal"],cid=banTarget;
+    if(!viewCurrent(view))return;
+    createAction("ban", cid, { hours: hours, reason: reason }, "ban-msg",view).then(function () {
+      if(!viewCurrent(view))return;
+      if($("ban-reason").value.trim()!==reason || parseInt($("ban-duration").value,10)!==hours)return;
       closeModal("ban-modal");
-      setMsg("players-msg", "Ban angelegt – wird beim nächsten Sync ausgeführt.", "ok");
-    });
+      setMsg("players-msg", "Ban-Auftrag angelegt; Ausführung im Protokoll prüfen.", "ok");
+    }).catch(function () {});
   });
 
   /* ---------- Abfrage-Modals (Inventar / Fahrzeuge / Stats) ---------- */
 
   var pendingQueries = {};
 
-  function trackQuery(actionId, onDone, onFail) {
-    pendingQueries[actionId] = { onDone: onDone, onFail: onFail, startedAt: Date.now() };
+  function trackQuery(actionId, onDone, onFail, view) {
+    if (typeof actionId!=='string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actionId)) { onFail('Auftragsnummer nicht bestätigt.'); return; }
+    var context = {session:sessionEpoch,access:accessEpoch,profile:profileGeneration};
+    pendingQueries[actionId] = {onDone:onDone,onFail:onFail,startedAt:Date.now(),
+      current:function(){return context.session===sessionEpoch && context.access===accessEpoch && context.profile===profileGeneration && (!view || viewCurrent(view));}};
   }
 
   function checkQueryResults(actions) {
     var ids = Object.keys(pendingQueries);
     if (!ids.length) return;
-    var byId = {};
-    actions.forEach(function (a) { byId[a.id] = a; });
-    ids.forEach(function (id) {
-      var q = pendingQueries[id];
-      var a = byId[id];
-      if (a && a.status === "done") {
+    var byId = {}; actions.forEach(function(a){byId[a.id]=a;});
+    ids.forEach(function(id){
+      var query=pendingQueries[id],action=byId[id];
+      if (!query.current()) {delete pendingQueries[id];return;}
+      if (action && (action.status==='done' || action.status==='failed')) {
         delete pendingQueries[id];
-        q.onDone(a);
-      } else if (a && a.status === "failed") {
-        delete pendingQueries[id];
-        q.onFail(a.result || "Abfrage fehlgeschlagen.");
-      } else if (Date.now() - q.startedAt > 45000) {
-        delete pendingQueries[id];
-        q.onFail("Noch kein bestätigtes Ergebnis. Bitte das Aktionsprotokoll prüfen, bevor du die Abfrage wiederholst.");
+        if (action.status==='failed' || action.result_review_required===true) return query.onFail('Serverergebnis nicht bestätigt. Bitte das Aktionsprotokoll prüfen.');
+        try {query.onDone(action);} catch (_) {if(query.current())query.onFail('Antwortdaten nicht bestätigt. Bitte das Aktionsprotokoll prüfen.');}
+      } else if (Date.now()-query.startedAt>45000) {
+        delete pendingQueries[id];query.onFail('Noch kein bestätigtes Ergebnis. Bitte das Aktionsprotokoll prüfen, bevor du die Abfrage wiederholst.');
       }
     });
   }
 
   function openInventory(cid) {
-    $("inv-cid").textContent = cid;
-    $("inv-body").innerHTML = '<div class="empty">Lade Inventar…</div>';
-    openModal("inv-modal");
-    createAction("get_inventory", cid, {}).then(function (data) {
-      if (data && data.id) trackQuery(data.id, function (a) {
-        var items = [];
-        try { items = (JSON.parse(a.result || "{}").items) || []; } catch (e) {}
-        renderInventory(items);
-      }, function (msg) {
-        $("inv-body").innerHTML = '<div class="empty">' + esc(msg) + '</div>';
-      });
-    }).catch(function () {
-      $("inv-body").innerHTML = '<div class="empty">Abfrage konnte nicht angelegt werden.</div>';
-    });
+    $('inv-cid').textContent=cid;$('inv-body').innerHTML='<div class="empty">Lade Inventar…</div>';openModal('inv-modal');
+    var view=beginView('inv-modal',cid);
+    function failed(message){if(viewCurrent(view))$('inv-body').innerHTML='<div class="empty">'+esc(message)+'</div>';}
+    createAction('get_inventory',cid,{}).then(function(data){
+      if(!viewCurrent(view))return;
+      trackQuery(data && data.id,function(action){renderInventory(actionArray(action,'items'));},failed,view);
+    }).catch(function(error){if(error.message!=='stale_session')failed('Abfrage konnte nicht bestätigt werden.');});
   }
 
   function renderInventory(items) {
@@ -1763,20 +1765,13 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   var VEH_STATE = { 0: "Draußen", 1: "Garage", 2: "Beschlagnahmt" };
 
   function openVehicles(cid) {
-    $("veh-cid").textContent = cid;
-    $("veh-body").innerHTML = '<div class="empty">Lade Fahrzeuge…</div>';
-    openModal("veh-modal");
-    createAction("get_vehicles", cid, {}).then(function (data) {
-      if (data && data.id) trackQuery(data.id, function (a) {
-        var vehicles = [];
-        try { vehicles = (JSON.parse(a.result || "{}").vehicles) || []; } catch (e) {}
-        renderVehicles(vehicles);
-      }, function (msg) {
-        $("veh-body").innerHTML = '<div class="empty">' + esc(msg) + '</div>';
-      });
-    }).catch(function () {
-      $("veh-body").innerHTML = '<div class="empty">Abfrage konnte nicht angelegt werden.</div>';
-    });
+    $('veh-cid').textContent=cid;$('veh-body').innerHTML='<div class="empty">Lade Fahrzeuge…</div>';openModal('veh-modal');
+    var view=beginView('veh-modal',cid);
+    function failed(message){if(viewCurrent(view))$('veh-body').innerHTML='<div class="empty">'+esc(message)+'</div>';}
+    createAction('get_vehicles',cid,{}).then(function(data){
+      if(!viewCurrent(view))return;
+      trackQuery(data && data.id,function(action){renderVehicles(actionArray(action,'vehicles'));},failed,view);
+    }).catch(function(error){if(error.message!=='stale_session')failed('Abfrage konnte nicht bestätigt werden.');});
   }
 
   function renderVehicles(vehicles) {
@@ -1792,10 +1787,10 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
       var stCls = v.state === 1 ? "good" : (v.state === 0 ? "warn" : "bad");
       if (v.state === 1 && v.garage) st += ": " + esc(v.garage);
       html += '<tr>' +
-        '<td>' + esc(v.vehicle || "?") + '</td>' +
+        '<td>' + esc(v.vehicle || "?") + (Number.isInteger(v.id) && v.id>0 && v.id<=2147483647 ? '<div class="p-sub">ID '+esc(v.id)+'</div>' : '<div class="p-sub">ID nicht bestätigt</div>') + '</td>' +
         '<td class="mono dim">' + esc(v.plate || "?") + '</td>' +
         '<td><span class="v ' + stCls + '" style="font-family:var(--font-mono);font-size:12.5px">' + st + '</span></td>' +
-        '<td style="text-align:right"><button class="abtn" data-vplate="' + esc(v.plate || "") + '">Einparken</button></td>' +
+        '<td style="text-align:right"><button class="abtn" data-vplate="' + esc(v.plate || "") + '" data-vid="'+esc(Number.isInteger(v.id)?v.id:'')+'"'+(Number.isInteger(v.id)&&v.id>0&&v.id<=2147483647?'':' disabled')+'>Einparken</button></td>' +
       '</tr>';
     });
     $("veh-body").innerHTML = html + "</tbody></table>";
@@ -1804,12 +1799,13 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   $("veh-body").addEventListener("click", function (ev) {
     var el = ev.target.closest("[data-vplate]");
     if (!el) return;
-    var plate = el.getAttribute("data-vplate");
+    var plate = el.getAttribute("data-vplate"),id=Number(el.getAttribute("data-vid")),view=viewScopes["veh-modal"];
+    if(!viewCurrent(view)||!Number.isInteger(id)||id<1||id>2147483647)return;
     // Leer = Bridge entscheidet (letzte Garage des Fahrzeugs bzw. nächste passende)
     var garage = $("veh-garage").value.trim();
     el.disabled = true;
     el.textContent = "→ " + (garage || "automatisch");
-    createAction("car_to_garage", plate, { garage: garage }, "players-msg");
+    createAction("car_to_garage", plate, { garage: garage,vehicle_id:id,expected_plate:plate }, "players-msg",view);
   });
 
   function openModal(id) {
@@ -1819,6 +1815,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     if (target) target.focus();
   }
   function closeModal(id) {
+    delete viewScopes[id];
     var wasOpen = !$(id).classList.contains("hidden");
     $(id).classList.add("hidden");
     if (wasOpen && modalFocus[id] && modalFocus[id].isConnected) modalFocus[id].focus();
@@ -1846,6 +1843,8 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   var histCid = null;
 
   function openHistory(cid, name) {
+    if(histCid!==cid){$("note-text").value="";$("note-msg").textContent="";}
+    $("hist-ban").innerHTML="";$("note-add").disabled=false;$("warn-add").disabled=false;
     histCid = cid;
     $("hist-title").textContent = (name ? name + " · " : "") + cid;
     $("hist-warns").textContent = "";
@@ -1857,17 +1856,17 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   }
 
   function loadHistory() {
-    api("/api/panel/player_history?cid=" + encodeURIComponent(histCid)).then(function (d) {
-      renderBanStatus(d.ban, d.can_ban);
-      renderNotes(d.notes || [], d.can_note);
-      renderHistory(d.actions || [], d.events || []);
-    }).catch(function (e) {
-      if (e.message === "unauthorized") return logout();
-      $("hist-body").innerHTML = '<div class="empty">' + errText(e) + '</div>';
-    });
+    if(!histCid || $('hist-modal').classList.contains('hidden'))return;
+    var cid=histCid,view=beginView('hist-modal',cid);
+    api('/api/panel/player_history?cid='+encodeURIComponent(cid)).then(function(data){
+      if(!viewCurrent(view))return;
+      if(!data || !Array.isArray(data.notes) || !Array.isArray(data.actions) || !Array.isArray(data.events))throw new Error('unconfirmed_result');
+      renderBanStatus(data.ban,data.can_ban);renderNotes(data.notes,data.can_note);renderHistory(data.actions,data.events);
+    }).catch(function(error){if(viewCurrent(view) && error.message!=='stale_session')$('hist-body').innerHTML='<div class="empty">Die Akte konnte nicht bestätigt werden.</div>';});
   }
 
   function renderBanStatus(ban, canBan) {
+    var cid=histCid,view=viewScopes["hist-modal"];
     var el = $("hist-ban");
     if (ban) {
       var until = ban.expires_at
@@ -1879,16 +1878,18 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
         (canBan ? '<button class="abtn" id="hist-unban" style="margin-left:auto">Entbannen</button>' : '') +
         '</div>';
       if (canBan) $("hist-unban").addEventListener("click", function () {
-        api("/api/panel/unban", { method: "POST", body: JSON.stringify({ cid: histCid }) })
-          .then(loadHistory).catch(function () {});
+        if(!viewCurrent(view))return;
+        api("/api/panel/unban", { method: "POST", body: JSON.stringify({ cid: cid }) })
+          .then(function(){if(viewCurrent(view))loadHistory();}).catch(function () {});
       });
     } else {
       el.innerHTML = canBan
         ? '<button class="btn small ghost" id="hist-ban-btn" style="border-color:rgba(224,82,82,.5);color:var(--err)">🔨 Diesen Spieler bannen</button>'
         : '';
       if (canBan) $("hist-ban-btn").addEventListener("click", function () {
+        if(!viewCurrent(view))return;
         closeModal("hist-modal");
-        openBan(histCid, $("hist-title").textContent.split(" · ")[0]);
+        openBan(cid, $("hist-title").textContent.split(" · ")[0]);
       });
     }
   }
@@ -1926,18 +1927,16 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   });
 
   function submitNote(kind) {
-    var text = $("note-text").value.trim();
-    if (!text) return setMsg("note-msg", "Text eingeben.", "err");
-    api("/api/panel/notes", {
-      method: "POST",
-      body: JSON.stringify({ cid: histCid, kind: kind, text: text })
-    }).then(function () {
-      $("note-text").value = "";
-      setMsg("note-msg", kind === "warn" ? "Verwarnung gespeichert." : "Notiz gespeichert.", "ok");
-      loadHistory();
-    }).catch(function (e) {
-      setMsg("note-msg", errText(e), "err");
-    });
+    var text=$('note-text').value.trim(),cid=histCid,view=viewScopes['hist-modal'];
+    if(!viewCurrent(view) || view.noteBusy)return;
+    if(!text)return setMsg('note-msg','Text eingeben.','err');
+    view.noteBusy=true;$('note-add').disabled=true;$('warn-add').disabled=true;
+    api('/api/panel/notes',{method:'POST',body:JSON.stringify({cid:cid,kind:kind,text:text})}).then(function(){
+      if(!viewCurrent(view))return;
+      if($('note-text').value.trim()===text)$('note-text').value='';
+      setMsg('note-msg',kind==='warn'?'Verwarnung gespeichert.':'Notiz gespeichert.','ok');loadHistory();
+    }).catch(function(error){if(viewCurrent(view) && error.message!=='stale_session')setMsg('note-msg','Antwort nicht bestätigt. Akte prüfen, bevor du erneut sendest.','err');})
+      .finally(function(){view.noteBusy=false;if(viewScopes['hist-modal']===view || (histCid===cid && !$('hist-modal').classList.contains('hidden'))){$('note-add').disabled=false;$('warn-add').disabled=false;}});
   }
   $("note-add").addEventListener("click", function () { submitNote("note"); });
   $("warn-add").addEventListener("click", function () { submitNote("warn"); });
@@ -1982,26 +1981,13 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   /* ---------- Statistiken ---------- */
 
   function loadStats() {
-    if (statsLoading) return;
-    statsLoading = true;
-    $("stats-loading").classList.remove("hidden");
-    $("stats-refresh").disabled = true;
-    createAction("get_stats", "*", {}).then(function (data) {
-      if (data && data.id) trackQuery(data.id, function (a) {
-        statsLoading = false;
-        $("stats-refresh").disabled = false;
-        try { statsData = JSON.parse(a.result || "{}"); } catch (e) { statsData = null; }
-        renderStats();
-      }, function (msg) {
-        statsLoading = false;
-        $("stats-refresh").disabled = false;
-        $("stats-loading").textContent = msg;
-      });
-    }).catch(function () {
-      statsLoading = false;
-      $("stats-refresh").disabled = false;
-      $("stats-loading").textContent = "Abfrage konnte nicht angelegt werden.";
-    });
+    if(statsLoading)return;
+    var view=beginView('stats');statsLoading=true;statsData=null;
+    $('stats-content').classList.add('hidden');$('stats-loading').classList.remove('hidden');$('stats-loading').textContent='Statistiken werden geprüft …';$('stats-refresh').disabled=true;
+    function failed(message){if(viewCurrent(view)){statsLoading=false;$('stats-refresh').disabled=false;$('stats-loading').textContent=message;}}
+    createAction('get_stats','*',{}).then(function(data){if(!viewCurrent(view))return;
+      trackQuery(data && data.id,function(action){var data=actionObject(action);if(!data.money || !Number.isFinite(data.money.cash) || !Number.isFinite(data.money.bank) || !Number.isFinite(data.generated_at) || data.generated_at<=0 || !data.db || typeof data.db!=='object')throw new Error('unconfirmed_stats');statsData=data;statsLoading=false;$('stats-refresh').disabled=false;renderStats();},failed,view);
+    }).catch(function(error){if(error.message!=='stale_session')failed('Abfrage konnte nicht bestätigt werden.');});
   }
   $("stats-refresh").addEventListener("click", loadStats);
 
@@ -2013,7 +1999,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
 
     var m = statsData.money || {};
     var cash = m.cash || 0, bank = m.bank || 0, society = m.society || 0;
-    $("ti-total").textContent = fmtMoney(cash + bank + society);
+    $("ti-total").textContent = Number.isFinite(m.society) ? fmtMoney(cash + bank + society) : "Nicht bestätigt";
     $("ti-cash").textContent = fmtMoney(cash);
     $("ti-bank").textContent = fmtMoney(bank);
     $("ti-society").textContent = m.society != null ? fmtMoney(society) : "–";
@@ -2153,22 +2139,11 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   /* ---------- Diagnose ---------- */
 
   function runDiag() {
-    $("diag-btn").disabled = true;
-    $("diag-wrap").innerHTML = '<div class="empty">Diagnose läuft…</div>';
-    createAction("diag", "*", {}).then(function (data) {
-      if (data && data.id) trackQuery(data.id, function (a) {
-        $("diag-btn").disabled = false;
-        var checks = [];
-        try { checks = (JSON.parse(a.result || "{}").checks) || []; } catch (e) {}
-        renderDiag(checks);
-      }, function (msg) {
-        $("diag-btn").disabled = false;
-        $("diag-wrap").innerHTML = '<div class="empty">' + esc(msg) + '</div>';
-      });
-    }).catch(function () {
-      $("diag-btn").disabled = false;
-      $("diag-wrap").innerHTML = '<div class="empty">Abfrage konnte nicht angelegt werden.</div>';
-    });
+    var view=beginView('diag');$('diag-btn').disabled=true;$('diag-wrap').innerHTML='<div class="empty">Diagnose läuft…</div>';
+    function failed(message){if(viewCurrent(view)){$('diag-btn').disabled=false;$('diag-wrap').innerHTML='<div class="empty">'+esc(message)+'</div>';}}
+    createAction('diag','*',{}).then(function(data){if(!viewCurrent(view))return;
+      trackQuery(data && data.id,function(action){var rows=actionArray(action,'checks');$('diag-btn').disabled=false;renderDiag(rows);},failed,view);
+    }).catch(function(error){if(error.message!=='stale_session')failed('Abfrage konnte nicht bestätigt werden.');});
   }
   $("diag-btn").addEventListener("click", runDiag);
 
@@ -2201,14 +2176,10 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   var isAdmin = false;
 
   function loadRoles() {
-    if (!isAdmin) return;
-    api("/api/panel/roles").then(function (d) {
-      rolePresets = d.presets || [];
-      renderRoles(d.roles || [], rolePresets);
-      renderUsers(d.users || [], rolePresets);
-    }).catch(function (e) {
-      $("roles-wrap").innerHTML = '<div class="empty">' + errText(e) + '</div>';
-    });
+    if(!isAdmin)return;
+    var view=beginView('roles');
+    api('/api/panel/roles').then(function(data){if(!viewCurrent(view))return;rolePresets=data.presets||[];renderRoles(data.roles||[],rolePresets);renderUsers(data.users||[],rolePresets);})
+      .catch(function(error){if(viewCurrent(view) && error.message!=='stale_session')$('roles-wrap').innerHTML='<div class="empty">'+esc(errText(error))+'</div>';});
   }
 
   var rolePresets = [];
@@ -2246,14 +2217,16 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     var sel = ev.target.closest("select[data-role]");
     if (!sel) return;
     sel.disabled = true;
+    var view=beginView("role-preset-save",sel.getAttribute("data-role"));
     api("/api/panel/roles", {
       method: "POST",
       body: JSON.stringify({ role_id: sel.getAttribute("data-role"), preset: sel.value || null })
     }).then(function () {
       sel.disabled = false;
-      setMsg("roles-msg", "Gespeichert – gilt sofort.", "ok");
+      if(viewCurrent(view))setMsg("roles-msg", "Gespeichert – gilt sofort.", "ok");
     }).catch(function (e) {
       sel.disabled = false;
+      if(!viewCurrent(view)||e.message==="stale_session")return;
       setMsg("roles-msg", errText(e), "err");
       loadRoles();
     });
@@ -2279,14 +2252,17 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   }
 
   function setUserPreset(userId, preset, done) {
+    var view=beginView("user-preset-save",userId);
     api("/api/panel/users", {
       method: "POST",
       body: JSON.stringify({ user_id: userId, preset: preset || null })
     }).then(function () {
+      if(!viewCurrent(view))return;
       setMsg("users-msg", preset ? "Gespeichert – gilt sofort." : "Zugriff entfernt.", "ok");
       loadRoles();
       if (done) done(true);
     }).catch(function (e) {
+      if(!viewCurrent(view)||e.message==="stale_session")return;
       setMsg("users-msg", errText(e), "err");
       loadRoles();
       if (done) done(false);
@@ -2302,11 +2278,13 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
 
   var userSearchTimer = null;
   $("user-search").addEventListener("input", function () {
-    var q = this.value.trim();
+    var q = this.value.trim(),view=beginView("user-search",this.value.trim());
     clearTimeout(userSearchTimer);
     if (q.length < 2) { $("user-suggest").innerHTML = ""; return; }
     userSearchTimer = setTimeout(function () {
+      if(!viewCurrent(view))return;
       api("/api/panel/user_search?q=" + encodeURIComponent(q)).then(function (d) {
+        if(!viewCurrent(view)||$("user-search").value.trim()!==q)return;
         var res = d.results || [];
         if (!res.length) {
           $("user-suggest").innerHTML = '<div class="empty" style="padding:10px">Kein Mitglied gefunden.</div>';
@@ -2322,7 +2300,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
         });
         $("user-suggest").innerHTML = html;
       }).catch(function (e) {
-        $("user-suggest").innerHTML = '<div class="empty" style="padding:10px">' + errText(e) + '</div>';
+        if(viewCurrent(view) && e.message!=="stale_session")$("user-suggest").innerHTML = '<div class="empty" style="padding:10px">' + esc(errText(e)) + '</div>';
       });
     }, 300);
   });
@@ -2342,13 +2320,9 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   var auditData = null;
 
   function loadAudit() {
-    if (!can("audit")) return;
-    api("/api/panel/audit").then(function (d) {
-      auditData = d;
-      renderAudit();
-    }).catch(function (e) {
-      if (e.message === "unauthorized") return logout();
-    });
+    if(!can('audit'))return;
+    var view=beginView('audit');
+    api('/api/panel/audit').then(function(data){if(!viewCurrent(view))return;auditData=data;renderAudit();}).catch(function(){});
   }
   $("audit-refresh").addEventListener("click", loadAudit);
   $("audit-admin").addEventListener("change", renderAudit);
@@ -2853,6 +2827,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   function rememberProfile(id) { try { if (id) localStorage.setItem("dnp_admin_profile",id); else localStorage.removeItem("dnp_admin_profile"); } catch (_) {} }
   function clearProfileContext() {
     sessionEpoch++; profileGeneration++; accessEpoch++;
+    viewScopes={};catalogRetryAt=0;
     if (pollTimer) clearTimeout(pollTimer);
     pollTimer = null; pollInFlight = null; pollFailures = 0;
     profileLoadPromise = null;
@@ -3163,14 +3138,14 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   function searchVehicleRecords(cursor) {
     var state=supportState,query=$("vehicle-query").value.trim(),kind=$("vehicle-query-kind").value;
     if(!query)return setMsg("vehicle-msg","Bitte Fahrzeug-ID, Kennzeichen oder CitizenID eingeben.","err");
-    if(kind==="vehicleId"&&(!/^\d+$/.test(query)||Number(query)<1))return setMsg("vehicle-msg","Bitte eine positive persistente Fahrzeug-ID eingeben.","err");
-    if(query.length<2||query.length>50)return setMsg("vehicle-msg","Für die Suche 2 bis 50 Zeichen eingeben.","err");
+    if(kind==="vehicleId"&&(!/^[1-9]\d*$/.test(query)||!Number.isSafeInteger(Number(query))||Number(query)>2147483647))return setMsg("vehicle-msg","Bitte eine positive persistente Fahrzeug-ID eingeben.","err");
+    if((query.length<2 && !(kind==="vehicleId" && /^[1-9]$/.test(query)) && !(kind==="citizenid" && /^[A-Za-z0-9_-]$/.test(query)))||query.length>50)return setMsg("vehicle-msg","Für die Suche ein gültiges Fahrzeug oder 2 bis 50 Zeichen eingeben.","err");
     if(kind==="plate"&&query.length>15)return setMsg("vehicle-msg","Kennzeichen dürfen höchstens 15 Zeichen enthalten.","err");
-    var params={query:query,limit:20},holder=$("vehicle-holder-filter").value;
+    var params={query:query,limit:20,query_kind:kind},holder=$("vehicle-holder-filter").value;
     if(holder)params.kinds=[holder];
     if(cursor&&state.vehicleSearchParams)params=Object.assign({},state.vehicleSearchParams,{cursor:cursor});
     else state.vehicleSearchParams=Object.assign({},params);
-    var sequence=(state.vehicleSearchEpoch||0)+1;state.vehicleSearchEpoch=sequence;
+    var sequence=(state.vehicleSearchEpoch||0)+1;state.vehicleSearchEpoch=sequence;state.vehicleCaseEpoch=(state.vehicleCaseEpoch||0)+1;state.vehicleReport=null;
     $("vehicle-search-submit").disabled=true;$("vehicle-results").innerHTML='<div class="support-loading">Gespeicherte Fahrzeuge werden gesucht …</div>';
     setMsg("vehicle-msg","Lesende Serverabfrage läuft. Ein Auftrag ist noch kein Ergebnis.","");
     readAction("support_vehicle_search",params,function(report,action){

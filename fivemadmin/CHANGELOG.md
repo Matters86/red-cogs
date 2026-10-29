@@ -1,3 +1,26 @@
+## 29.10.2026 – Support v2.2, Releaseprüfung
+
+- Veraltete Fahrzeug-, Inventar- und Aktenantworten an den sichtbaren Charakter und das aktuelle Server-/Rechteprofil gebunden.
+- Alte Bannaktionen/Notizentwürfe beim Aktenwechsel geleert; parallele Notizklicks während des Speicherns gesperrt.
+- Fehlerhafte/unbestätigte Leseergebnisse zeigen keine falschen leeren Daten oder Diagnoseerfolge mehr.
+- Fehlende Geldsummen werden nicht als 0 und unbekannte Firmen-/Fraktionssummen nicht als bestätigter Gesamtwert angezeigt.
+- Fahrzeugsuche mit echter Suchart, exakter persistenter ID und Unterstützung einstelliger IDs; passende Bridge erforderlich.
+- Bestehende Fahrzeuglisten zeigen ID und senden beim Einparken ID/erwartetes Kennzeichen. Fehlende ID sperrt den Listenbutton; Rechte bleiben unverändert.
+- Garagenkatalog erholt sich nach einer leeren Erstantwort mit begrenzter Wiederholung. Kein zusätzlicher globaler Poll, kein fester „downtown“-Standard.
+- Alte Profilantworten können neue laufende Aufträge nicht aus der Doppelklicksperre löschen; veraltete Discord-Mitgliedersuche verworfen.
+- Mobile Tabellen begrenzt, Buildmarker v2.2 und bestehende Cache-Schutzheader erhalten.
+- Vollständige Quellsicherung, Python-/SQLite-/Browserprüfungen; verpflichtende Bestands-/Profilkonfiguration vor Bereitstellung dokumentiert. Öffentliche NAS-Lesemessung zeigte noch ursprüngliche Oberfläche; kein tatsächliches NAS-Update oder Reload durch diesen Quellbuild.
+
+## 29.10.2026 – Oberfläche eindeutig erkennen
+
+- Kleine Buildkennung auf Loginseite und in Server/Setup-Diagnose.
+- Bot-Owner-Lesebefehl `ap version` für geladenen Modulhash und HTML-Hash,
+  ohne Geheimnisse, Pfade oder Profil-/Datenbankänderungen.
+- HTML nicht zwischenspeichern; PWA-Manifest/Service Worker revalidieren;
+  Service-Worker-Aktualisierung ohne HTTP-Cache anfordern.
+- Eigene Paneloberfläche und WebCore-Verwaltungsseite ausdrücklich getrennt.
+- Kein FiveM-, Bridge- oder Bot-Neustart durch den Quellbuild.
+
 # Changelog
 
 ## 28.10.2026 – Supportausbau v2, Testbuild
