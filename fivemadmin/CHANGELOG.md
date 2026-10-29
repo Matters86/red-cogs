@@ -1,3 +1,11 @@
+## 29.10.2026 – Support v2.2.1, gezielter Start-/Login-Patch
+
+- Belegter Webport: fehlgeschlagene Site abmelden, neuer Listener je Versuch, Runner bei endgültigem Fehler oder Abbruch bereinigen. Kein falscher Laufstatus nach einem fehlgeschlagenen Bind.
+- Web-/Backupaufgaben erst im Cog-Ladehook starten; beim Entladen abbrechen und abwarten. WebCore-Abmeldefehler dürfen den Port nicht festhalten.
+- Discord-OAuth bevorzugt aktuell berechtigte Guilds mit aktiv gebundenen Profilen. Unkonfigurierte berechtigte Guilds bleiben Setup-Fallback; Profilwahl und alle bisherigen Rechteprüfungen bleiben erhalten.
+- Buildmarker v2.2.1. Sieben Python-Module, 17 tatsächliche Lifecycle- und 10 tatsächliche OAuth-Callbackprüfungen offline bestätigt. Kein automatischer NAS-/Bot-/FiveM-Eingriff und keine Datenbank- oder Profilmigration.
+- Der frühere öffentliche NAS-Altstand aus der Messung 12:41 ist historisch. Spätere vom Benutzer gelieferte normalisierte Quellhashes bestätigten v2.2; aktuell sichtbare Profile/Spieler wurden durch den gezielten Guild-Login bestätigt. Dieser neue Patch ist vor der separaten Installation noch kein geladener NAS-Build.
+
 ## 29.10.2026 – Support v2.2, Releaseprüfung
 
 - Veraltete Fahrzeug-, Inventar- und Aktenantworten an den sichtbaren Charakter und das aktuelle Server-/Rechteprofil gebunden.

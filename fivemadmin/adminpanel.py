@@ -26,6 +26,7 @@ ENV:
 """
 
 import asyncio
+import errno
 import json
 import math
 import os
@@ -47,7 +48,7 @@ from .serverprofiles import Profiles, PROFILE_ID, ENV_NAME, ALLOWED_PROFILES
 log = logging.getLogger("red.adminpanel")
 
 # This identifies the loaded Python module independently of a later source copy.
-PANEL_BUILD = "2026-10-29-support-v2.2"
+PANEL_BUILD = "2026-10-29-support-v2.2.1"
 try:
     with open(__file__, "rb") as _module_source:
         LOADED_MODULE_SHA256 = hashlib.sha256(_module_source.read()).hexdigest()
@@ -339,8 +340,9 @@ class AdminPanel(commands.Cog):
         db.init_db(auth=True)
         db.configure_profiles({"legacy": db.DB_PATH})
         self.runner: web.AppRunner | None = None
-        self._web_task = self.bot.loop.create_task(self._start_webserver())
-        self._backup_task = self.bot.loop.create_task(self._backup_loop())
+        self._closing = False
+        self._web_task = None
+        self._backup_task = None
 
     async def _resolve_settings(self):
         """Effektive Settings = Config-Wert, sonst ENV/Default."""
@@ -410,13 +412,21 @@ class AdminPanel(commands.Cog):
     # --------------------------------------------------------------
 
     async def cog_load(self):
+        if self._closing:
+            return
         webcore = self.bot.get_cog("WebCore")
         if webcore is not None:
             self._register_dashboard(webcore)
+        # A failed add_cog/registration must not leave an unowned web task.
+        if self._web_task is None:
+            self._web_task = self.bot.loop.create_task(self._start_webserver())
+        if self._backup_task is None:
+            self._backup_task = self.bot.loop.create_task(self._backup_loop())
 
     @commands.Cog.listener()
     async def on_webcore_ready(self, webcore):
-        self._register_dashboard(webcore)
+        if not self._closing:
+            self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
         page = dict(owner=self, slug="fivemadmin", name="FiveM-Admin", icon="bi-controller",
@@ -433,21 +443,26 @@ class AdminPanel(commands.Cog):
         return await dashboard_handler(self, request)
 
     async def cog_unload(self):
-        webcore = self.bot.get_cog("WebCore")
-        if webcore is not None:
-            webcore.unregister_owner(self)
-        if self._web_task:
-            self._web_task.cancel()
-        if getattr(self, "_backup_task", None):
-            self._backup_task.cancel()
-        # Runner/Site sauber stoppen und DARAUF WARTEN, damit der Port bei
-        # einem [p]reload wirklich frei ist, bevor die neue Instanz bindet.
-        if self.runner:
+        self._closing = True
+        try:
+            webcore = self.bot.get_cog("WebCore")
+            if webcore is not None:
+                webcore.unregister_owner(self)
+        except Exception as exc:
+            log.warning("AdminPanel Dashboard-Abmeldung fehlgeschlagen (%s).", type(exc).__name__)
+        tasks = [task for task in (self._web_task, self._backup_task)
+                 if task is not None and task is not asyncio.current_task()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._web_task = self._backup_task = None
+        runner, self.runner = self.runner, None
+        if runner is not None:
             try:
-                await self.runner.cleanup()
-            except Exception as e:
-                log.warning(f"AdminPanel Webserver-Cleanup fehlgeschlagen: {e}")
-            self.runner = None
+                await runner.cleanup()
+            except Exception as exc:
+                log.warning("AdminPanel Webserver-Cleanup fehlgeschlagen (%s).", type(exc).__name__)
 
     async def _backup_loop(self):
         """Sichert die DB alle 24h automatisch."""
@@ -526,65 +541,87 @@ class AdminPanel(commands.Cog):
     # --------------------------------------------------------------
 
     async def _start_webserver(self):
-        await self.bot.wait_until_ready()
-        await self._resolve_settings()
-        app = web.Application(middlewares=[self._security_headers, self._auth_middleware])
-        # Panel (Browser)
-        app.router.add_get("/", self.http_index)
-        # PWA (Handy-App)
-        pwa_dir = os.path.join(os.path.dirname(__file__), "pwa")
-        app.router.add_get("/manifest.json",
-                           lambda r: web.FileResponse(os.path.join(pwa_dir, "manifest.json")))
-        app.router.add_get("/sw.js",
-                           lambda r: web.FileResponse(os.path.join(pwa_dir, "sw.js")))
-        app.router.add_static("/icons/", os.path.join(pwa_dir, "icons"))
-        app.router.add_post("/api/auth/login", self.http_login)
-        app.router.add_get("/api/auth/discord", self.http_oauth_start)
-        app.router.add_get("/api/auth/callback", self.http_oauth_callback)
-        app.router.add_get("/api/panel/state", self.http_panel_state)
-        app.router.add_get("/api/panel/profiles", self.http_panel_profiles)
-        app.router.add_get("/api/panel/catalog", self.http_panel_catalog)
-        app.router.add_get("/api/panel/player_history", self.http_player_history)
-        app.router.add_post("/api/panel/notes", self.http_add_note)
-        app.router.add_post("/api/panel/notes/delete", self.http_delete_note)
-        app.router.add_get("/api/panel/bans", self.http_get_bans)
-        app.router.add_post("/api/panel/unban", self.http_unban)
-        app.router.add_get("/api/panel/audit", self.http_audit)
-        app.router.add_get("/api/panel/roles", self.http_get_role_map)
-        app.router.add_post("/api/panel/roles", self.http_set_role_map)
-        app.router.add_post("/api/panel/users", self.http_set_user_map)
-        app.router.add_get("/api/panel/user_search", self.http_user_search)
-        app.router.add_post("/api/panel/action", self.http_panel_action)
-        # Bridge (FiveM-Server)
-        app.router.add_post("/api/bridge/sync", self.http_bridge_sync)
-        app.router.add_post("/api/bridge/catalog", self.http_bridge_catalog)
-        app.router.add_post("/api/actions/result", self.http_bridge_result)
-        from . import support
-        support.register_routes(self, app)
+        runner = None
+        published = False
+        try:
+            await self.bot.wait_until_ready()
+            if self._closing:
+                return
+            await self._resolve_settings()
+            if self._closing:
+                return
+            app = web.Application(middlewares=[self._security_headers, self._auth_middleware])
+            # Panel (Browser)
+            app.router.add_get("/", self.http_index)
+            # PWA (Handy-App)
+            pwa_dir = os.path.join(os.path.dirname(__file__), "pwa")
+            app.router.add_get("/manifest.json",
+                               lambda r: web.FileResponse(os.path.join(pwa_dir, "manifest.json")))
+            app.router.add_get("/sw.js",
+                               lambda r: web.FileResponse(os.path.join(pwa_dir, "sw.js")))
+            app.router.add_static("/icons/", os.path.join(pwa_dir, "icons"))
+            app.router.add_post("/api/auth/login", self.http_login)
+            app.router.add_get("/api/auth/discord", self.http_oauth_start)
+            app.router.add_get("/api/auth/callback", self.http_oauth_callback)
+            app.router.add_get("/api/panel/state", self.http_panel_state)
+            app.router.add_get("/api/panel/profiles", self.http_panel_profiles)
+            app.router.add_get("/api/panel/catalog", self.http_panel_catalog)
+            app.router.add_get("/api/panel/player_history", self.http_player_history)
+            app.router.add_post("/api/panel/notes", self.http_add_note)
+            app.router.add_post("/api/panel/notes/delete", self.http_delete_note)
+            app.router.add_get("/api/panel/bans", self.http_get_bans)
+            app.router.add_post("/api/panel/unban", self.http_unban)
+            app.router.add_get("/api/panel/audit", self.http_audit)
+            app.router.add_get("/api/panel/roles", self.http_get_role_map)
+            app.router.add_post("/api/panel/roles", self.http_set_role_map)
+            app.router.add_post("/api/panel/users", self.http_set_user_map)
+            app.router.add_get("/api/panel/user_search", self.http_user_search)
+            app.router.add_post("/api/panel/action", self.http_panel_action)
+            # Bridge (FiveM-Server)
+            app.router.add_post("/api/bridge/sync", self.http_bridge_sync)
+            app.router.add_post("/api/bridge/catalog", self.http_bridge_catalog)
+            app.router.add_post("/api/actions/result", self.http_bridge_result)
+            from . import support
+            support.register_routes(self, app)
 
-        self.runner = web.AppRunner(app)
-        await self.runner.setup()
-        site = web.TCPSite(self.runner, self.web_host, self.web_port)
-        # Bei [p]reload kann der Port kurz noch vom alten Prozess belegt sein –
-        # ein paar Versuche mit kurzem Warten, statt sofort aufzugeben.
-        for attempt in range(3):
-            try:
-                await site.start()
-                break
-            except OSError as e:
-                if attempt == 2:
-                    log.error(f"AdminPanel Webserver konnte Port {self.web_port} nicht binden: {e}")
-                    await self.runner.cleanup()
-                    self.runner = None
+            runner = web.AppRunner(app)
+            await runner.setup()
+            for attempt in range(3):
+                # aiohttp registers a site before binding its socket. A failed
+                # site must be stopped; never start the same instance twice.
+                site = web.TCPSite(runner, self.web_host, self.web_port)
+                try:
+                    await site.start()
+                except OSError as exc:
+                    try:
+                        await site.stop()
+                    except Exception as cleanup_error:
+                        log.warning("AdminPanel Start-Site-Cleanup fehlgeschlagen (%s).", type(cleanup_error).__name__)
+                    if exc.errno != errno.EADDRINUSE or attempt == 2:
+                        log.error("AdminPanel Webserver konnte Port %s nicht binden: %s", self.web_port, exc)
+                        return
+                    log.warning("Port %s noch belegt (%s) – neuer Versuch in 2s…", self.web_port, exc)
+                    await asyncio.sleep(2)
+                    continue
+                if self._closing:
                     return
-                log.warning(f"Port {self.web_port} noch belegt ({e}) – neuer Versuch in 2s…")
-                await asyncio.sleep(2)
-        log.info(f"AdminPanel Webserver läuft auf {self.web_host}:{self.web_port}")
-        if not any(profile.enabled and profile.key for profile in self.profiles.items.values()):
-            log.warning(
-                "Kein gültiger Profil-Key konfiguriert; Bridge-Zugriffe bleiben gesperrt. "
-                "Profil an die Ziel-Guild binden und vorhandene Key-Umgebungsvariable zuordnen."
-            )
+                self.runner = runner
+                published = True
+                log.info("AdminPanel Webserver läuft auf %s:%s", self.web_host, self.web_port)
+                if not any(profile.enabled and profile.key for profile in self.profiles.items.values()):
+                    log.warning("Kein gültiger Profil-Key konfiguriert; Bridge-Zugriffe bleiben gesperrt. "
+                                "Profil an die Ziel-Guild binden und vorhandene Key-Umgebungsvariable zuordnen.")
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.error("AdminPanel Webserver-Start fehlgeschlagen (%s).", type(exc).__name__)
+        finally:
+            if runner is not None and not published:
+                try:
+                    await runner.cleanup()
+                except Exception as exc:
+                    log.warning("AdminPanel Start-Runner-Cleanup fehlgeschlagen (%s).", type(exc).__name__)
 
     @web.middleware
     async def _auth_middleware(self, request: web.Request, handler):
@@ -731,7 +768,9 @@ class AdminPanel(commands.Cog):
         if not user_id:
             return web.HTTPFound("/?oauth=exchange")
 
-        # Auf welchem Server hat dieser User Panel-Rechte? (Bot-seitig, kein extra Scope nötig)
+        # Bevorzuge berechtigte Guilds mit aktiv gebundenen Serverprofilen.
+        # Eine noch unkonfigurierte Guild bleibt nur als Setup-Fallback erhalten.
+        fallback = None
         for guild in self.bot.guilds:
             member = guild.get_member(int(user_id))
             if member is None:
@@ -740,9 +779,18 @@ class AdminPanel(commands.Cog):
                 except (discord.NotFound, discord.HTTPException):
                     continue
             perms = await self.member_permissions(member)
-            if perms:
+            if not perms:
+                continue
+            if self.profiles.for_guild(guild.id):
                 token = await asyncio.to_thread(db.create_login_token, str(user_id), str(guild.id), member.display_name)
                 return web.HTTPFound(f"/?login={token}")
+            if fallback is None:
+                fallback = (guild, member)
+
+        if fallback is not None:
+            guild, member = fallback
+            token = await asyncio.to_thread(db.create_login_token, str(user_id), str(guild.id), member.display_name)
+            return web.HTTPFound(f"/?login={token}")
 
         return web.HTTPFound("/?oauth=noperm")
 
