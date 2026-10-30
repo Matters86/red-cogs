@@ -589,6 +589,8 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
 .player-suggestion span{display:block;color:#bed6e9;font-size:11px;line-height:1.5}
 .player-search-hint{font-size:11px;color:var(--muted);margin-top:7px;line-height:1.5}
 
+.permission-role-row{display:grid;grid-template-columns:minmax(200px,1fr) minmax(160px,1fr);gap:20px;align-items:end;margin-bottom:20px}.permission-role-info{display:flex;flex-direction:column;gap:7px;padding:10px 0;min-width:0;overflow-wrap:anywhere}.permission-role-info strong{font-size:16px}.permission-role-info span{color:var(--muted);font-size:12px}.permission-settings{display:grid;grid-template-columns:minmax(160px,1fr) minmax(140px,1fr) auto;gap:12px;align-items:end}.permission-settings label,.permission-role-row label{margin-top:0}.permission-settings button{white-space:normal;min-height:42px}.permission-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:18px}.permission-group{border:1px solid var(--line);border-radius:10px;padding:15px;background:#102b4138;min-width:0}.permission-group h3{font-size:13px;margin:0 0 10px;color:var(--text)}.permission-option{display:flex;align-items:flex-start;gap:10px;line-height:1.5;margin:0;padding:8px 0;cursor:pointer;overflow-wrap:anywhere}.permission-option input{width:18px;height:18px;flex:0 0 18px;margin:1px 0 0;accent-color:#79b6e4}.permission-option span{font-size:13px;min-width:0}.permission-option:has(input:disabled){cursor:default;opacity:.7}#permission-fields{border:0;padding:0;min-width:0;margin:0}.permission-actions{display:flex;flex-wrap:wrap;align-items:center;gap:9px;margin-top:20px;padding:15px 0;border-top:1px solid var(--line)}.permission-actions>div{display:flex;flex-direction:column;gap:5px;margin-right:auto;min-width:140px;max-width:100%;overflow-wrap:anywhere}.permission-actions strong{font-size:12px;font-weight:600}.permission-actions span,.permission-reload-note{color:var(--muted);font-size:11px;line-height:1.5}.permission-reload-note{margin:0}#tab-permissions .card{margin-bottom:20px}@media(max-width:700px){.permission-role-row,.permission-settings,.permission-groups{grid-template-columns:minmax(0,1fr)}.permission-role-row{gap:9px}.permission-settings{gap:13px}.permission-actions>div{flex:1 1 100%;margin-bottom:6px}.permission-actions>button{flex:1 1 auto}.permission-group{padding:13px}.permission-option{padding:10px 0}}
+
 </style>
 </head>
 <body>
@@ -647,6 +649,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     <button class="tab-btn" data-tab="stats" data-perm="view_stats"><span class="nav-icon" aria-hidden="true">◫</span>Wirtschaft</button>
     <button class="tab-btn" data-tab="server" data-perm="server_status"><span class="nav-icon" aria-hidden="true">◉</span>Serverstatus</button>
     <button class="tab-btn" data-tab="audit" data-perm="audit"><span class="nav-icon" aria-hidden="true">▤</span>Kontrolle</button>
+    <button class="tab-btn hidden" id="permissions-nav" data-tab="permissions"><span class="nav-icon" aria-hidden="true">⚿</span>Berechtigungen</button>
     <button class="tab-btn" data-tab="log"><span class="nav-icon" aria-hidden="true">≡</span>Aktivitäten<span class="dot-alert hidden" id="log-dot"></span></button>
   </nav>
 
@@ -923,19 +926,14 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   </main>
 
   <!-- ============ Tab: Audit ============ -->
-  <main id="tab-audit" class="single hidden">
-    <div>
-      <div class="list-head" style="margin-bottom:16px">
-        <h2 style="font-size:19px">Audit &amp; Kontrolle</h2>
-        <button class="btn small" id="audit-refresh" style="margin-left:auto">Aktualisieren</button>
-      </div>
-
+  <main id="tab-permissions" class="single hidden"><div>
       <section class="card hidden" id="roles-card">
         <div class="list-head">
           <h2>Berechtigungen</h2>
           <span class="count">nur Discord-Administratoren</span>
         </div>
-        <p class="hint">Weise Discord-Rollen ein Berechtigungs-Preset zu – gilt sofort für alle Mitglieder der Rolle. Discord-Administratoren haben immer vollen Zugriff. <b style="color:var(--text)">support</b>: TP/Heal/Revive/Inventar/Nachricht · <b style="color:var(--text)">moderator</b>: + Kick/Ban/Notizen/Job · <b style="color:var(--text)">admin</b>: + Geld/Items/Audit · <b style="color:var(--text)">editor</b>: nur Statistiken.</p>
+        <p class="hint">Lege für eine Discord-Rolle ein Preset oder eine individuelle Auswahl fest. Änderungen gelten für diesen Discord-Server und seine zugeordneten Spielserver. Andere Rollen und Einzelzugriffe addieren sich.</p>
+        <p class="hint">Discord-Administratoren und Bot-Owner behalten ihren vollständigen Zugriff. Die Auswahl unten ändert ausschließlich die Rechte aus der gewählten Rolle.</p>
         <div id="roles-wrap"><div class="empty">Lade Rollen…</div></div>
         <div class="msg" id="roles-msg" role="status" aria-live="polite"></div>
 
@@ -951,6 +949,16 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
           <div class="msg" id="users-msg" role="status" aria-live="polite"></div>
         </div>
       </section>
+  </div></main>
+
+  <main id="tab-audit" class="single hidden">
+    <div>
+      <div class="list-head" style="margin-bottom:16px">
+        <h2 style="font-size:19px">Audit &amp; Kontrolle</h2>
+        <button class="btn small" id="audit-refresh" style="margin-left:auto">Aktualisieren</button>
+      </div>
+
+      <!-- Role settings moved to the permissions page. -->
 
       <section class="card">
         <div class="list-head">
@@ -1292,14 +1300,15 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
 
   function showTab(name) {
     if (!selectedProfile || !profileReady) return;
+    if (name === 'permissions' && !isAdmin) name = 'log';
     var tabPermission = {support:"support_cases",vehicle:"support_vehicles",players:"view_players", stats:"view_stats", server:"server_status", audit:"audit"};
     if (tabPermission[name] && !can(tabPermission[name])) name = can("view_players") ? "players" : can("view_stats") ? "stats" : can("server_status") ? "server" : "log";
     activeTab = name;
     if (name !== 'players') closePlayerSuggestions();
-    var titles = {support:["Supportfälle","Nachvollziehbar helfen – mit Zuständigkeit, Verlauf und Belegen."],vehicle:["Fahrzeugakte","Private, geleaste und Fraktionsfahrzeuge gezielt lesend prüfen."],players:["Spieler & Support","Schnell helfen, gezielt verwalten und jede Aktion nachvollziehen."],stats:["Wirtschaft im Blick","Konten, Gegenstände und Fahrzeuge aus einer gezielten Serverabfrage."],server:["Serverstatus","Verbindung, Ressourcen und Auftragsfreigabe getrennt prüfen."],audit:["Kontrolle & Berechtigungen","Maßnahmen nachvollziehen und freigegebene Zugriffe verwalten."],log:["Aktivitäten","Aufträge und Ereignisse mit ihrem zuletzt bestätigten Status."]};
+    var titles = {support:["Supportfälle","Nachvollziehbar helfen – mit Zuständigkeit, Verlauf und Belegen."],vehicle:["Fahrzeugakte","Private, geleaste und Fraktionsfahrzeuge gezielt lesend prüfen."],players:["Spieler & Support","Schnell helfen, gezielt verwalten und jede Aktion nachvollziehen."],stats:["Wirtschaft im Blick","Konten, Gegenstände und Fahrzeuge aus einer gezielten Serverabfrage."],server:["Serverstatus","Verbindung, Ressourcen und Auftragsfreigabe getrennt prüfen."],audit:["Kontrolle & Verlauf","Maßnahmen und Freigaben nachvollziehen."],permissions:["Berechtigungen","Discord-Rollen gezielt verwalten – gespeichert wird erst nach deiner Bestätigung."],log:["Aktivitäten","Aufträge und Ereignisse mit ihrem zuletzt bestätigten Status."]};
     $("page-title").textContent = titles[name][0];
     $("page-description").textContent = titles[name][1];
-    ["support", "vehicle", "players", "stats", "server", "audit", "log"].forEach(function (t) {
+    ["support", "vehicle", "players", "stats", "server", "audit", "permissions", "log"].forEach(function (t) {
       $("tab-" + t).classList.toggle("hidden", t !== name);
     });
     var btns = document.querySelectorAll(".tab-btn");
@@ -1316,10 +1325,8 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     if ((name === "stats" || name === "server") && can("view_stats") && !statsData && !statsLoading) {
       loadStats();
     }
-    if (name === "audit" && can("audit")) {
-      loadAudit();
-      loadRoles();
-    }
+    if (name === "audit" && can("audit")) loadAudit();
+    if (name === "permissions" && isAdmin) loadRoles();
   }
 
   $("tabs").addEventListener("click", function (ev) {
@@ -2333,62 +2340,116 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
 
   var isAdmin = false;
 
-  function loadRoles() {
-    if(!isAdmin)return;
-    var view=beginView('roles');
-    api('/api/panel/roles').then(function(data){if(!viewCurrent(view))return;rolePresets=data.presets||[];renderRoles(data.roles||[],rolePresets);renderUsers(data.users||[],rolePresets);})
-      .catch(function(error){if(viewCurrent(view) && error.message!=='stale_session')$('roles-wrap').innerHTML='<div class="empty">'+esc(errText(error))+'</div>';});
-  }
-
   var rolePresets = [];
-
-  function presetOptions(selected, withEmpty) {
-    var opts = withEmpty ? '<option value="">— kein Zugriff</option>' : '<option value="" selected disabled>Preset wählen…</option>';
-    rolePresets.forEach(function (p) {
-      opts += '<option value="' + esc(p) + '"' + (selected === p ? ' selected' : '') + '>' + esc(PRESET_LABEL[p] || p) + '</option>';
-    });
-    return opts;
+  var PRESET_LABEL = { support:'Support', moderator:'Moderator', admin:'Admin', editor:'Editor (Statistik)' };
+  var rolePermissionEditor;
+  function rolePermissionStamp(){return sessionEpoch+':'+accessEpoch+':'+profileGeneration;}
+  function resetRolePermissions(){
+    rolePermissionEditor={stamp:rolePermissionStamp(),roles:[],catalog:[],presets:{},drafts:{},roleId:'',ready:false,loading:false,busy:false,conflict:false,status:''};
+    rolePresets=[];
+    Object.keys(viewScopes).forEach(function(key){if(key==='roles'||key.indexOf('role-')===0||key.indexOf('user-')===0)delete viewScopes[key];});
+    $('roles-wrap').innerHTML='<div class="empty">Rollenrechte werden nach Auswahl dieses Bereichs geladen.</div>';
+    $('users-wrap').textContent='';$('user-suggest').textContent='';$('users-count').textContent='';
+    $('roles-msg').textContent='';
   }
-
-  var PRESET_LABEL = { support: "Support", moderator: "Moderator", admin: "Admin", editor: "Editor (Statistik)" };
-
-  function renderRoles(roles, presets) {
-    if (!roles.length) {
-      $("roles-wrap").innerHTML = '<div class="empty">Keine Rollen gefunden.</div>';
-      return;
-    }
-    var html = '<table class="t"><thead><tr><th>Discord-Rolle</th><th style="text-align:right">Mitglieder</th><th style="text-align:right">Preset</th></tr></thead><tbody>';
-    roles.forEach(function (r) {
-      var dot = '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;background:' + (r.color || 'var(--muted)') + '"></span>';
-      var opts = '<option value="">— kein Zugriff</option>';
-      presets.forEach(function (p) {
-        opts += '<option value="' + esc(p) + '"' + (r.preset === p ? ' selected' : '') + '>' + esc(PRESET_LABEL[p] || p) + '</option>';
-      });
-      html += '<tr><td>' + dot + esc(r.name) + '</td>' +
-        '<td class="num dim">' + r.members + '</td>' +
-        '<td style="text-align:right"><select data-role="' + esc(r.id) + '" style="max-width:190px;display:inline-block;width:auto">' + opts + '</select></td></tr>';
-    });
-    $("roles-wrap").innerHTML = html + '</tbody></table>';
+  function rolePermissionCurrent(state,view){return state===rolePermissionEditor&&state.stamp===rolePermissionStamp()&&isAdmin&&!!session&&!!selectedProfile&&profileReady&&(!view||viewCurrent(view));}
+  function denyRolePermissions(){isAdmin=false;resetRolePermissions();$('permissions-nav').classList.add('hidden');$('roles-card').classList.add('hidden');showTab('log');}
+  function presetOptions(selected,withEmpty,options){
+    var opts=withEmpty?'<option value="">— kein Zugriff</option>':'<option value="" selected disabled>Preset wählen…</option>';
+    (options||rolePresets).forEach(function(p){opts+='<option value="'+esc(p)+'"'+(selected===p?' selected':'')+'>'+esc(PRESET_LABEL[p]||p)+'</option>';});return opts;
   }
-
-  $("roles-wrap").addEventListener("change", function (ev) {
-    var sel = ev.target.closest("select[data-role]");
-    if (!sel) return;
-    sel.disabled = true;
-    var view=beginView("role-preset-save",sel.getAttribute("data-role"));
-    api("/api/panel/roles", {
-      method: "POST",
-      body: JSON.stringify({ role_id: sel.getAttribute("data-role"), preset: sel.value || null })
-    }).then(function () {
-      sel.disabled = false;
-      if(viewCurrent(view))setMsg("roles-msg", "Gespeichert – gilt sofort.", "ok");
-    }).catch(function (e) {
-      sel.disabled = false;
-      if(!viewCurrent(view)||e.message==="stale_session")return;
-      setMsg("roles-msg", errText(e), "err");
-      loadRoles();
+  function rolePermissionData(data){
+    if(!data||data.scope!=='guild'||data.administrators_unrestricted!==true||!Array.isArray(data.permission_catalog)||!data.permission_catalog.length||data.permission_catalog.length>128||!Array.isArray(data.roles)||data.roles.length>1000||!Array.isArray(data.presets)||!data.preset_permissions)throw new Error('unconfirmed_permissions');
+    var ids=Object.create(null),roleIds=Object.create(null);
+    data.permission_catalog.forEach(function(p){if(!p||typeof p.id!=='string'||!/^[a-z][a-z0-9_]{0,63}$/.test(p.id)||ids[p.id]||typeof p.group!=='string'||!p.group.length||p.group.length>160||typeof p.label!=='string'||!p.label.length||p.label.length>200)throw new Error('unconfirmed_permissions');ids[p.id]=true;});
+    function rights(list){if(!Array.isArray(list)||list.length>128||list.some(function(id){return typeof id!=='string'||!ids[id];}))throw new Error('unconfirmed_permissions');return Array.from(new Set(list)).sort();}
+    var presets={};data.presets.forEach(function(p){if(typeof p!=='string'||!Object.hasOwn(data.preset_permissions,p))throw new Error('unconfirmed_permissions');presets[p]=rights(data.preset_permissions[p]);});
+    var roles=data.roles.map(function(r){if(!r||typeof r.id!=='string'||!/^[1-9][0-9]{0,19}$/.test(r.id)||roleIds[r.id]||typeof r.name!=='string'||!['none','preset','custom'].includes(r.mode)||typeof r.revision!=='string'||!/^[a-f0-9]{64}$/.test(r.revision))throw new Error('unconfirmed_permissions');roleIds[r.id]=true;var permissions=rights(r.permissions);if(r.mode==='preset'&&(!Object.hasOwn(presets,r.preset)||JSON.stringify(permissions)!==JSON.stringify(presets[r.preset])))throw new Error('unconfirmed_permissions');if(r.mode==='none'&&permissions.length)throw new Error('unconfirmed_permissions');return{id:r.id,name:r.name,members:Number.isSafeInteger(r.members)&&r.members>=0?r.members:0,mode:r.mode,preset:r.mode==='preset'?r.preset:null,permissions:permissions,revision:r.revision};});
+    return{roles:roles,catalog:data.permission_catalog.map(function(p){return{id:p.id,group:p.group,label:p.label};}),presets:presets};
+  }
+  function loadRoles(force){
+    if(!isAdmin)return Promise.resolve();
+    if(!rolePermissionEditor||rolePermissionEditor.stamp!==rolePermissionStamp())resetRolePermissions();
+    var state=rolePermissionEditor;
+    if(state.busy||state.loading||state.ready&&!force)return Promise.resolve();
+    var previous=state.roleId,view=beginView('roles');state.loading=true;state.status='Rollenrechte werden geladen …';renderRolePermissions();
+    return api('/api/panel/roles').then(function(data){
+      if(!rolePermissionCurrent(state,view))return;
+      var parsed=rolePermissionData(data);state.roles=parsed.roles;state.catalog=parsed.catalog;state.presets=parsed.presets;state.drafts={};state.roleId=state.roles.some(function(r){return r.id===previous;})?previous:state.roles[0]?.id||'';state.ready=true;state.loading=false;state.conflict=false;state.status='Serverstand bestätigt.';rolePresets=data.presets.slice();renderRolePermissions();renderUsers(data.users||[],rolePresets);
+    }).catch(function(error){if(!rolePermissionCurrent(state,view)||error.message==='stale_session')return;if(error.status===403){denyRolePermissions();return;}state.loading=false;state.ready=false;state.status=error.message==='unconfirmed_permissions'?'Die Rollenrechte wurden nicht vollständig bestätigt. Bitte Cog und Oberfläche gemeinsam aktualisieren.':errText(error);renderRolePermissions();setMsg('roles-msg',state.status,'err');});
+  }
+  function selectedPermissionRole(){return rolePermissionEditor.roles.find(function(r){return r.id===rolePermissionEditor.roleId;});}
+  function refreshPermissionUsers(){
+    var state=rolePermissionEditor;if(!state||!rolePermissionCurrent(state))return Promise.resolve();
+    var view=beginView('user-permissions-refresh');
+    return api('/api/panel/roles').then(function(data){
+      if(!rolePermissionCurrent(state,view))return;
+      if(!data||!Array.isArray(data.users)||!Array.isArray(data.presets)||data.presets.some(function(p){return typeof p!=='string'||!Object.hasOwn(state.presets,p);}))throw new Error('unconfirmed_users');
+      renderUsers(data.users,data.presets);
+    }).catch(function(error){if(!rolePermissionCurrent(state,view)||error.message==='stale_session')return;if(error.status===403){denyRolePermissions();return;}setMsg('users-msg',error.message==='unconfirmed_users'?'Einzelzugriffe wurden nicht bestätigt. Bitte erneut prüfen.':errText(error),'err');});
+  }
+  function rolePermissionDraft(role){
+    var state=rolePermissionEditor;
+    return state.drafts[role.id]||(state.drafts[role.id]={mode:role.mode==='none'?'remove':role.mode,preset:role.preset||rolePresets[0]||'',permissions:role.permissions.slice(),revision:role.revision});
+  }
+  function rolePermissionList(draft){return draft.mode==='remove'?[]:draft.mode==='preset'?(rolePermissionEditor.presets[draft.preset]||[]):draft.permissions;}
+  function rolePermissionFingerprint(mode,preset,rights){return JSON.stringify([mode,mode==='preset'?preset:null,mode==='remove'?[]:rights.slice().sort()]);}
+  function rolePermissionDirty(role,draft){return rolePermissionFingerprint(draft.mode,draft.preset,rolePermissionList(draft))!==rolePermissionFingerprint(role.mode==='none'?'remove':role.mode,role.preset,role.permissions);}
+  function rolePermissionControls(){
+    var state=rolePermissionEditor,role=selectedPermissionRole(),draft=role&&rolePermissionDraft(role),disabled=!state.ready||state.loading||state.busy||state.conflict||!isAdmin;
+    var box=$('permission-fields');if(box)box.disabled=disabled;
+    var picker=$('permission-role');if(picker)picker.disabled=state.loading||state.busy||!isAdmin;
+    var save=$('permission-save');if(save)save.disabled=disabled||!role||!rolePermissionDirty(role,draft);
+    var discard=$('permission-discard');if(discard)discard.disabled=state.loading||state.busy||!role||!rolePermissionDirty(role,draft);
+    var reload=$('permission-reload');if(reload)reload.disabled=state.loading||state.busy||!isAdmin;
+    var count=$('permission-count');if(count)count.textContent=role?rolePermissionList(draft).length+' / '+state.catalog.length+' Rechte ausgewählt':'';
+    var status=$('permission-status');if(status)status.textContent=state.busy?'Speicherung wird bestätigt …':state.conflict?'Serverstand geändert · vor weiteren Änderungen neu laden':role&&rolePermissionDirty(role,draft)?'Nicht gespeichert':state.status;
+  }
+  function renderRolePermissions(){
+    var state=rolePermissionEditor;if(!state)return;
+    if(!state.roles.length){$('roles-wrap').innerHTML='<div class="empty">'+esc(state.status||'Keine bearbeitbaren Discord-Rollen gefunden.')+'</div><button type="button" class="btn ghost small" id="permission-reload"'+(state.loading?' disabled':'')+'>Neu laden</button>';return;}
+    var role=selectedPermissionRole(),draft=rolePermissionDraft(role),selected=rolePermissionList(draft),locked=draft.mode!=='custom';
+    var html='<div class="permission-role-row"><div><label for="permission-role">Discord-Rolle</label><select id="permission-role">'+state.roles.map(function(r){var d=state.drafts[r.id];return'<option value="'+esc(r.id)+'"'+(r.id===role.id?' selected':'')+'>'+esc(r.name)+(d&&rolePermissionDirty(r,d)?' · Entwurf':'')+'</option>';}).join('')+'</select></div><div class="permission-role-info"><strong>'+esc(role.name)+'</strong><span>'+role.members+' Mitglieder · '+(role.mode==='preset'?'Preset '+esc(PRESET_LABEL[role.preset]||role.preset):role.mode==='custom'?'Individuelle Rechte':'Kein Zugriff über diese Rolle')+'</span></div></div>';
+    html+='<fieldset id="permission-fields"><div class="permission-settings"><div><label for="permission-mode">Zuweisung</label><select id="permission-mode"><option value="custom"'+(draft.mode==='custom'?' selected':'')+'>Einzelne Rechte auswählen</option><option value="preset"'+(draft.mode==='preset'?' selected':'')+'>Festes Preset</option><option value="remove"'+(draft.mode==='remove'?' selected':'')+'>Rollenzugriff entfernen</option></select></div><div><label for="permission-preset">Preset als Vorlage</label><select id="permission-preset">'+rolePresets.map(function(p){return'<option value="'+esc(p)+'"'+(p===draft.preset?' selected':'')+'>'+esc(PRESET_LABEL[p]||p)+'</option>';}).join('')+'</select></div><button type="button" class="btn ghost small" id="permission-copy-preset">Als Auswahl übernehmen</button></div><p class="hint">Keine Häkchen vergeben keine Rechte über diese Rolle. Andere Rollen und Einzelzugriffe bleiben wirksam.</p><div class="permission-groups">';
+    var groups=[];state.catalog.forEach(function(p){if(!groups.includes(p.group))groups.push(p.group);});
+    groups.forEach(function(group){html+='<section class="permission-group"><h3>'+esc(group)+'</h3>';state.catalog.filter(function(p){return p.group===group;}).forEach(function(p){html+='<label class="permission-option"><input type="checkbox" data-permission="'+esc(p.id)+'"'+(selected.includes(p.id)?' checked':'')+(locked?' disabled':'')+'><span>'+esc(p.label)+'</span></label>';});html+='</section>';});
+    html+='</div></fieldset><div class="permission-actions"><div><strong id="permission-status"></strong><span id="permission-count"></span></div><button type="button" class="btn ghost small" id="permission-reload">Neu laden</button><button type="button" class="btn ghost small" id="permission-discard">Verwerfen</button><button type="button" class="btn small" id="permission-save">Speichern</button></div><p class="permission-reload-note">„Neu laden“ verwirft ungespeicherte Auswahlen. Gespeichert wird ausschließlich die ausgewählte Rolle.</p>';
+    $('roles-wrap').innerHTML=html;rolePermissionControls();
+  }
+  function saveRolePermissions(){
+    var state=rolePermissionEditor,role=selectedPermissionRole();if(!role||!rolePermissionCurrent(state)||state.busy||state.loading||state.conflict||!state.ready)return;
+    var draft=rolePermissionDraft(role);if(!rolePermissionDirty(role,draft))return;
+    var body={role_id:role.id,mode:draft.mode,revision:draft.revision};
+    if(draft.mode==='custom')body.permissions=draft.permissions.slice().sort();else if(draft.mode==='preset')body.preset=draft.preset;
+    var view=beginView('role-permissions-save',role.id),oldRevision=role.revision;state.busy=true;rolePermissionControls();setMsg('roles-msg','','');
+    api('/api/panel/roles',{method:'POST',body:JSON.stringify(body)}).then(function(result){
+      if(!rolePermissionCurrent(state,view)||state.roleId!==role.id||role.revision!==oldRevision)return;
+      state.busy=false;
+      if(result?.ok!==true||typeof result.revision!=='string'||!/^[a-f0-9]{64}$/.test(result.revision))throw new Error('unconfirmed_write');
+      role.revision=result.revision;role.mode=body.mode==='remove'?'none':body.mode;role.preset=body.mode==='preset'?body.preset:null;role.permissions=body.mode==='custom'?body.permissions.slice():body.mode==='preset'?state.presets[body.preset].slice():[];
+      delete state.drafts[role.id];state.status='Gespeichert · gilt für diese Discord-Rolle.';renderRolePermissions();setMsg('roles-msg',state.status,'ok');
+    }).catch(function(error){
+      if(!rolePermissionCurrent(state,view)||error.message==='stale_session')return;state.busy=false;
+      if(error.status===403){denyRolePermissions();return;}
+      state.conflict=true;state.status=error.status===409?'Rollenrechte wurden inzwischen geändert. Bitte neu laden.':error.message==='unconfirmed_write'?'Speicherung noch nicht bestätigt. Bitte den Serverstand neu laden.':errText(error);renderRolePermissions();setMsg('roles-msg',state.status,'err');
     });
+  }
+  $('roles-wrap').addEventListener('change',function(event){
+    var state=rolePermissionEditor;if(!state||!rolePermissionCurrent(state)||state.busy||state.loading)return;
+    if(event.target.id==='permission-role'){if(!state.roles.some(function(r){return r.id===event.target.value;})){renderRolePermissions();return;}state.roleId=event.target.value;state.conflict=false;setMsg('roles-msg','','');renderRolePermissions();return;}
+    var role=selectedPermissionRole();if(!role||state.conflict||!state.ready)return;var draft=rolePermissionDraft(role);
+    if(event.target.id==='permission-mode'){draft.mode=event.target.value;renderRolePermissions();}
+    else if(event.target.id==='permission-preset'){draft.preset=event.target.value;if(draft.mode==='preset')renderRolePermissions();else rolePermissionControls();}
+    else if(event.target.matches('input[data-permission]')&&draft.mode==='custom'){var id=event.target.dataset.permission;if(!state.catalog.some(function(p){return p.id===id;}))return;draft.permissions=draft.permissions.filter(function(p){return p!==id;});if(event.target.checked)draft.permissions.push(id);rolePermissionControls();}
   });
+  $('roles-wrap').addEventListener('click',function(event){
+    var button=event.target.closest('button');if(!button||button.disabled)return;var state=rolePermissionEditor;if(!state||!rolePermissionCurrent(state)||state.busy||state.loading)return;
+    if(button.id==='permission-reload'){loadRoles(true);return;}if(button.id==='permission-save'){saveRolePermissions();return;}
+    var role=selectedPermissionRole();if(!role)return;
+    if(button.id==='permission-discard'){delete state.drafts[role.id];renderRolePermissions();}
+    else if(button.id==='permission-copy-preset'&&!state.conflict){var draft=rolePermissionDraft(role);draft.mode='custom';draft.permissions=(state.presets[draft.preset]||[]).slice();renderRolePermissions();}
+  });
+  resetRolePermissions();
 
   /* ---------- Einzelpersonen-Zugriffe (nur Discord-Admins) ---------- */
 
@@ -2404,7 +2465,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
       if (!u.on_guild) name = '<span class="dim">' + esc(u.name) + '</span>';
       html += '<tr><td>' + name + '</td>' +
         '<td style="text-align:right"><select data-user="' + esc(u.id) + '" style="max-width:190px;display:inline-block;width:auto">' +
-        presetOptions(u.preset, true) + '</select></td></tr>';
+        presetOptions(u.preset, true, presets) + '</select></td></tr>';
     });
     $("users-wrap").innerHTML = html + '</tbody></table>';
   }
@@ -2417,12 +2478,12 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     }).then(function () {
       if(!viewCurrent(view))return;
       setMsg("users-msg", preset ? "Gespeichert – gilt sofort." : "Zugriff entfernt.", "ok");
-      loadRoles();
+      refreshPermissionUsers();
       if (done) done(true);
     }).catch(function (e) {
       if(!viewCurrent(view)||e.message==="stale_session")return;
       setMsg("users-msg", errText(e), "err");
-      loadRoles();
+      refreshPermissionUsers();
       if (done) done(false);
     });
   }
@@ -2805,7 +2866,10 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     $("server-profile-state").textContent = "Serverdaten bestätigt";
     perms = Array.isArray(data.permissions) ? data.permissions : [];
     actorId = typeof data.actorId === "string" && /^[0-9]{1,24}$/.test(data.actorId) ? data.actorId : null;
+    var previousAdmin = isAdmin;
     isAdmin = data.is_admin === true;
+    if (previousAdmin !== isAdmin) resetRolePermissions();
+    $('permissions-nav').classList.toggle('hidden', !isAdmin);
     isLocked = data.locked === true;
     $("lockdown-banner").classList.toggle("hidden", !isLocked);
     $("roles-card").classList.toggle("hidden", !isAdmin);
@@ -2885,6 +2949,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     }
     if (previousPerms !== null && previousPerms !== perms.slice().sort().join("|")) {
       accessEpoch++;
+      resetRolePermissions();
       resetSupportState();
       pendingQueries = {}; statsLoading = false; clearPlayerSearchRequest();
       $("stats-refresh").disabled = false; $("search-btn").disabled = false;
@@ -2993,6 +3058,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     players = []; perms = []; playerRenderKey = null; statsData = null; statsLoading = false;
     lastServer = null; lastEvents = []; previousPerms = null; pendingQueries = {}; actionRequests = {};
     catalogLoaded = false; catalogMap = {}; auditData = null; tpSource = null; isAdmin = false; isLocked = false;
+    resetRolePermissions();$('permissions-nav').classList.add('hidden');$('roles-card').classList.add('hidden');
     ["inv-modal","veh-modal","hist-modal","msg-modal","ban-modal"].forEach(closeModal);
     ["players-wrap","search-wrap","feed","log-wrap","audit-wrap","bans-wrap","roles-wrap","users-wrap","inv-body","veh-body","hist-body","accounts-wrap","items-wrap","vehstats-wrap"].forEach(function (id) { $(id).textContent = ""; });
     document.querySelectorAll("#app input,#app textarea,.modal input,.modal textarea").forEach(function (field) { field.value = field.defaultValue; });

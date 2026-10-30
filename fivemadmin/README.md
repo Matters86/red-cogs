@@ -1,3 +1,42 @@
+## Aktuell: 30.10.2026 – Support v2.2.4 / Funktionsrechte
+
+Die neue Seite **Berechtigungen** verwaltet Discord-Rollen mit 22 einzeln
+auswählbaren Funktionsbereichen. Eine Rolle erhält ein vorhandenes Preset oder
+eine eigene Auswahl. Die eigene Auswahl ersetzt ausschließlich das Preset dieser
+Rolle; weitere Rollen und explizite Einzelpersonen-Presets addieren sich.
+Eine leere Auswahl vergibt über diese Rolle keinen Zugriff. Es werden keine
+zusätzlichen Rechte automatisch ergänzt. Verbundene Aktionen sind in der Auswahl
+ausgeschrieben, etwa Geld geben/entfernen oder Job/Gang ändern.
+
+Nur Discord-Administratoren und Bot-Owner dürfen diese Seite benutzen und Rechte
+ändern. Sie behalten ihren bisherigen vollständigen Panelzugriff. Das ist keine
+Änderung der eigenständigen Ingame-Rolle Server-Editor. Die Zuweisungen gelten für
+die jeweilige Discord-Guild und ihre freigegebenen Serverprofile; Profilbindung
+und serverseitige Aktionsprüfungen bleiben bestehen.
+
+Änderungen werden erst mit **Speichern** wirksam. Gleichzeitig bearbeitete
+Rollen werden über eine Revision verglichen; ein Konflikt verlangt Neuladen.
+Entzogene Sitzungen oder Verwaltungsrechte können nicht mehr speichern. Die
+WebCore-Verwaltung erhält individuell konfigurierte Rollen beim Speichern anderer
+Zugriffe und überschreibt keine zwischenzeitlichen Änderungen.
+
+Installation: Den vollständigen 19-Dateien-Cog übernehmen, einschließlich der
+neuen permissions.py. Vorher geladenen Cog und Red-Konfiguration/Datenordner
+sichern. Erwarteter ap-version-Build: 2026-10-30-support-v2.2.4. Anschließend den
+Cog regulär neu laden und die Webapp erneut öffnen. Für diese Rechteauswahl ist
+keine SQL-Datei und keine neue FiveM-Bridge nötig. AP-Bridge 1.2.3 bleibt passend.
+Es wurden hier keine NAS-Dienste neu gestartet und keine realen Rollen geändert.
+
+Vorhandene Preset-Zuweisungen bleiben ohne Migration gültig. Individuelle Rechte
+liegen in Red Config in role_map als Objekt mit permissions-Liste. Ältere Cogs
+kennen dieses Format nicht: vor einem Downgrade individuelle Zuweisungen bewusst
+auf Presets zurücksetzen oder die gesicherte passende Konfiguration verwenden.
+
+Prüfung: Tatsächliche Backendmethoden, Rollenauflösung, direkte Aktionsaufrufe,
+Konflikte und Widerrufe isoliert geprüft; vollständige Oberfläche mit aktuellem
+GET-Katalog auf Handy und Desktop geprüft. Aktivierung auf der NAS und ein echter
+Test mit einer beschränkten Discord-Rolle stehen noch aus.
+
 ## Aktuell: 30.10.2026 - Support v2.2.3 / AP-Bridge 1.2.3
 
 Aktionsprotokoll und Ereignisse behalten lesbare Zeilenhöhen und umbrechende

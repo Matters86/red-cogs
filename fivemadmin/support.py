@@ -108,6 +108,7 @@ class Routes:
     @endpoint
     async def staff(self, request):
         from .adminpanel import PRESETS
+        from .permissions import role_permissions
         guild = request['member'].guild
         members = guild.members
         role_map = await self.cog.config.guild(guild).role_map()
@@ -124,7 +125,7 @@ class Routes:
             candidate = (member.id in owners
                 or bool(getattr(getattr(member, 'guild_permissions', None), 'administrator', False))
                 or user_map.get(str(member.id)) in support_presets
-                or any(role_map.get(str(role.id)) in support_presets for role in member.roles))
+                or any('support_cases' in role_permissions(role_map.get(str(role.id)), PRESETS) for role in member.roles))
             if not candidate:
                 continue
             if 'support_cases' in await self.cog.member_permissions(member):

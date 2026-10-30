@@ -45,12 +45,13 @@ from redbot.core import commands, Config
 from redbot.core.data_manager import cog_data_path
 
 from . import db
+from .permissions import PERMISSION_CATALOG, PERMISSION_IDS, validate_permissions, role_permissions, role_revision
 from .serverprofiles import Profiles, PROFILE_ID, ENV_NAME, ALLOWED_PROFILES
 
 log = logging.getLogger("red.adminpanel")
 
 # This identifies the loaded Python module independently of a later source copy.
-PANEL_BUILD = "2026-10-30-support-v2.2.3"
+PANEL_BUILD = "2026-10-30-support-v2.2.4"
 try:
     with open(__file__, "rb") as _module_source:
         LOADED_MODULE_SHA256 = hashlib.sha256(_module_source.read()).hexdigest()
@@ -111,6 +112,7 @@ PRESETS = {
 
 # Alle Rechte (Discord-Administratoren; im Dashboard auch Owner/Allowlist).
 ALL_PERMS = _ADMIN | PRESETS["editor"]
+assert ALL_PERMS == PERMISSION_IDS, "Permission catalog must cover all existing capabilities"
 
 # Welche Berechtigung braucht welcher Action-Type?
 ACTION_PERMISSION = {
@@ -321,7 +323,7 @@ class AdminPanel(commands.Cog):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=0xA0D141)
         self.config.register_guild(
-            role_map={},   # {role_id(str): preset_name}
+            role_map={},   # {role_id(str): preset_name or {"permissions": [known IDs]}}
             user_map={},   # {user_id(str): preset_name} – Einzelpersonen-Zugriffe
             profile_selection={},  # Discord-Befehle: explizite Auswahl pro Nutzer/Guild
         )
@@ -533,9 +535,7 @@ class AdminPanel(commands.Cog):
             return set(ALL_PERMS)
         role_map = await self.config.guild(member.guild).role_map()
         for role in member.roles:
-            preset = role_map.get(str(role.id))
-            if preset in PRESETS:
-                perms |= PRESETS[preset]
+            perms |= role_permissions(role_map.get(str(role.id)), PRESETS)
         # Einzelpersonen-Zugriff: addiert sich zu evtl. Rollen-Presets
         user_map = await self.config.guild(member.guild).user_map()
         preset = user_map.get(str(member.id))
@@ -1221,7 +1221,10 @@ class AdminPanel(commands.Cog):
                 "name": r.name,
                 "color": f"#{r.color.value:06x}" if r.color.value else None,
                 "members": len(r.members),
-                "preset": role_map.get(str(r.id)),
+                "preset": role_map.get(str(r.id)) if isinstance(role_map.get(str(r.id)), str) else None,
+                "mode": "custom" if isinstance(role_map.get(str(r.id)), dict) else ("preset" if role_map.get(str(r.id)) in PRESETS else "none"),
+                "permissions": sorted(role_permissions(role_map.get(str(r.id)), PRESETS)),
+                "revision": role_revision(guild.id, r.id, role_map.get(str(r.id))),
             })
         # Einzelpersonen-Zugriffe (Namen live auflösen; weg vom Server = kennzeichnen)
         user_map = await self.config.guild(guild).user_map()
@@ -1236,7 +1239,10 @@ class AdminPanel(commands.Cog):
                 "preset": preset,
             })
         users.sort(key=lambda u: u["name"].lower())
-        return web.json_response({"roles": roles, "users": users, "presets": sorted(PRESETS.keys())})
+        return web.json_response({"roles": roles, "users": users, "presets": sorted(PRESETS.keys()),
+                                  "permission_catalog": PERMISSION_CATALOG,
+                                  "preset_permissions": {key: sorted(value) for key, value in PRESETS.items()},
+                                  "scope": "guild", "administrators_unrestricted": True})
 
     async def http_user_search(self, request: web.Request):
         """Mitglieder-Suche für Einzelpersonen-Zugriffe (nur Discord-Admins)."""
@@ -1307,26 +1313,90 @@ class AdminPanel(commands.Cog):
         await self._audit(f"🔧 **Einzel-Zugriff** · {label} (`{user_id}`) → {preset or '— entfernt'} · von {member.display_name} (Panel)")
         return web.json_response({"ok": True})
 
+    async def _role_admin_current(self, request, profile):
+        """Retain the exact live session/guild/profile after every yielding read."""
+        if self._closing or profile is None:
+            return False
+        original = request['session']
+        session = await asyncio.to_thread(db.get_session, original['token'])
+        if (not session or str(session.get('user_id')) != str(original.get('user_id'))
+                or str(session.get('guild_id')) != str(original.get('guild_id'))):
+            return False
+        guild = self.bot.get_guild(int(session['guild_id']))
+        if guild is None:
+            return False
+        member = guild.get_member(int(session['user_id']))
+        if member is None:
+            try:
+                member = await guild.fetch_member(int(session['user_id']))
+            except (discord.NotFound, discord.HTTPException):
+                return False
+        if (member is None or not await self.is_panel_admin(member) or self._closing
+                or str(member.id) != str(original['user_id'])
+                or str(member.guild.id) != str(original['guild_id'])
+                or self.profiles.select(profile.id, member.guild.id) is not profile
+                or db.current_profile() != profile.id):
+            return False
+        request['member'] = member
+        return True
+
     async def http_set_role_map(self, request: web.Request):
         member = request["member"]
         if not await self.is_panel_admin(member):
-            return web.json_response({"error": "Nur Discord-Administratoren"}, status=403)
+            return web.json_response({"error": "Nur Discord-Administratoren oder Bot-Owner"}, status=403)
+        profile = self.profiles.select(request['profile']['id'], member.guild.id)
         data = await self._read_json(request)
-        role_id = str(data.get("role_id", "")).strip()
-        preset = data.get("preset") or None
-        if preset is not None and preset not in PRESETS:
-            return web.json_response({"error": "Unbekanntes Preset"}, status=400)
+        if not isinstance(data, dict):
+            return web.json_response({"error": "Ungültige Anfrage"}, status=400)
+        role_id = data.get('role_id')
+        if not isinstance(role_id, str) or not re.fullmatch(r'[0-9]{1,24}', role_id):
+            return web.json_response({"error": "Ungültige Rollen-ID"}, status=400)
+        # Old preset clients remain compatible. New editors must use CAS.
+        legacy = 'mode' not in data
+        mode = data.get('mode', 'preset' if data.get('preset') else 'remove')
+        revision = data.get('revision')
+        if not legacy and (not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{64}', revision)):
+            return web.json_response({"error": "Bitte Rollenrechte neu laden"}, status=400)
+        if mode == 'custom':
+            try:
+                value = {'permissions': validate_permissions(data.get('permissions'))}
+            except ValueError as exc:
+                return web.json_response({"error": str(exc)}, status=400)
+        elif mode == 'preset':
+            value = data.get('preset')
+            if not isinstance(value, str) or value not in PRESETS:
+                return web.json_response({"error": "Unbekanntes Preset"}, status=400)
+        elif mode == 'remove':
+            value = None
+        else:
+            return web.json_response({"error": "Unbekannter Rechtemodus"}, status=400)
+        if not await self._role_admin_current(request, profile):
+            return web.json_response({"error": "Sitzung oder Verwaltungsrecht hat sich geändert"}, status=403)
+        member = request['member']
         guild = member.guild
-        role = guild.get_role(int(role_id)) if role_id.isdigit() else None
-        if role is None:
-            return web.json_response({"error": "Rolle nicht gefunden"}, status=400)
+        role = guild.get_role(int(role_id))
+        if role is None or role.is_default() or role.managed:
+            return web.json_response({"error": "Rolle nicht verfügbar"}, status=400)
+        # Config's context lock protects the compare-and-write for this guild map.
         async with self.config.guild(guild).role_map() as role_map:
-            if preset:
-                role_map[role_id] = preset
-            else:
+            if not await self._role_admin_current(request, profile):
+                return web.json_response({"error": "Sitzung oder Verwaltungsrecht hat sich geändert"}, status=403)
+            live_role = request['member'].guild.get_role(int(role_id))
+            if live_role is None or live_role.is_default() or live_role.managed:
+                return web.json_response({"error": "Rolle nicht verfügbar"}, status=400)
+            old = role_map.get(role_id)
+            if revision is not None and revision != role_revision(guild.id, role_id, old):
+                return web.json_response({"error": "Rollenrechte wurden inzwischen geändert. Bitte neu laden."}, status=409)
+            # A legacy preset-only client must not silently wipe a custom grant.
+            if legacy and isinstance(old, dict):
+                return web.json_response({"error": "Individuelle Rechte bitte auf der Berechtigungsseite ändern."}, status=409)
+            if value is None:
                 role_map.pop(role_id, None)
-        await self._audit(f"🔧 **Rollen-Mapping** · @{role.name} → {preset or '— entfernt'} · von {member.display_name} (Panel)")
-        return web.json_response({"ok": True})
+            else:
+                role_map[role_id] = value
+        label = ', '.join(sorted(role_permissions(value, PRESETS))) if isinstance(value, dict) else value or '— entfernt'
+        await self._audit(f"🔧 **Rollenrechte** · @{role.name} (`{role_id}`) → {label} · von {member.display_name} (Panel)")
+        return web.json_response({"ok": True, "revision": role_revision(guild.id, role_id, value)})
 
     async def http_bridge_catalog(self, request: web.Request):
         data = await self._read_json(request)
@@ -1638,7 +1708,8 @@ class AdminPanel(commands.Cog):
         lines = []
         for role_id, preset in role_map.items():
             role = ctx.guild.get_role(int(role_id))
-            lines.append(f"• {role.mention if role else f'gelöschte Rolle ({role_id})'} → **{preset}**")
+            label = f"Individuell: {', '.join(sorted(role_permissions(preset, PRESETS))) or 'kein Zugriff'}" if isinstance(preset, dict) else str(preset)
+            lines.append(f"• {role.mention if role else f'gelöschte Rolle ({role_id})'} → **{label}**")
         await ctx.send("\n".join(lines))
 
     # ---- Support-Aktionen ----

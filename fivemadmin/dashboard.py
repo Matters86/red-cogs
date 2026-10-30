@@ -40,6 +40,7 @@ from urllib.parse import quote, urlsplit
 import discord
 
 from . import db
+from .permissions import role_permissions
 from .adminpanel import (
     ALL_PERMS,
     DEFAULT_API_KEY,
@@ -122,7 +123,7 @@ def _redirect(guild, *, ok: str | None = None, err: str | None = None) -> dict:
 def _may_assign(my_perms: set, *presets) -> bool:
     """Schutz vor Selbst-Hochstufung: jedes beteiligte Preset (alt und neu) darf nicht mehr
     Rechte haben als der Handelnde selbst."""
-    return all(PRESETS.get(p, set()) <= my_perms for p in presets if p)
+    return all(role_permissions(p, PRESETS) <= my_perms for p in presets if p)
 
 
 # --------------------------------------------------------------------------- #
@@ -344,7 +345,7 @@ def _my_presets(member, gconf) -> list[str]:
     out = []
     for role in getattr(member, "roles", []):
         p = role_map.get(str(role.id))
-        if p in PRESETS and p not in out:
+        if isinstance(p, str) and p in PRESETS and p not in out:
             out.append(p)
     p = (gconf.get("user_map") or {}).get(str(member.id))
     if p in PRESETS and p not in out:
@@ -620,14 +621,14 @@ def _render_rights(ui, guild, actor, gconf, csrf) -> str:
         dot = f"<span class='wc-role-dot' style='background:{_esc(color)}'></span>" if color else "<span class='wc-role-dot'></span>"
         rows.append(ui.row(
             f"{dot}<b>{_esc(r.name)}</b><div class='wc-cell-sub'>{len(getattr(r, 'members', []) or [])} Mitglieder</div>",
-            _cell(ui.select(f"role:{r.id}", _preset_items(), role_map.get(str(r.id)), none_label="— kein Zugriff")),
+            _cell(ui.select(f"role:{r.id}", ([('__custom__', 'Individuelle Rechte – im Live-Panel bearbeiten')] if isinstance(role_map.get(str(r.id)), dict) else []) + _preset_items(), '__custom__' if isinstance(role_map.get(str(r.id)), dict) else role_map.get(str(r.id)), none_label="— kein Zugriff")),
         ))
     for rid, preset in role_map.items():
         if str(rid).isdigit() and guild.get_role(int(rid)):
             continue
         rows.append(ui.row(
             f"<span class='wc-role-dot'></span><b>Gelöschte Rolle</b><div class='wc-cell-sub mono'>{_esc(rid)}</div>",
-            _cell(ui.select(f"role:{rid}", [(preset, PRESET_INFO.get(preset, (preset,))[0])], preset,
+            _cell(ui.select(f"role:{rid}", [('__custom__', 'Individuelle Rechte')] if isinstance(preset, dict) else [(preset, PRESET_INFO.get(preset, (preset,))[0])], '__custom__' if isinstance(preset, dict) else preset,
                             none_label="— entfernen")),
         ))
     roles_card = ui.card(
@@ -815,12 +816,14 @@ async def _post_rights(cog, guild, actor, data):
     role_map = dict(await gconf.role_map())
     user_map = dict(await gconf.user_map())
     audits, denied, invalid = [], [], []
+    original_roles, original_users = dict(role_map), dict(user_map)
+    touched_roles, touched_users = set(), set()
 
     for key in {k for k in data.keys() if k.startswith("role:")}:
         rid = key[5:]
         new = data.get(key) or None
         old = role_map.get(rid)
-        if new == old:
+        if new == old or (new == '__custom__' and isinstance(old, dict)):
             continue
         if new is not None and new not in PRESETS:
             invalid.append(rid)
@@ -843,6 +846,7 @@ async def _post_rights(cog, guild, actor, data):
             role_map[rid] = new
         else:
             role_map.pop(rid, None)
+        touched_roles.add(rid)
         audits.append(f"🔧 **Rollen-Mapping** · {label} → {new or '— entfernt'} · von {actor.name} (Dashboard)")
 
     changes_user = []
@@ -883,11 +887,30 @@ async def _post_rights(cog, guild, actor, data):
             user_map[uid] = new
         else:
             user_map.pop(uid, None)
+        touched_users.add(uid)
         audits.append(f"🔧 **Einzel-Zugriff** · {label} → {new or '— entfernt'} · von {actor.name} (Dashboard)")
 
     if audits:
-        await gconf.role_map.set(role_map)
-        await gconf.user_map.set(user_map)
+        # Both maps are locked in a fixed order. Compare only submitted changes;
+        # a user-only save never restores an old role-map snapshot.
+        async with gconf.role_map() as live_roles:
+            async with gconf.user_map() as live_users:
+                member = guild.get_member(actor.member.id) if actor.member is not None else None
+                if not actor.full and not await cog.is_panel_admin(member):
+                    return _redirect(guild, err="Verwaltungsrecht hat sich geändert. Bitte neu laden.")
+                if (any(live_roles.get(key) != original_roles.get(key) for key in touched_roles)
+                        or any(live_users.get(key) != original_users.get(key) for key in touched_users)):
+                    return _redirect(guild, err="Berechtigungen wurden inzwischen geändert. Bitte neu laden.")
+                for key in touched_roles:
+                    if key in role_map:
+                        live_roles[key] = role_map[key]
+                    else:
+                        live_roles.pop(key, None)
+                for key in touched_users:
+                    if key in user_map:
+                        live_users[key] = user_map[key]
+                    else:
+                        live_users.pop(key, None)
         for line in audits:
             await cog._audit(line)
     if denied:

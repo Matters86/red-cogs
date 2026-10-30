@@ -1,3 +1,13 @@
+## 30.10.2026 – Support v2.2.4
+
+- Eigene Berechtigungsseite mit Discord-Rollenauswahl und 22 Funktionsbereichen;
+  vorhandene Presets als Vorlage, ausdrückliches Speichern und Verwerfen.
+- Individuelle Rollenrechte werden serverseitig bei bestehenden Aktionen und
+  Support-Zuweisungen berücksichtigt. Admin-/Ownerzugriff bleibt erhalten.
+- Konflikte zwischen zwei Bearbeitern werden angezeigt; die WebCore-Verwaltung
+  erhält zwischenzeitlich gespeicherte Rollen- und Einzelpersonenrechte.
+- Keine echte Discord-Zuweisung, Profil-/Schlüsseländerung oder NAS-Aktivierung.
+
 ## Aktuell: 30.10.2026 - Support v2.2.3 / AP-Bridge 1.2.3
 
 Aktionsprotokoll und Ereignisse behalten lesbare Zeilenhöhen und umbrechende
