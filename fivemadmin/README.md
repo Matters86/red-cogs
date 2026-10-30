@@ -1,3 +1,25 @@
+## Aktuell: 30.10.2026 - Support v2.2.3 / AP-Bridge 1.2.3
+
+Aktionsprotokoll und Ereignisse behalten lesbare Zeilenhöhen und umbrechende
+Volltexte. Lange Listen scrollen, statt ihre Einträge zusammenzudrücken.
+Konten zeigen bestätigte Charaktere als CID (Name), Fraktionen und Firmen als
+Name (Konto-ID). Unbekannte Zuordnungen bleiben bei der Kennung; Beträge bleiben
+unverändert. Namen kommen ausschließlich aus dem jeweiligen Serverbestand.
+
+Für die Darstellung den vollständigen Cog auf der Synology aktualisieren und
+normal neu laden. Erwarteter `ap version`-Build: 2026-10-30-support-v2.2.3.
+Für Kontennamen zusätzlich AP-Bridge 1.2.3 auf dem richtigen FiveM-Server
+übernehmen und eine neue Wirtschaftsstatistik laden. Keine Datenbankmigration.
+Eine neue HTML-Datei erzeugt keine fehlenden Namen in alten Statistikantworten.
+
+Dev/Live: Ein wechselnder Servername im selben Profil deutet auf gemischte
+Bridge-Zugänge. Der geprüfte Dev-Stand nutzt noch den Bestandszugang ohne eigenes
+Profil. Dev erhält einen eigenen Schlüssel und das Profil dev; Live kann seinen
+bisherigen legacy-Bestand samt Historie behalten. Diese Bereitstellung ändert
+keine NAS-Umgebung, Profilbindungen, Schlüssel oder laufenden Dienste.
+
+Die folgenden älteren Abschnitte bleiben als Historie erhalten.
+
 ## Aktuell: Support v2.2.2 und AP-Bridge 1.2.2 – Spielersuche
 
 Die bestehende Spieler-Datenbank bietet zwei Sucharten: **Charakter / Account / CID**

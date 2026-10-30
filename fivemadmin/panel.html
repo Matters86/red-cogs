@@ -569,6 +569,26 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
 @media(max-width:720px){.support-layout{grid-template-columns:1fr}.case-browser{position:static}.case-list{max-height:50vh}.support-layout.case-open .case-browser{display:none}.support-layout:not(.case-open) .case-workspace{display:none}.case-back{display:inline-flex;margin-bottom:16px}.case-titlebar h2{font-size:21px}.case-form-grid{grid-template-columns:1fr}.case-form-grid .wide{grid-column:auto}.case-info-grid{gap:13px}.vehicle-search-fields{grid-template-columns:1fr}.vehicle-search-fields label{margin-top:0}.vehicle-records{grid-template-columns:1fr}.diag-controls{grid-template-columns:1fr}.case-operation .split{flex-direction:column;align-items:stretch}.case-operation .split>*{width:100%}.server-context{margin:0 14px 15px;gap:8px 11px;padding:12px}.server-context select{min-width:0;max-width:none;width:100%;font-size:15px}.server-context>label{flex-basis:100%}.server-context-badge{flex:1;flex-wrap:wrap;font-size:11px}.profile-state{margin:0;font-size:10px}.server-context~#profile-content nav.tabs{top:calc(var(--server-context-height,75px) + 8px)}.profile-prompt{margin:20px 14px}.report-save{align-items:stretch;flex-direction:column}.report-save>div{min-width:0}.case-photo-button{min-height:38px}.case-form-actions .btn{flex:1}.case-section h3{font-size:14px}}
 
 .modal-body,.scroll-y,#search-wrap,#roles-wrap,#users-wrap,#audit-wrap,#bans-wrap{max-width:100%;overflow-x:auto}.modal-box,.tools-grid>*{min-width:0}.report-json{max-width:100%;box-sizing:border-box}
+
+/* Feed entries keep their content height inside the bounded scrolling lists. */
+.feed>.frow{flex:0 0 auto;min-height:64px;align-items:start}
+.feed>.frow .l1,.feed>.frow .l2{white-space:pre-wrap;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+.feed>.frow .meta{min-width:0;max-width:16rem;overflow-wrap:anywhere}
+#feed,#log-wrap,#audit-wrap,#hist-body{overflow-x:hidden;scrollbar-gutter:stable}
+#tab-log{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
+#tab-log>.card{margin:0}
+#accounts-wrap .account-label{overflow-wrap:anywhere}
+@media(max-width:1000px){#tab-log{grid-template-columns:minmax(0,1fr)}}
+.player-search-input{position:relative;min-width:0}
+.player-suggestions{position:absolute;left:0;right:0;top:100%;z-index:25;max-height:280px;overflow-y:auto;overscroll-behavior:contain;border:1px solid #7daacd;border-radius:10px;background:#18344e;box-shadow:0 12px 28px #09172680}
+.player-suggestions[hidden]{display:none}
+.player-suggestion{padding:11px 13px;min-height:48px;cursor:pointer;border-bottom:1px solid #52799c55;overflow-wrap:anywhere}
+.player-suggestion:last-child{border-bottom:0}
+.player-suggestion:hover,.player-suggestion[aria-selected=true]{background:#35668d}
+.player-suggestion strong{display:block;font-size:13px;line-height:1.5}
+.player-suggestion span{display:block;color:#bed6e9;font-size:11px;line-height:1.5}
+.player-search-hint{font-size:11px;color:var(--muted);margin-top:7px;line-height:1.5}
+
 </style>
 </head>
 <body>
@@ -703,12 +723,14 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
       </div>
       <div class="split" style="align-items:flex-end">
         <div style="flex:1 1 180px"><label for="search-kind" style="margin-top:0">Suchart</label><select id="search-kind"><option value="character">Charakter / Account / CID</option><option value="discord">Discord-Name / ID</option></select></div>
-        <div style="flex:2 1 220px">
+        <div class="player-search-input" id="search-input-wrap" style="flex:2 1 220px">
           <label for="search-q" style="margin-top:0">Spieler oder Charakter finden</label>
-          <input id="search-q" maxlength="80" placeholder="Vor-/Nachname, Account oder CitizenID" autocomplete="off">
+          <input id="search-q" maxlength="80" placeholder="Vor-/Nachname, Account oder CitizenID" autocomplete="off" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="search-suggestions" aria-describedby="search-suggestion-hint">
+          <div id="search-suggestions" class="player-suggestions" role="listbox" aria-label="Bekannte Spieler und Charaktere" hidden></div>
         </div>
         <button class="btn" id="search-btn" style="flex:0 0 auto">Suchen</button>
       </div>
+      <p class="player-search-hint" id="search-suggestion-hint">Vorschläge aus bekannten Spielern. Weitere Treffer mit „Suchen“ laden.</p>
       <div id="search-wrap" style="margin-top:14px"></div>
     </section>
     </div>
@@ -1273,6 +1295,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     var tabPermission = {support:"support_cases",vehicle:"support_vehicles",players:"view_players", stats:"view_stats", server:"server_status", audit:"audit"};
     if (tabPermission[name] && !can(tabPermission[name])) name = can("view_players") ? "players" : can("view_stats") ? "stats" : can("server_status") ? "server" : "log";
     activeTab = name;
+    if (name !== 'players') closePlayerSuggestions();
     var titles = {support:["Supportfälle","Nachvollziehbar helfen – mit Zuständigkeit, Verlauf und Belegen."],vehicle:["Fahrzeugakte","Private, geleaste und Fraktionsfahrzeuge gezielt lesend prüfen."],players:["Spieler & Support","Schnell helfen, gezielt verwalten und jede Aktion nachvollziehen."],stats:["Wirtschaft im Blick","Konten, Gegenstände und Fahrzeuge aus einer gezielten Serverabfrage."],server:["Serverstatus","Verbindung, Ressourcen und Auftragsfreigabe getrennt prüfen."],audit:["Kontrolle & Berechtigungen","Maßnahmen nachvollziehen und freigegebene Zugriffe verwalten."],log:["Aktivitäten","Aufträge und Ereignisse mit ihrem zuletzt bestätigten Status."]};
     $("page-title").textContent = titles[name][0];
     $("page-description").textContent = titles[name][1];
@@ -1339,6 +1362,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   /* ---------- Spielerliste ---------- */
 
   function renderPlayers() {
+    refreshPlayerSuggestions();
     var renderKey = JSON.stringify([players,$("players-filter").value,perms,tpSource,Object.keys(confirmKick)]);
     if (renderKey === playerRenderKey) return;
     playerRenderKey = renderKey;
@@ -1589,6 +1613,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
 
   var playerSearchPending = null, playerSearchLastAt = 0;
   function clearPlayerSearchRequest() {
+    resetPlayerSuggestions();
     playerSearchPending=null;playerSearchLastAt=0;delete viewScopes['search-player'];
     $('search-btn').disabled=false;
   }
@@ -1598,6 +1623,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     $('search-wrap').innerHTML='<div class="empty">Suchbegriff geändert. Bitte Suchen wählen.</div>';
   }
   function runSearch() {
+    closePlayerSuggestions();
     if(playerSearchPending && !viewCurrent(playerSearchPending))clearPlayerSearchRequest();
     if(playerSearchPending)return;
     var q=$('search-q').value.normalize('NFC').replace(/\s+/g,' ').trim(),kind=$('search-kind').value;
@@ -1614,17 +1640,123 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
         if(packet.search_schema!==2 || packet.query_kind!==kind)return failed('Suchversion nicht bestätigt. Cog und AP-Bridge gemeinsam aktualisieren.');
         var rows=actionArray(action,'results');
         if(rows.length>20 || rows.some(function(row){return typeof row.citizenid!=='string' || !row.citizenid;}))return failed('Charakterzuordnung nicht bestätigt.');
-        playerSearchPending=null;$('search-btn').disabled=false;renderSearchResults(rows,action,packet);
+        playerSearchPending=null;$('search-btn').disabled=false;rememberPlayerSuggestions(rows,action,packet);renderSearchResults(rows,action,packet);
       },failed,view);
     }).catch(function(error){if(error.message!=='stale_session')failed(error.data && typeof error.data.error==='string'?error.data.error.slice(0,300):'Abfrage konnte nicht bestätigt werden.');});
   }
   $('search-btn').addEventListener('click',runSearch);
-  $('search-q').addEventListener('keydown',function(e){if(e.key==='Enter')runSearch();});
+  $('search-q').addEventListener('keydown',function(e){if(playerSuggestionKey(e))return;if(e.key==='Enter')runSearch();});
   $('search-q').addEventListener('input',invalidatePlayerSearch);
   $('search-kind').addEventListener('change',function(){
+    resetPlayerSuggestions();
     $('search-q').placeholder=this.value==='discord'?'Discord-Name, Anzeigename oder Discord-ID':'Vor-/Nachname, Account oder CitizenID';
     invalidatePlayerSearch();
   });
+
+  // Local suggestions never query Discord or queue a search while typing.
+  var playerSuggestionHistory = [], playerSuggestionRows = [], playerSuggestionAt = -1;
+  var playerSuggestionContext = '', playerSuggestionOpen = false;
+  function playerSuggestionStamp() { return sessionEpoch + ':' + accessEpoch + ':' + profileGeneration; }
+  function playerSuggestionsAllowed() { return !!session && !!selectedProfile && profileReady && can('view_players'); }
+  function closePlayerSuggestions() {
+    playerSuggestionRows = []; playerSuggestionAt = -1; playerSuggestionOpen = false;
+    $('search-suggestions').hidden = true; $('search-suggestions').textContent = '';
+    $('search-q').setAttribute('aria-expanded', 'false'); $('search-q').removeAttribute('aria-activedescendant');
+  }
+  function resetPlayerSuggestions() {
+    playerSuggestionHistory = []; playerSuggestionContext = playerSuggestionStamp(); closePlayerSuggestions();
+  }
+  function playerSuggestionId(value) {
+    return typeof value === 'string' && /^[1-9][0-9]{0,19}$/.test(value)
+      && (value.length < 20 || value <= '18446744073709551615') ? value : '';
+  }
+  function playerSuggestionString(value) { return typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 120) : ''; }
+  function rememberPlayerSuggestions(results, action, packet) {
+    if (!playerSuggestionsAllowed() || !packet || packet.search_schema !== 2) return;
+    if (playerSuggestionContext !== playerSuggestionStamp()) resetPlayerSuggestions();
+    var params = {}; try { params = typeof action.params === 'string' ? JSON.parse(action.params) : action.params || {}; } catch (_) {}
+    var members = Array.isArray(params.discord_matches) ? params.discord_matches : [];
+    results.forEach(function(row) {
+      var cid = playerSuggestionString(row.citizenid); if (!cid) return;
+      var did = playerSuggestionId(row.discord_id);
+      var member = did && members.find(function(value) { return value && value.id === did; });
+      var entry = {citizenid:cid,charname:playerSuggestionString(row.charname),name:playerSuggestionString(row.account),discord:did,
+        discord_name:member ? playerSuggestionString(member.display_name) : '',
+        discord_username:member ? playerSuggestionString(member.username) : '',
+        discord_global_name:member ? playerSuggestionString(member.global_name) : ''};
+      playerSuggestionHistory = playerSuggestionHistory.filter(function(value) { return value.citizenid !== cid; });
+      playerSuggestionHistory.unshift(entry);
+    });
+    playerSuggestionHistory = playerSuggestionHistory.slice(0, 60);
+    closePlayerSuggestions();
+  }
+  function refreshPlayerSuggestions() {
+    if (playerSuggestionContext !== playerSuggestionStamp()) resetPlayerSuggestions();
+    if (!playerSuggestionsAllowed() || document.activeElement !== $('search-q') || activeTab !== 'players') return closePlayerSuggestions();
+    var query = playerSearchText($('search-q').value), kind = $('search-kind').value;
+    if (!query || query.length > 80) return closePlayerSuggestions();
+    var seen = Object.create(null), matches = [];
+    players.slice(0, 256).concat(playerSuggestionHistory).forEach(function(row) {
+      if (!row || typeof row !== 'object') return;
+      var cid = playerSuggestionString(row.citizenid), character = playerSuggestionString(row.charname);
+      var account = playerSuggestionString(row.name), value, title, detail, terms;
+      if (kind === 'discord') {
+        value = playerSuggestionId(row.discord); if (!value) return;
+        var names = [row.discord_name,row.discord_username,row.discord_global_name].map(playerSuggestionString).filter(function(n,i,a) { return n && a.indexOf(n) === i; });
+        title = names[0] || 'Discord-ID ' + value;
+        detail = value + (names.length > 1 ? ' · ' + names.slice(1).join(' / ') : '') + (character ? ' · ' + character : '');
+        terms = [value].concat(names);
+      } else {
+        if (!cid) return; value = cid; title = character || 'Charakter ' + cid;
+        detail = cid + (account ? ' · Account ' + account : ''); terms = [cid,character,account];
+      }
+      if (seen[value] || !terms.some(function(term) { return playerSearchText(term).indexOf(query) !== -1; })) return;
+      seen[value] = true; matches.push({value:value,title:title,detail:detail});
+    });
+    matches = matches.slice(0, 8); closePlayerSuggestions();
+    if (!matches.length) return;
+    playerSuggestionRows = matches; playerSuggestionOpen = true;
+    matches.forEach(function(row, index) {
+      var option = document.createElement('div'); option.id = 'search-suggestion-' + index;
+      option.className = 'player-suggestion'; option.setAttribute('role', 'option'); option.setAttribute('aria-selected', 'false');
+      option.dataset.suggestionIndex = String(index);
+      var title = document.createElement('strong'), detail = document.createElement('span');
+      title.textContent = row.title; detail.textContent = row.detail; option.append(title, detail); $('search-suggestions').appendChild(option);
+    });
+    $('search-suggestions').hidden = false; $('search-q').setAttribute('aria-expanded', 'true');
+  }
+  function selectPlayerSuggestion(index) {
+    if (!playerSuggestionsAllowed() || playerSuggestionContext !== playerSuggestionStamp()) return resetPlayerSuggestions();
+    var row = playerSuggestionRows[index]; if (!row) return;
+    $('search-q').value = row.value; invalidatePlayerSearch(); $('search-q').focus(); closePlayerSuggestions();
+  }
+  function playerSuggestionKey(event) {
+    if (event.key === 'Escape') { if (!playerSuggestionOpen) return false; event.preventDefault(); closePlayerSuggestions(); return true; }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (!playerSuggestionOpen) refreshPlayerSuggestions();
+      if (!playerSuggestionRows.length) return false;
+      event.preventDefault();
+      playerSuggestionAt = event.key === 'ArrowDown' ? (playerSuggestionAt + 1) % playerSuggestionRows.length
+        : (playerSuggestionAt <= 0 ? playerSuggestionRows.length : playerSuggestionAt) - 1;
+      Array.from($('search-suggestions').children).forEach(function(node,index) { node.setAttribute('aria-selected', String(index === playerSuggestionAt)); });
+      var option = $('search-suggestions').children[playerSuggestionAt];
+      $('search-q').setAttribute('aria-activedescendant', option.id); option.scrollIntoView({block:'nearest'}); return true;
+    }
+    if (event.key === 'Enter' && playerSuggestionOpen && playerSuggestionAt >= 0) {
+      event.preventDefault(); selectPlayerSuggestion(playerSuggestionAt); return true;
+    }
+    return false;
+  }
+  $('search-q').addEventListener('input', refreshPlayerSuggestions);
+  $('search-q').addEventListener('focus', refreshPlayerSuggestions);
+  $('search-suggestions').addEventListener('click', function(event) {
+    var option = event.target.closest('[data-suggestion-index]');
+    if (option && $('search-suggestions').contains(option)) selectPlayerSuggestion(Number(option.dataset.suggestionIndex));
+  });
+  function dismissPlayerSuggestions(event) { if (!$('search-input-wrap').contains(event.target)) closePlayerSuggestions(); }
+  document.addEventListener('pointerdown', dismissPlayerSuggestions);
+  document.addEventListener('focusin', dismissPlayerSuggestions);
+  window.addEventListener('blur', closePlayerSuggestions);
 
   function renderSearchResults(results,action,packet) {
     var params={};try{params=typeof action.params==='string'?JSON.parse(action.params):action.params||{};}catch(_){}
@@ -2033,13 +2165,23 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     renderServerTab(); // DB-Kacheln aktualisieren
   }
 
+  function accountLabel(account) {
+    var id = typeof account.name === "string" ? account.name : "?";
+    var kind = account.account_kind;
+    var label = typeof account.account_label === "string" ? account.account_label.trim() : "";
+    var player = typeof account.player_name === "string" ? account.player_name.trim() : "";
+    if ((kind === "faction" || kind === "company") && label) return label + " (" + id + ")";
+    if ((!kind || kind === "character") && player) return id + " (" + player + ")";
+    return id;
+  }
+
   function renderAccounts() {
     var html = "";
     var society = statsData.society || [];
     if (society.length) {
       html += '<table class="t"><thead><tr><th>Konto</th><th style="text-align:right">Kontostand</th></tr></thead><tbody>';
       society.forEach(function (s) {
-        html += '<tr><td>' + esc(s.name) + (s.player_name ? ' (' + esc(s.player_name) + ')' : '') + '</td><td class="num">' + fmtMoney(s.amount) + '</td></tr>';
+        html += '<tr><td class="account-label">' + esc(accountLabel(s)) + '</td><td class="num">' + fmtMoney(s.amount) + '</td></tr>';
       });
       html += '</tbody></table>';
     }
@@ -2480,7 +2622,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     if (a.action_type === "set_gang")
       return t + ' <span class="arrow">→</span> Gang ' + esc(p.gang || "?") + " (" + esc(p.grade != null ? p.grade : 0) + ")";
     if (a.action_type === "notify")
-      return t + ' · „' + esc((p.message || "").slice(0, 35)) + ((p.message || "").length > 35 ? "…" : "") + '“';
+      return t + ' · „' + esc(p.message || "") + '“';
     if (a.action_type === "park_all")
       return 'Alle Fahrzeuge einparken';
     if (a.action_type === "ban") {
