@@ -592,7 +592,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
       Android/Chrome: Menü ⋮ → „App installieren“<br>
       iPhone/Safari: Teilen <span style="font-family:var(--font-mono)">⎋</span> → „Zum Home-Bildschirm“
     </p>
-    <p class="sub" id="panel-build-gate">Oberfläche: 29.10.2026 · Support v2.2.1</p>
+    <p class="sub" id="panel-build-gate">Oberfläche: 29.10.2026 · Support v2.2.2</p>
   </div>
 </div>
 
@@ -702,9 +702,10 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
         <span class="count">auch offline</span>
       </div>
       <div class="split" style="align-items:flex-end">
-        <div style="flex:2 1 auto">
-          <label for="search-q" style="margin-top:0">Name oder CitizenID</label>
-          <input id="search-q" placeholder="z. B. Kevin, Brandt oder KVN20831" autocomplete="off">
+        <div style="flex:1 1 180px"><label for="search-kind" style="margin-top:0">Suchart</label><select id="search-kind"><option value="character">Charakter / Account / CID</option><option value="discord">Discord-Name / ID</option></select></div>
+        <div style="flex:2 1 220px">
+          <label for="search-q" style="margin-top:0">Spieler oder Charakter finden</label>
+          <input id="search-q" maxlength="80" placeholder="Vor-/Nachname, Account oder CitizenID" autocomplete="off">
         </div>
         <button class="btn" id="search-btn" style="flex:0 0 auto">Suchen</button>
       </div>
@@ -893,7 +894,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
           <button class="btn small" id="diag-btn" style="margin-left:auto">Prüfen</button>
         </div>
         <p class="hint">Prüft, ob DB, Exports, Tabellen und das Society-System zu diesem Server passen – ideal beim ersten Livegang.</p>
-        <p class="hint" id="panel-build-server">Oberfläche: 29.10.2026 · Support v2.2.1. Die FiveM-Bridge wird getrennt aktualisiert.</p>
+        <p class="hint" id="panel-build-server">Oberfläche: 29.10.2026 · Support v2.2.2. Die FiveM-Bridge wird getrennt aktualisiert.</p>
         <div id="diag-wrap"><div class="empty">Noch nicht geprüft.</div></div>
       </section>
     </div>
@@ -1308,7 +1309,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   function createAction(type, target, params, msgId, view) {
     var context = {session:sessionEpoch,access:accessEpoch,profile:profileGeneration};
     function feedbackCurrent(){return context.session===sessionEpoch && context.access===accessEpoch && context.profile===profileGeneration && (!view || viewCurrent(view));}
-    var key = JSON.stringify([type,target,params]);
+    var key = JSON.stringify(type==='search_player' ? [type,target,params,context.session,context.access,context.profile] : [type,target,params]);
     if (actionRequests[key]) return actionRequests[key];
     var reason = isLocked && type !== "diag" ? "locked" :
       (READ_ACTIONS.indexOf(type) === -1 && lastServer && lastServer.bridge && lastServer.bridge.mutation_queue_ready === false ? "queue_held" : null);
@@ -1352,15 +1353,9 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
       });
       pdl.innerHTML = po;
     }
-    var q = $("players-filter").value.trim().toLowerCase();
+    var q = playerSearchText($("players-filter").value);
     var list = players.filter(function (p) {
-      if (!q) return true;
-      return (p.charname || "").toLowerCase().indexOf(q) !== -1 ||
-             (p.name || "").toLowerCase().indexOf(q) !== -1 ||
-             (p.citizenid || "").toLowerCase().indexOf(q) !== -1 ||
-             (p.discord_name || "").toLowerCase().indexOf(q) !== -1 ||
-             (p.discord || "").indexOf(q) !== -1 ||
-             String(p.source).indexOf(q) !== -1;
+      return !q || [p.charname,p.name,p.citizenid,p.discord_name,p.discord_username,p.discord_global_name,p.discord,p.source].some(function(value){return playerSearchText(value).indexOf(q)!==-1;});
     });
 
     $("players-count").textContent = players.length + " online";
@@ -1592,52 +1587,73 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
 
   /* ---------- Offline-Suche ---------- */
 
+  var playerSearchPending = null, playerSearchLastAt = 0;
+  function clearPlayerSearchRequest() {
+    playerSearchPending=null;playerSearchLastAt=0;delete viewScopes['search-player'];
+    $('search-btn').disabled=false;
+  }
+  function playerSearchText(value) { return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/ß/g,'ss').toLowerCase().replace(/\s+/g,' ').trim(); }
+  function invalidatePlayerSearch() {
+    beginView('search-player');playerSearchPending=null;$('search-btn').disabled=false;
+    $('search-wrap').innerHTML='<div class="empty">Suchbegriff geändert. Bitte Suchen wählen.</div>';
+  }
   function runSearch() {
-    var q=$('search-q').value.trim(),view=beginView('search-player',q);
-    if(q.length<2){$('search-btn').disabled=false;$('search-wrap').innerHTML='<div class="empty">Mindestens 2 Zeichen eingeben.</div>';return;}
+    if(playerSearchPending && !viewCurrent(playerSearchPending))clearPlayerSearchRequest();
+    if(playerSearchPending)return;
+    var q=$('search-q').value.normalize('NFC').replace(/\s+/g,' ').trim(),kind=$('search-kind').value;
+    var view=beginView('search-player',kind+':'+q);
+    if(q.length<2 || q.length>80){$('search-wrap').innerHTML='<div class="empty">Bitte 2 bis 80 Zeichen eingeben.</div>';return;}
+    if(Date.now()-playerSearchLastAt<1000){$('search-wrap').innerHTML='<div class="empty">Bitte vor der nächsten Suche kurz warten.</div>';return;}
+    playerSearchLastAt=Date.now();playerSearchPending=view;
     $('search-btn').disabled=true;$('search-wrap').innerHTML='<div class="empty">Suche läuft…</div>';
-    function failed(message){if(viewCurrent(view)){$('search-btn').disabled=false;$('search-wrap').innerHTML='<div class="empty">'+esc(message)+'</div>';}}
-    createAction('search_player',q,{}).then(function(data){
+    function failed(message){if(viewCurrent(view)){playerSearchPending=null;$('search-btn').disabled=false;$('search-wrap').innerHTML='<div class="empty">'+esc(message)+'</div>';}}
+    createAction('search_player',q,{query_kind:kind},null,view).then(function(data){
       if(!viewCurrent(view))return;
-      trackQuery(data && data.id,function(action){var rows=actionArray(action,'results');$('search-btn').disabled=false;renderSearchResults(rows);},failed,view);
-    }).catch(function(error){if(error.message!=='stale_session')failed('Abfrage konnte nicht bestätigt werden.');});
+      trackQuery(data && data.id,function(action){
+        var packet=actionObject(action);
+        if(packet.search_schema!==2 || packet.query_kind!==kind)return failed('Suchversion nicht bestätigt. Cog und AP-Bridge gemeinsam aktualisieren.');
+        var rows=actionArray(action,'results');
+        if(rows.length>20 || rows.some(function(row){return typeof row.citizenid!=='string' || !row.citizenid;}))return failed('Charakterzuordnung nicht bestätigt.');
+        playerSearchPending=null;$('search-btn').disabled=false;renderSearchResults(rows,action,packet);
+      },failed,view);
+    }).catch(function(error){if(error.message!=='stale_session')failed(error.data && typeof error.data.error==='string'?error.data.error.slice(0,300):'Abfrage konnte nicht bestätigt werden.');});
   }
-  $("search-btn").addEventListener("click", runSearch);
-  $("search-q").addEventListener("keydown", function (e) { if (e.key === "Enter") runSearch(); });
+  $('search-btn').addEventListener('click',runSearch);
+  $('search-q').addEventListener('keydown',function(e){if(e.key==='Enter')runSearch();});
+  $('search-q').addEventListener('input',invalidatePlayerSearch);
+  $('search-kind').addEventListener('change',function(){
+    $('search-q').placeholder=this.value==='discord'?'Discord-Name, Anzeigename oder Discord-ID':'Vor-/Nachname, Account oder CitizenID';
+    invalidatePlayerSearch();
+  });
 
-  function renderSearchResults(results) {
-    if (!results.length) {
-      $("search-wrap").innerHTML = '<div class="empty">Keine Treffer in der Datenbank.</div>';
-      return;
-    }
-    var onlineCids = {};
-    players.forEach(function (p) { if (p.citizenid) onlineCids[p.citizenid] = true; });
-
-    var html = '<table class="t"><thead><tr>' +
-      '<th>Charakter</th><th>Job / Gang</th><th style="text-align:right">Cash / Bank</th><th style="text-align:right">Aktionen</th>' +
-      '</tr></thead><tbody>';
-    results.forEach(function (r) {
-      var cid = esc(r.citizenid || "");
-      var online = !!onlineCids[r.citizenid];
-      var actions = "";
-      if (can("teleport")) actions += '<button class="abtn" data-act="tp" data-cid="' + cid + '" data-name="' + esc(r.charname) + '">TP→</button>';
-      if (can("view_inventory")) actions += '<button class="abtn" data-act="inv" data-cid="' + cid + '">Inventar</button>';
-      if (can("car_to_garage")) actions += '<button class="abtn" data-act="veh" data-cid="' + cid + '">Fahrzeuge</button>';
-      if (online && can("message")) actions += '<button class="abtn" data-act="msg" data-cid="' + cid + '" data-name="' + esc(r.charname) + '">Nachricht</button>';
-      if (can("ban")) actions += '<button class="abtn danger" data-act="ban" data-cid="' + cid + '" data-name="' + esc(r.charname) + '">Ban</button>';
-      actions += '<button class="abtn" data-act="hist" data-cid="' + cid + '" data-name="' + esc(r.charname) + '">Akte</button>';
-
-      html += '<tr>' +
-        '<td><div class="p-name" data-act="pick" data-cid="' + cid + '" style="cursor:pointer">' + esc(r.charname || "?") +
-          (online ? ' <span class="v good" style="font-size:11px;font-family:var(--font-mono)">● online</span>' : '') + '</div>' +
-          '<div class="p-sub">' + cid + (r.account ? ' · ' + esc(r.account) : '') + '</div></td>' +
-        '<td class="mono dim">' + esc(r.job || '–') + (r.gang && r.gang !== 'Keine Gang' ? ' / ' + esc(r.gang) : '') + '</td>' +
-        '<td class="num">' + fmtMoney(r.cash) + '<br><span style="color:var(--muted)">' + fmtMoney(r.bank) + '</span></td>' +
-        '<td><div class="row-actions">' + actions + '</div></td>' +
-      '</tr>';
+  function renderSearchResults(results,action,packet) {
+    var params={};try{params=typeof action.params==='string'?JSON.parse(action.params):action.params||{};}catch(_){}
+    var members=Array.isArray(params.discord_matches)?params.discord_matches:[];
+    var notice=params.lookup_incomplete===true?'<div class="msg">Discord-Namenssuche ist begrenzt auf bestätigte Guildtreffer; falls etwas fehlt, die genaue Discord-ID verwenden.</div>':'';
+    if(packet.has_more===true)notice+='<div class="msg">Mehr als 20 Charaktere gefunden. Bitte Suchbegriff eingrenzen; es wird kein Charakter automatisch gewählt.</div>';
+    if(!results.length){$('search-wrap').innerHTML=notice+'<div class="empty">Keine bestätigten Charaktertreffer für diese Suche.</div>';return;}
+    var onlineCids={};players.forEach(function(p){if(p.citizenid)onlineCids[p.citizenid]=true;});
+    var html=notice+'<div class="msg">'+results.length+' Charaktertreffer · CitizenID und Discord-Zuordnung vor einer Aktion prüfen.</div><table class="t"><thead><tr><th>Charakter / Discord</th><th>Job / Gang</th><th style="text-align:right">Cash / Bank</th><th style="text-align:right">Aktionen</th></tr></thead><tbody>';
+    results.forEach(function(r){
+      var cid=esc(r.citizenid),online=!!onlineCids[r.citizenid],actions='';
+      if(can('teleport'))actions+='<button class="abtn" data-act="tp" data-cid="'+cid+'" data-name="'+esc(r.charname)+'">TP→</button>';
+      if(can('view_inventory'))actions+='<button class="abtn" data-act="inv" data-cid="'+cid+'">Inventar</button>';
+      if(can('car_to_garage'))actions+='<button class="abtn" data-act="veh" data-cid="'+cid+'">Fahrzeuge</button>';
+      if(online&&can('message'))actions+='<button class="abtn" data-act="msg" data-cid="'+cid+'" data-name="'+esc(r.charname)+'">Nachricht</button>';
+      if(can('ban'))actions+='<button class="abtn danger" data-act="ban" data-cid="'+cid+'" data-name="'+esc(r.charname)+'">Ban</button>';
+      actions+='<button class="abtn" data-act="hist" data-cid="'+cid+'" data-name="'+esc(r.charname)+'">Akte</button>';
+      var discord='Keine gespeicherte Discord-Zuordnung';
+      if(typeof r.discord_id==='string'){
+        var member=members.find(function(m){return m&&m.id===r.discord_id;});
+        discord='Discord-ID '+r.discord_id;
+        if(member){var names=[member.username,member.display_name,member.global_name].filter(function(n,i,a){return typeof n==='string'&&n&&a.indexOf(n)===i;});discord+=' · '+names.join(' / ');}
+        else discord+=' · Name nicht in diesem Suchlauf bestätigt';
+      }
+      html+='<tr><td><div class="p-name" data-act="pick" data-cid="'+cid+'" style="cursor:pointer">'+esc(r.charname||'?')+(online?' <span class="v good">● online</span>':'')+'</div><div class="p-sub">'+cid+(r.character_slot!=null?' · Slot '+esc(r.character_slot):'')+(r.account?' · Account '+esc(r.account):'')+'</div><div class="p-sub">'+esc(discord)+'</div></td><td class="mono dim">'+esc(r.job||'–')+(r.gang&&r.gang!=='Keine Gang'?' / '+esc(r.gang):'')+'</td><td class="num">'+fmtMoney(r.cash)+'<br><span style="color:var(--muted)">'+fmtMoney(r.bank)+'</span></td><td><div class="row-actions">'+actions+'</div></td></tr>';
     });
-    $("search-wrap").innerHTML = html + "</tbody></table>";
+    $('search-wrap').innerHTML=html+'</tbody></table>';
   }
+
 
   /* ---------- Job & Gang ---------- */
 
@@ -2021,9 +2037,9 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     var html = "";
     var society = statsData.society || [];
     if (society.length) {
-      html += '<table class="t"><thead><tr><th>Fraktion / Firma</th><th style="text-align:right">Kontostand</th></tr></thead><tbody>';
+      html += '<table class="t"><thead><tr><th>Konto</th><th style="text-align:right">Kontostand</th></tr></thead><tbody>';
       society.forEach(function (s) {
-        html += '<tr><td>' + esc(s.name) + '</td><td class="num">' + fmtMoney(s.amount) + '</td></tr>';
+        html += '<tr><td>' + esc(s.name) + (s.player_name ? ' (' + esc(s.player_name) + ')' : '') + '</td><td class="num">' + fmtMoney(s.amount) + '</td></tr>';
       });
       html += '</tbody></table>';
     }
@@ -2728,7 +2744,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     if (previousPerms !== null && previousPerms !== perms.slice().sort().join("|")) {
       accessEpoch++;
       resetSupportState();
-      pendingQueries = {}; statsLoading = false;
+      pendingQueries = {}; statsLoading = false; clearPlayerSearchRequest();
       $("stats-refresh").disabled = false; $("search-btn").disabled = false;
       ["inv-modal","veh-modal","hist-modal","msg-modal","ban-modal"].forEach(closeModal);
       $("search-wrap").innerHTML = "";
@@ -2827,7 +2843,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   function rememberProfile(id) { try { if (id) localStorage.setItem("dnp_admin_profile",id); else localStorage.removeItem("dnp_admin_profile"); } catch (_) {} }
   function clearProfileContext() {
     sessionEpoch++; profileGeneration++; accessEpoch++;
-    viewScopes={};catalogRetryAt=0;
+    viewScopes={};catalogRetryAt=0;clearPlayerSearchRequest();
     if (pollTimer) clearTimeout(pollTimer);
     pollTimer = null; pollInFlight = null; pollFailures = 0;
     profileLoadPromise = null;

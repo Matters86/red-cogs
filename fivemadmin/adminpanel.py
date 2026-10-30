@@ -35,6 +35,8 @@ import time
 import secrets
 import hashlib
 import urllib.parse
+import re
+import unicodedata
 
 import aiohttp
 import discord
@@ -48,7 +50,7 @@ from .serverprofiles import Profiles, PROFILE_ID, ENV_NAME, ALLOWED_PROFILES
 log = logging.getLogger("red.adminpanel")
 
 # This identifies the loaded Python module independently of a later source copy.
-PANEL_BUILD = "2026-10-29-support-v2.2.1"
+PANEL_BUILD = "2026-10-29-support-v2.2.2"
 try:
     with open(__file__, "rb") as _module_source:
         LOADED_MODULE_SHA256 = hashlib.sha256(_module_source.read()).hexdigest()
@@ -156,6 +158,24 @@ def project_actions(actions, permissions):
         if permission is not None and permission in permissions:
             projected.append({key: action[key] for key in fields if key in action})
     return projected
+
+
+def _player_search_query(value):
+    if not isinstance(value, str):
+        raise ValueError('Suchbegriff muss Text sein.')
+    value = unicodedata.normalize('NFC', ' '.join(value.split()))
+    if not 2 <= len(value) <= 80 or any(unicodedata.category(c) in ('Cc', 'Cs') for c in value):
+        raise ValueError('Bitte 2 bis 80 gültige Zeichen eingeben.')
+    return value
+
+
+def _player_search_fold(value):
+    return ' '.join(''.join(c for c in unicodedata.normalize('NFKD', str(value).casefold())
+                            if not unicodedata.combining(c)).split())
+
+
+def _player_search_discord_id(value):
+    return isinstance(value, str) and re.fullmatch(r'[1-9][0-9]{0,19}', value) is not None and int(value) <= 18446744073709551615
 
 
 def _health_number(value, *, integer=False):
@@ -846,6 +866,8 @@ class AdminPanel(commands.Cog):
                         m = guild.get_member(int(did))
                         if m:
                             p["discord_name"] = m.display_name
+                            p["discord_username"] = m.name
+                            p["discord_global_name"] = getattr(m, "global_name", None)
                     enriched.append(p)
                 server["players"] = enriched
             if "server_status" in perms:
@@ -854,6 +876,111 @@ class AdminPanel(commands.Cog):
         if "view_logs" in perms:
             payload["events"] = await asyncio.to_thread(db.get_recent_events, 60)
         return web.json_response(payload)
+
+    async def _player_search_current(self, request, profile):
+        """Recheck the same live session, bound profile and role after async lookup."""
+        if self._closing or profile is None:
+            return False
+        original = request['session']
+        session = await asyncio.to_thread(db.get_session, original['token'])
+        if (not session or str(session.get('user_id')) != str(original.get('user_id'))
+                or str(session.get('guild_id')) != str(original.get('guild_id'))):
+            return False
+        member, permissions = await self.session_permissions(session)
+        if (member is None or 'view_players' not in permissions or self._closing
+                or str(member.guild.id) != str(original['guild_id'])
+                or self.profiles.select(profile.id, member.guild.id) is not profile
+                or db.current_profile() != profile.id):
+            return False
+        request['member'] = member
+        return True
+
+    async def _player_search_params(self, request, query, supplied):
+        if set(supplied) - {'query_kind'}:
+            raise ValueError('Nur die Suchart darf vom Browser gesetzt werden.')
+        kind = supplied.get('query_kind', 'character')
+        if kind not in ('character', 'discord'):
+            raise ValueError('Unbekannte Suchart.')
+        profile = self.profiles.select(request['profile']['id'], request['member'].guild.id)
+        if profile is None:
+            raise ValueError('Serverprofil ist nicht mehr freigegeben.')
+        key = (profile.id, str(request['member'].guild.id), str(request['member'].id))
+        gate = getattr(self, '_player_search_gate', None)
+        if gate is None:
+            gate = self._player_search_gate = {}
+        now = time.monotonic()
+        for old_key, state in list(gate.items()):
+            if not state['busy'] and now - state['at'] > 60:
+                gate.pop(old_key, None)
+        old = gate.get(key)
+        if old and (old['busy'] or now - old['at'] < 1):
+            raise ValueError('Suche läuft bereits oder wurde gerade gestartet. Bitte kurz warten.')
+        if old is None and len(gate) >= 256:
+            raise ValueError('Zu viele laufende Suchanfragen. Bitte kurz warten.')
+        state = {'at': now, 'busy': True}
+        gate[key] = state
+        try:
+            params = {'search_schema': 2, 'query_kind': kind}
+            if kind == 'discord':
+                guild = request['member'].guild
+                matches, seen = [], set()
+                needle = _player_search_fold(query.removeprefix('@'))
+                if len(needle) < 2:
+                    raise ValueError('Discord-Namen brauchen mindestens zwei Zeichen ohne @.')
+                cached = list(guild.members)
+                total = getattr(guild, 'member_count', None)
+                incomplete = not isinstance(total, int) or len(cached) < total
+
+                def push(member):
+                    identifier = str(getattr(member, 'id', ''))
+                    if (len(matches) >= 10 or not _player_search_discord_id(identifier)
+                            or identifier in seen or str(getattr(getattr(member, 'guild', None), 'id', '')) != str(guild.id)):
+                        return
+                    fields = {name: str(getattr(member, name, '') or '')[:100]
+                              for name in ('name', 'display_name', 'global_name')}
+                    seen.add(identifier)
+                    matches.append({'id': identifier, 'username': fields['name'],
+                                    'display_name': fields['display_name'], 'global_name': fields['global_name']})
+
+                raw_id = query.removeprefix('discord:').strip()
+                if _player_search_discord_id(raw_id):
+                    member = guild.get_member(int(raw_id))
+                    if member is None:
+                        try:
+                            member = await asyncio.wait_for(guild.fetch_member(int(raw_id)), timeout=4)
+                        except discord.NotFound:
+                            member = None
+                        except (discord.HTTPException, asyncio.TimeoutError):
+                            member, incomplete = None, True
+                    if member is not None:
+                        push(member)
+                    # An exact resolved ID is complete even if the guild cache is partial.
+                    incomplete = member is None and incomplete
+                else:
+                    for member in cached:
+                        if any(needle in _player_search_fold(getattr(member, field, '') or '')
+                               for field in ('name', 'display_name', 'global_name')):
+                            push(member)
+                            if len(matches) == 10:
+                                incomplete = True
+                                break
+                    # No full-guild chunk: one bounded gateway query only when cache coverage is partial.
+                    if incomplete and len(matches) < 10:
+                        try:
+                            found = await asyncio.wait_for(guild.query_members(query=query.removeprefix('@'), limit=10), timeout=4)
+                            for member in found:
+                                if any(needle in _player_search_fold(getattr(member, field, '') or '')
+                                       for field in ('name', 'display_name', 'global_name')):
+                                    push(member)
+                        except (discord.HTTPException, discord.ClientException, asyncio.TimeoutError):
+                            pass
+                params.update(discord_ids=[member['id'] for member in matches], discord_matches=matches,
+                              lookup_incomplete=incomplete)
+            if not await self._player_search_current(request, profile):
+                raise ValueError('Sitzung, Serverprofil oder Spielerleserecht hat sich geändert. Bitte erneut anmelden.')
+            return params
+        finally:
+            state['busy'] = False
 
     async def http_panel_action(self, request: web.Request):
         data = await self._read_json(request)
@@ -870,6 +997,13 @@ class AdminPanel(commands.Cog):
             return web.json_response({"error": "keine Berechtigung"}, status=403)
         if not target:
             return web.json_response({"error": "target fehlt"}, status=400)
+
+        if action_type == "search_player":
+            try:
+                target = _player_search_query(data.get("target"))
+                params = await self._player_search_params(request, target, params)
+            except ValueError as exc:
+                return web.json_response({"error": str(exc)}, status=400)
 
         if action_type in {"support_vehicle_search", "support_vehicle_case", "support_diagnose"}:
             if target != "*":

@@ -1,3 +1,68 @@
+## Aktuell: Support v2.2.2 und AP-Bridge 1.2.2 – Spielersuche
+
+Die bestehende Spieler-Datenbank bietet zwei Sucharten: **Charakter / Account / CID**
+und **Discord-Name / ID**. Vor-/Nachnamen dürfen teilweise, mit zusätzlichen
+Leerzeichen oder in anderer Reihenfolge eingegeben werden. Die Abfrage behandelt
+SQL-Platzhalterzeichen als Text. Die bestehende Unicode-Kollation unterstützt die
+Namenssuche unabhängig von Groß-/Kleinschreibung und üblichen Akzenten.
+
+Discord-Namen stammen ausschließlich von bestätigten Mitgliedern der zum gewählten
+Serverprofil gehörenden Discord-Guild: Benutzername, Anzeigename und globaler Name.
+Es gibt keine Anfrage beim Tippen und keinen vollständigen Guild-Chunk. Ein bewusst
+gestarteter Suchlauf nutzt den vorhandenen Member-Cache und bei unvollständiger
+Abdeckung höchstens eine begrenzte Gateway-Suche; eine genaue Discord-ID kann
+gezielt abgefragt werden. Unbestätigte Namen werden nicht aus Ingame-Namen geraten.
+Eine unvollständige Namenssuche wird angezeigt; bei fehlenden Treffern die genaue ID
+verwenden. Verlassene/nicht bestätigte Guild-Mitglieder werden nicht als aktuelle
+Discord-Namen erfunden. Normale Charakter-/CID-Suche bleibt verfügbar.
+
+Die eigentliche Verbindung wird auf FiveM ausschließlich über den vorhandenen
+Qbox-Schlüssel `players.userId = users.userId` und einen exakten gespeicherten
+Discord-Identifier geprüft. Mehrere Charaktere erscheinen als getrennte Zeilen mit
+CitizenID, Charakter-Slot und Discord-ID. Kein erster Treffer wird automatisch
+gewählt. Höchstens zehn Discord-Mitglieder und zwanzig Charaktere pro Suchlauf;
+weitere Treffer werden ausdrücklich angekündigt. Namen im alten Datenbestand ohne
+userId-Zuordnung bleiben unbekannt; kein unscharfer License-/Namens-Fallback.
+
+Cog und Bridge müssen gemeinsam aktualisiert werden. Eine alte Suchantwort ohne
+Suchschema 2 gilt nicht als bestätigter Treffer. `view_players`, aktuelle Session,
+Profilbindung und Rollen werden vor der Queueaufnahme erneut geprüft. Späte
+Antworten nach Eingabe-, Profil-, Session- oder Rechtewechsel malen keine neue
+Ansicht über. Der aktuelle Online-Filter berücksichtigt zusätzlich Discord-
+Benutzername und globalen Namen, weiterhin ausschließlich lokal.
+
+Der unveränderte bestehende 2.2.1-Portstart-/Abbruch-/OAuth-Guild-Lifecycle bleibt
+erhalten. Eine funktionierende Bot-/legacy-Verbindung wird nicht umgebunden. Dieser
+Quellbuild führt keine NAS-Aktivierung, keinen Bot-/FiveM-Neustart und keine
+Profil-/Datenbankänderung aus. Die folgenden älteren Versionsabschnitte sind Historie.
+
+### Suchindizes und Nachprüfung
+
+Im lesend geprüften Dev-Schema gibt es 15 Charaktere und keine fehlende userId.
+`users.userId` ist Primärschlüssel; `users.discord` und `players.userId` besitzen
+noch keinen Suchindex. Das tatsächliche MariaDB-EXPLAIN beider Abfragen bestätigt
+die Syntax und aktuell einen kleinen 15-Zeilen-Scan mit Primärschlüssel-Join.
+Für größere Bestände liegt separat `sql/001_optional_search_indexes_mariadb.sql` im
+Updatebeipack. Die Datei wird von keiner Resource ausgeführt. Vor bewusster
+Installation Datenbank/Indizes sichern und bestehende Definitionen prüfen. Ihre
+MariaDB-Syntax ist nicht ungeprüft auf MySQL zu übertragen. Ein vorhandener gleicher
+Indexname mit falscher Definition wird nicht ersetzt.
+
+### Performancegrenze bei Statistik
+
+`get_stats` startet bei der ersten Öffnung der Statistik-/Serveransicht mit
+Statistikrecht oder per Aktualisieren-Knopf; es ist kein periodischer Statistikpoll.
+Die bisherigen vollständigen 500-Zeilen-Inventarblöcke erhalten zusätzlich innerhalb
+der Decodeschleife ein Yield nach spätestens zehn Zeilen oder vier gemessenen
+Millisekunden. Alle Inventare und Summen werden weiter vollständig ausgewertet;
+keine heimliche Begrenzung von Gesamtbeständen. Ein einzelner sehr großer nativer
+JSON-Decode und die Datenbankabfragen selbst sind dadurch nicht unterbrechbar.
+Die normale Katalogsendung im Fünf-Minuten-Abstand bleibt unverändert und ist kein
+Nachweis für die gemeldeten Live-Hitches. Für eine Ursachen-/Lastabnahme ist ein
+aktueller Live-Profiler erforderlich. Der kontrollierte 500-Zeilen-Test beweist nur
+die korrigierte Arbeitsteilung, keine Hitchfreiheit auf dem Server.
+
+
 # Releaseprüfung 29.10.2026 – Support v2.2.1
 
 Dieser Quellbuild behebt bestätigte Zuordnungs- und Antwortfehler. Er ist kein Nachweis einer auf der Synology geladenen oder im Spiel getesteten Version. Alle 18 ursprünglichen Cog-Dateien sind vor der Änderung separat gesichert.
@@ -290,3 +355,7 @@ Speicherort (Code-Ordner) automatisch übernommen; die alte Datei bleibt als Sic
 Umgebungsvariablen (`ADMINPANEL_API_KEY`, `ADMINPANEL_WEB_PORT`, `ADMINPANEL_PUBLIC_URL`,
 `ADMINPANEL_MONEY_MAX`, `ADMINPANEL_ITEM_MAX`) sind nur noch Vorgaben – per Befehl gesetzte
 Werte haben Vorrang.
+
+### Konten mit Charakternamen
+
+In der Wirtschaftsübersicht bleibt die Kontokennung sichtbar. Stimmt eine Renewed-Kontokennung exakt (einschließlich Groß-/Kleinschreibung und Leerzeichen) mit einer `players.citizenid` überein, erscheint der Charaktername dahinter in Klammern. Die gemeinsame SQL-Leseabfrage verwendet keine Inhaber- oder Berechtigtenliste und führt keine Einzelabfrage je Konto aus. Ohne bestätigten Charakternamen bleibt nur die Kontokennung stehen; Firmen und Fraktionen erhalten keinen geratenen Spielernamen. Bestehende Statistikrechte gelten weiterhin.

@@ -1,3 +1,14 @@
+## 29.10.2026 – Support v2.2.2 / AP-Bridge 1.2.2
+
+- Konten zeigen bei exakt zugeordneten Charakter-IDs den Charakternamen in Klammern; Firmen- und Fraktionskonten behalten ihre eigene Kennung. Die Zuordnung erfolgt in einer gemeinsamen Leseabfrage.
+- Eine Rechteänderung während einer Spielersuche gibt die Suche wieder frei; verspätete Antworten können eine neue Suche nicht überschreiben.
+
+- Charakter-/Account-/CID-Suche mit Namensteilen, Unicode und literalem Wildcardtext.
+- Discord-Benutzer-/Anzeige-/Globalname und ID nur aus gebundener Guild; Charaktere ueber echten Qbox-userId-Schluessel. Mehrere Charaktere bleiben getrennte auswaehlbare CID-Zeilen.
+- Begrenzte manuelle Suche, keine Anfrage beim Tippen, keine unbelegte Offline-Namenszuordnung; Rollen-/Session-/Profilfences und alte Bridgeantworten abgesichert.
+- Statistik-JSON-Decodes innerhalb bestehender SQL-Bloecke zeit-/zeilenbegrenzt unterbrechen; alle Summen erhalten. Fuenf-Minuten-Katalog unveraendert, keine behauptete Live-Hitchursache.
+- Vorherige v2.2.1-Lifecycle-/OAuth-Korrekturen bleiben erhalten. Optionale Indizes nur separater bewusster MariaDB-Import, kein automatisches DDL.
+
 ## 29.10.2026 – Support v2.2.1, gezielter Start-/Login-Patch
 
 - Belegter Webport: fehlgeschlagene Site abmelden, neuer Listener je Versuch, Runner bei endgültigem Fehler oder Abbruch bereinigen. Kein falscher Laufstatus nach einem fehlgeschlagenen Bind.
