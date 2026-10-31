@@ -51,7 +51,7 @@ from .serverprofiles import Profiles, PROFILE_ID, ENV_NAME, ALLOWED_PROFILES
 log = logging.getLogger("red.adminpanel")
 
 # This identifies the loaded Python module independently of a later source copy.
-PANEL_BUILD = "2026-10-30-support-v2.2.4"
+PANEL_BUILD = "2026-10-31-support-v2.2.5"
 try:
     with open(__file__, "rb") as _module_source:
         LOADED_MODULE_SHA256 = hashlib.sha256(_module_source.read()).hexdigest()
@@ -91,7 +91,7 @@ DEFAULT_ITEM_MAX = int(os.environ.get("ADMINPANEL_ITEM_MAX", "100"))
 # (die "damit könnte man Schaden anrichten"-Menge).
 SENSITIVE_ACTIONS = {
     "money", "give_item", "remove_item", "park_all",
-    "set_job", "set_gang", "ban",
+    "set_job", "set_gang", "ban", "repair_vehicle",
 }
 
 # ------------------------------------------------------------------
@@ -101,7 +101,7 @@ SENSITIVE_ACTIONS = {
 _SUPPORT = {"view_players", "teleport", "heal", "revive", "car_to_garage", "view_inventory", "message",
             "support_cases", "support_vehicles", "support_diagnostics"}
 _MODERATOR = _SUPPORT | {"kick", "ban", "announce", "view_logs", "notes", "setjob"}
-_ADMIN = _MODERATOR | {"money", "items", "view_stats", "park_all", "audit"}
+_ADMIN = _MODERATOR | {"money", "items", "view_stats", "park_all", "audit", "repair_vehicle"}
 
 PRESETS = {
     "support": _SUPPORT,
@@ -120,6 +120,7 @@ ACTION_PERMISSION = {
     "teleport_coords": "teleport",
     "car_to_garage": "car_to_garage",
     "get_vehicles": "car_to_garage",
+    "repair_vehicle": "repair_vehicle",
     "heal": "heal",
     "revive": "revive",
     "kick": "kick",
@@ -293,6 +294,21 @@ def support_action_params(action_type, params, profile_id):
     else:
         raise ValueError("unsupported_action")
     return clean
+
+
+def repair_action_params(target, params):
+    if not isinstance(params, dict) or set(params) != {"vehicle_id", "expected_plate"}:
+        raise ValueError("repair_params_invalid")
+    vehicle_id = params["vehicle_id"]
+    expected = params["expected_plate"]
+    if type(vehicle_id) is not int or not 1 <= vehicle_id <= 2147483647:
+        raise ValueError("repair_vehicle_id_invalid")
+    if (not isinstance(target, str) or not isinstance(expected, str)
+            or not 1 <= len(target) <= 15 or not 1 <= len(expected) <= 15
+            or any(ord(c) < 32 for c in target + expected)
+            or not "".join(target.split()) or "".join(target.upper().split()) != "".join(expected.upper().split())):
+        raise ValueError("repair_plate_invalid")
+    return {"vehicle_id": vehicle_id, "expected_plate": expected}
 
 
 def parking_action_params(target, params):
@@ -1010,6 +1026,12 @@ class AdminPanel(commands.Cog):
                 return web.json_response({"error": "support_target_must_be_star"}, status=400)
             try:
                 params = support_action_params(action_type, params, request["profile"]["id"])
+            except ValueError as exc:
+                return web.json_response({"error": str(exc)}, status=400)
+
+        if action_type == "repair_vehicle":
+            try:
+                params = repair_action_params(target, params)
             except ValueError as exc:
                 return web.json_response({"error": str(exc)}, status=400)
 
@@ -1885,7 +1907,7 @@ class AdminPanel(commands.Cog):
                 st = state_names.get(v.get("state"), "?")
                 if v.get("state") == 1 and v.get("garage"):
                     st += f": {v['garage']}"
-                lines.append(f"**{v.get('vehicle', '?')}** · `{v.get('plate', '?')}` · {st}")
+                lines.append(f"**{v.get('vehicle', '?')}** · `{v.get('plate', '?')}` · {st}" + (f" · Leasing #{v.get('contract_id')}" if v.get("relation") == "lease" else ""))
             if len(vehicles) > 25:
                 lines.append(f"… und {len(vehicles) - 25} weitere")
             embed.description = "\n".join(lines)

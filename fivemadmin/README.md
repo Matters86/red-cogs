@@ -1,3 +1,7 @@
+## 31.10.2026 – Fahrzeugliste und Reparatur (Dev-Testbuild)
+
+Aktive Leasingfahrzeuge erscheinen beim Charakter. Eigenes Funktionsrecht `repair_vehicle` ergänzt die vorhandene Berechtigungsseite. Die vollständige Reparatur eines draußen vorhandenen, leeren Fahrzeugs kann auch ein Wrack wieder fahrbar machen; kein Ersatz-Spawn. Neue Bridge 1.3.0 und Cog 2026-10-31-support-v2.2.5 gemeinsam übernehmen. Keine SQL-Migration. Ingame-/Zwei-Client-Abnahme offen.
+
 ## Aktuell: 30.10.2026 – Support v2.2.4 / Funktionsrechte
 
 Die neue Seite **Berechtigungen** verwaltet Discord-Rollen mit 22 einzeln

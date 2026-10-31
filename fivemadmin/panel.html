@@ -1931,7 +1931,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
 
   function renderVehicles(vehicles) {
     if (!vehicles.length) {
-      $("veh-body").innerHTML = '<div class="empty">Keine Fahrzeuge auf diesen Charakter registriert.</div>';
+      $("veh-body").innerHTML = '<div class="empty">Keine eigenen oder aktiv geleasten Fahrzeuge gefunden.</div>';
       return;
     }
     var html = '<table class="t"><thead><tr>' +
@@ -1943,15 +1943,24 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
       if (v.state === 1 && v.garage) st += ": " + esc(v.garage);
       html += '<tr>' +
         '<td>' + esc(v.vehicle || "?") + (Number.isInteger(v.id) && v.id>0 && v.id<=2147483647 ? '<div class="p-sub">ID '+esc(v.id)+'</div>' : '<div class="p-sub">ID nicht bestätigt</div>') + '</td>' +
-        '<td class="mono dim">' + esc(v.plate || "?") + '</td>' +
+        '<td class="mono dim">' + esc(v.plate || "?") + (v.relation==="lease"?'<div class="p-sub">Leasing #'+esc(v.contract_id)+'</div>':'') + '</td>' +
         '<td><span class="v ' + stCls + '" style="font-family:var(--font-mono);font-size:12.5px">' + st + '</span></td>' +
-        '<td style="text-align:right"><button class="abtn" data-vplate="' + esc(v.plate || "") + '" data-vid="'+esc(Number.isInteger(v.id)?v.id:'')+'"'+(Number.isInteger(v.id)&&v.id>0&&v.id<=2147483647?'':' disabled')+'>Einparken</button></td>' +
+        '<td style="text-align:right"><button class="abtn" data-vplate="' + esc(v.plate || "") + '" data-vid="'+esc(Number.isInteger(v.id)?v.id:'')+'"'+(Number.isInteger(v.id)&&v.id>0&&v.id<=2147483647?'':' disabled')+'>Einparken</button>' + (can('repair_vehicle')&&Number.isInteger(v.id)&&v.id>0&&v.id<=2147483647&&v.state===0?'<button class="abtn" data-repair-id="'+esc(v.id)+'" data-repair-plate="'+esc(v.plate||'')+'">Reparieren</button>':'') + '</td>' +
       '</tr>';
     });
     $("veh-body").innerHTML = html + "</tbody></table>";
   }
 
   $("veh-body").addEventListener("click", function (ev) {
+    var repair=ev.target.closest("[data-repair-id]");
+    if(repair){
+      var rv=viewScopes["veh-modal"],ri=Number(repair.dataset.repairId),rp=repair.dataset.repairPlate;
+      if(!viewCurrent(rv)||!can("repair_vehicle")||!Number.isInteger(ri)||ri<1||ri>2147483647)return;
+      if(!window.confirm("Fahrzeug "+rp+" (#"+ri+") vollständig reparieren? Auch ein vorhandenes Wrack wird instand gesetzt. Alle müssen ausgestiegen sein."))return;
+      repair.disabled=true;
+      createAction("repair_vehicle",rp,{vehicle_id:ri,expected_plate:rp},"players-msg",rv);
+      return;
+    }
     var el = ev.target.closest("[data-vplate]");
     if (!el) return;
     var plate = el.getAttribute("data-vplate"),id=Number(el.getAttribute("data-vid")),view=viewScopes["veh-modal"];
@@ -2627,7 +2636,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   }
   function actionClass(a) { return a.profile_queue_hold === true || a.profile_queue_hold === 1 || a.result_review_required === true || a.result_review_required === 1 ? "pending" : esc(a.status); }
   var TYPE_DE = {
-    teleport: "Teleport", teleport_coords: "TP Koordinaten", car_to_garage: "Einparken",
+    teleport: "Teleport", teleport_coords: "TP Koordinaten", car_to_garage: "Einparken", repair_vehicle: "Fahrzeug reparieren",
     get_vehicles: "Fahrzeuge", heal: "Heal", revive: "Revive", kick: "Kick",
     announce: "Ansage", money: "Geld", get_stats: "Statistik",
     give_item: "Item geben", remove_item: "Item nehmen", get_inventory: "Inventar",
@@ -2658,6 +2667,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
       return t + ' <span class="arrow">→</span> ' + dispTarget(p.to_citizenid || p.to_spieler);  // Discord-Befehl nutzt to_spieler
     if (a.action_type === "teleport_coords")
       return t + ' <span class="arrow">→</span> ' + esc(p.x) + ", " + esc(p.y) + ", " + esc(p.z);
+    if (a.action_type === "repair_vehicle") return t + " · vollständige Reparatur · ID " + esc(p.vehicle_id);
     if (a.action_type === "car_to_garage")
       return t + ' <span class="arrow">→</span> ' + esc(p.garage || "?");
     if (a.action_type === "announce")
@@ -3398,6 +3408,15 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
       var card=document.createElement("section");card.className="card";card.style.marginTop="20px";
       card.innerHTML='<div class="list-head"><h2>Fahrzeugakte #'+esc(v.id)+'</h2><span class="count">'+esc(ownerKind(v.holder?.kind))+'</span></div><div class="vehicle-datagrid"><div><span class="data-label">Modell</span><span class="data-value">'+esc(v.model||"Unbestätigt")+'</span></div><div><span class="data-label">Gespeichertes Kennzeichen</span><span class="data-value">'+esc(v.plate||"Unbestätigt")+'</span></div><div><span class="data-label">Datenbankstatus</span><span class="data-value">'+esc(vehicleDatabaseState(v.state))+'</span></div><div><span class="data-label">Garage</span><span class="data-value">'+esc(v.garage||"Unbestätigt")+'</span></div></div>'+renderReadReport(report);
       card.querySelector(".vehicle-datagrid").insertAdjacentHTML("afterend",vehicleObservedSummary(report));
+      if(can("repair_vehicle")&&v.state===0&&Number.isInteger(v.id)&&v.id>0&&v.id<=2147483647&&v.plate){
+        var repairContext={session:sessionEpoch,access:accessEpoch,profile:profileGeneration};
+        var repair=document.createElement("button");repair.type="button";repair.className="btn ghost";repair.textContent="Vorhandenes Fahrzeug reparieren";
+        repair.addEventListener("click",function(){
+          if(state!==supportState||state.vehicleCaseEpoch!==sequence||state.vehicleReport!==report||!can("repair_vehicle")||repairContext.session!==sessionEpoch||repairContext.access!==accessEpoch||repairContext.profile!==profileGeneration)return;
+          if(!window.confirm("Fahrzeug "+v.plate+" (#"+v.id+") einschließlich Wrackschäden vollständig reparieren?"))return;
+          repair.disabled=true;createAction("repair_vehicle",v.plate,{vehicle_id:v.id,expected_plate:v.plate},"vehicle-msg");
+        });card.append(repair);
+      }
       var previous=$("vehicle-results").querySelector("[data-vehicle-detail]");if(previous)previous.remove();card.dataset.vehicleDetail="true";$("vehicle-results").append(card);
       setMsg("vehicle-msg","Fahrzeugakte als lesende Momentaufnahme geladen. Keine Reparatur oder Freigabe ausgeführt.","");
       if(can("support_cases"))renderReportSave(card,action.id,report);

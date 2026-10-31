@@ -1,3 +1,11 @@
+## 31.10.2026 – Support v2.2.5 (Dev-Testbuild)
+
+- Aktive Leasingfahrzeuge in Charakterliste/CitizenID-Fahrzeugakte mit überprüfter Vertragszuordnung berücksichtigen.
+- Einzeln zuweisbares Reparaturrecht; Bestätigung und Audit für vollständige Reparatur desselben vorhandenen Weltfahrzeugs einschließlich Wracks.
+- Persistente Fahrzeug-ID, Eigentümer, Modell, Kennzeichen, Netzwerkbesitzer und QBX-Operation prüfen; keine Schlüssel-/Besitzeränderung und kein Ersatz-Spawn.
+- Client- und Speicherrückmeldung notwendig, unbestätigter Ausgang bleibt zur Prüfung gesperrt.
+- Automatisierte Fixturetests bestanden; Ingame-/Zwei-Client-/Live-Abnahme offen.
+
 ## 30.10.2026 – Support v2.2.4
 
 - Eigene Berechtigungsseite mit Discord-Rollenauswahl und 22 Funktionsbereichen;

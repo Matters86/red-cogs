@@ -14,6 +14,7 @@ PERMISSION_CATALOG = [
     {"id": "notes", "group": "Moderation", "label": "Spielerakten und Notizen"},
     {"id": "setjob", "group": "Moderation", "label": "Job und Gang ändern"},
     {"id": "car_to_garage", "group": "Fahrzeuge", "label": "Fahrzeugliste und einzelnes Einparken"},
+    {"id": "repair_vehicle", "group": "Fahrzeuge", "label": "Fahrzeuge einschließlich vorhandener Wracks reparieren"},
     {"id": "park_all", "group": "Fahrzeuge", "label": "Alle geeigneten Fahrzeuge einparken"},
     {"id": "support_vehicles", "group": "Support", "label": "Fahrzeugakte und Fahrzeugsuche"},
     {"id": "support_cases", "group": "Support", "label": "Supportfälle, Übergaben und Fotos"},
