@@ -51,7 +51,7 @@ from .serverprofiles import Profiles, PROFILE_ID, ENV_NAME, ALLOWED_PROFILES
 log = logging.getLogger("red.adminpanel")
 
 # This identifies the loaded Python module independently of a later source copy.
-PANEL_BUILD = "2026-10-31-support-v2.2.5"
+PANEL_BUILD = "2026-10-31-support-v2.2.6"
 try:
     with open(__file__, "rb") as _module_source:
         LOADED_MODULE_SHA256 = hashlib.sha256(_module_source.read()).hexdigest()
@@ -151,7 +151,7 @@ def project_actions(actions, permissions):
         "id", "action_type", "target", "target_name", "params", "status", "result",
         "created_by", "created_at", "completed_at", "result_review_required",
         "result_review_reason", "audit_delivery", "audit_claimed_at", "audit_completed_at",
-        "profile_queue_hold",
+        "profile_queue_hold", "dispatch_hold_reason",
     )
     projected = []
     for action in actions:
@@ -247,9 +247,12 @@ def support_action_params(action_type, params, profile_id):
             raise ValueError("use_kinds_array")
         clean["query"] = text("query", 50, required=True)
         query_kind = params.get("query_kind")
-        if query_kind is not None and query_kind not in ("vehicleId", "plate", "citizenid"):
+        if query_kind is not None and query_kind not in ("vehicleId", "plate", "citizenid", "character"):
             raise ValueError("query_kind_invalid")
         query = clean["query"]
+        if query_kind == "character" and (len(query) < 2 or len(query.split()) > 4
+                or any(unicodedata.category(c).startswith("C") for c in query)):
+            raise ValueError("character_name_invalid")
         numeric_id = query.isascii() and query.isdigit() and query == str(int(query)) and 1 <= int(query) <= 2147483647
         if query_kind == "vehicleId" and not numeric_id:
             raise ValueError("vehicle_id_invalid")
@@ -692,7 +695,7 @@ class AdminPanel(commands.Cog):
             if profile is None:
                 return web.json_response({"error": "server_profile_forbidden"}, status=403)
             request["profile"] = profile.public(internal=True)
-            with db.profile_scope(profile.id):
+            with db.profile_scope(profile.id), db.author_scope(member.id, member.guild.id):
                 return await handler(request)
         return await handler(request)
 
@@ -1116,11 +1119,90 @@ class AdminPanel(commands.Cog):
              "expires_at": b.get("expires_at")}
             for b in active_bans
         ]
-        # Im Lockdown werden keine offenen Aktionen ausgeliefert (Not-Aus).
-        actions = await asyncio.to_thread(db.get_pending_actions)
+        # Recheck the stable creator's current rights before handing pending work to FiveM.
+        # Lockdown remains an additional gate, not a substitute for author checks.
+        actions = await self._actions_for_bridge(request["profile"])
         if await self.profile_locked():
             actions = [action for action in actions if action["action_type"] in READ_ACTIONS]
         return web.json_response({"actions": actions, "bans": bans})
+
+    async def _queued_action_authorization(self, action, profile, members):
+        """One concrete capability, fresh Discord state, and the original guild/profile."""
+        uid, gid, pid = (action.get(key) for key in
+                         ("author_user_id", "author_guild_id", "author_profile_id"))
+        if any(not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]{0,23}", value)
+               for value in (uid, gid)) or not isinstance(pid, str):
+            return "author_unverified", True
+        if (pid != profile.get("id") or pid != db.current_profile()
+                or gid != str(profile.get("guild_id")) or self.profiles.select(pid, gid) is None):
+            return "author_profile_mismatch", True
+        permission = ACTION_PERMISSION.get(action.get("action_type"))
+        if permission is None:
+            return "action_type_unknown", True
+        if not self.bot.is_ready():
+            return "authorization_unavailable", False
+        guild = self.bot.get_guild(int(gid))
+        if guild is None or getattr(guild, "unavailable", False):
+            return "authorization_unavailable", False
+        member = guild.get_member(int(uid))
+        from_cache = member is not None
+        if member is None:
+            key = (gid, uid)
+            if key not in members:
+                try:
+                    members[key] = await guild.fetch_member(int(uid))
+                except discord.NotFound:
+                    members[key] = None
+                except Exception:
+                    members[key] = False
+                    return "authorization_unavailable", False
+            if members[key] is False:
+                return "authorization_unavailable", False
+            member = members[key]
+        if member is None:
+            return "author_membership_revoked", True
+        if str(member.id) != uid or str(member.guild.id) != gid or member.guild is not guild:
+            return "author_profile_mismatch", True
+        fingerprint = (tuple(role.id for role in member.roles),
+                       bool(member.guild_permissions.administrator))
+        permissions = await self.member_permissions(member)
+        current = guild.get_member(int(uid))
+        if from_cache and current is None:
+            return "authorization_unavailable", False
+        current = current or member
+        if (not self.bot.is_ready() or self.bot.get_guild(int(gid)) is not guild
+                or getattr(guild, "unavailable", False) or current.guild is not guild
+                or str(current.id) != uid or str(current.guild.id) != gid
+                or fingerprint != (tuple(role.id for role in current.roles),
+                                   bool(current.guild_permissions.administrator))):
+            return "authorization_unavailable", False
+        if self.profiles.select(pid, gid) is None or db.current_profile() != pid:
+            return "author_profile_mismatch", True
+        return (None, False) if permission in permissions else ("author_permission_revoked", True)
+
+    async def _actions_for_bridge(self, profile):
+        actions = await asyncio.to_thread(db.get_pending_actions, 50)
+        result, members = [], {}
+        # A disconnected Discord API must not delay every game sync by N timeouts.
+        deadline = time.monotonic() + 2.5
+        for action in actions:
+            try:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    reason, permanent = "authorization_unavailable", False
+                else:
+                    reason, permanent = await asyncio.wait_for(
+                        self._queued_action_authorization(action, profile, members), timeout=remaining)
+            except Exception:
+                reason, permanent = "authorization_unavailable", False
+            if reason:
+                await asyncio.to_thread(db.hold_action_dispatch, action["id"], reason, permanent=permanent)
+                continue
+            checked = await asyncio.to_thread(db.prepare_action_dispatch, action["id"],
+                action["author_user_id"], action["author_guild_id"], action["author_profile_id"])
+            if checked is not None:
+                result.append(checked)
+        return result
 
     async def _dispatch_alerts(self, events: list):
         """Postet alert-/warn-Events sofort in den konfigurierten Discord-Channel."""
@@ -1565,9 +1647,16 @@ class AdminPanel(commands.Cog):
         manager = db.profile_scope(profile.id)
         manager.__enter__()
         ctx._adminpanel_profile_scope = manager
+        author_manager = db.author_scope(ctx.author.id, ctx.guild.id)
+        author_manager.__enter__()
+        ctx._adminpanel_author_scope = author_manager
         ctx.adminpanel_profile = profile.public(internal=True)
 
     async def cog_after_invoke(self, ctx):
+        author_manager = getattr(ctx, "_adminpanel_author_scope", None)
+        if author_manager is not None:
+            del ctx._adminpanel_author_scope
+            author_manager.__exit__(None, None, None)
         manager = getattr(ctx, "_adminpanel_profile_scope", None)
         if manager is not None:
             del ctx._adminpanel_profile_scope

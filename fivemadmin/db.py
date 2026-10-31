@@ -22,6 +22,7 @@ from typing import Optional
 _LEGACY_DIR = Path(__file__).parent
 DB_PATH = _LEGACY_DIR / "adminpanel.sqlite3"
 _PROFILE = ContextVar("adminpanel_server_profile", default=None)
+_AUTHOR = ContextVar("adminpanel_action_author", default=None)
 _PROFILE_PATHS = {}
 _PROFILE_SCOPING_REQUIRED = False
 
@@ -87,6 +88,22 @@ def profile_scope(profile_id):
         yield profile_id
     finally:
         _PROFILE.reset(token)
+
+
+@contextmanager
+def author_scope(user_id, guild_id):
+    """Only authenticated HTTP/Discord callers supply these IDs, never payload fields."""
+    profile_id = current_profile()
+    values = tuple(str(value) for value in (user_id, guild_id))
+    if (profile_id not in _PROFILE_PATHS or any(
+            not value.isascii() or not value.isdigit() or not 1 <= len(value) <= 24
+            or int(value) <= 0 or str(int(value)) != value for value in values)):
+        raise ValueError("action_author_invalid")
+    token = _AUTHOR.set((*values, profile_id))
+    try:
+        yield
+    finally:
+        _AUTHOR.reset(token)
 
 
 def get_conn(*, auth=False):
@@ -184,11 +201,23 @@ def init_db(*, auth=False):
             ("audit_claimed_at", "REAL"),
             ("audit_completed_at", "REAL"),
             ("profile_queue_hold", "INTEGER NOT NULL DEFAULT 0"),
+            ("author_user_id", "TEXT"),
+            ("author_guild_id", "TEXT"),
+            ("author_profile_id", "TEXT"),
+            ("dispatch_hold_reason", "TEXT"),
         ):
             if name not in columns:
                 conn.execute(f"ALTER TABLE actions ADD COLUMN {name} {definition}")
                 if name == "profile_queue_hold":
                     conn.execute("UPDATE actions SET profile_queue_hold = 1 WHERE status = 'pending'")
+        # Old pending actions have no verifiable Discord author. Never infer identity
+        # from display names, silently release them, or recreate them on upgrade.
+        conn.execute("""
+            UPDATE actions SET profile_queue_hold = 1,
+                dispatch_hold_reason = COALESCE(dispatch_hold_reason, 'author_unverified_legacy')
+            WHERE status = 'pending' AND
+                (author_user_id IS NULL OR author_guild_id IS NULL OR author_profile_id IS NULL)
+        """)
         from . import support_store
         support_store.install(conn)
         conn.commit()
@@ -201,21 +230,64 @@ def init_db(*, auth=False):
 def add_action(action_type: str, target: str, params: Optional[str], created_by: str) -> str:
     action_id = str(uuid.uuid4())
     with closing(get_conn()) as conn:
+        author = _AUTHOR.get()
+        verified = author is not None and author[2] == current_profile()
         conn.execute(
-            "INSERT INTO actions (id, action_type, target, params, created_by, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (action_id, action_type, target, params, created_by, time.time()),
+            "INSERT INTO actions (id, action_type, target, params, created_by, created_at, "
+            "author_user_id, author_guild_id, author_profile_id, profile_queue_hold, dispatch_hold_reason) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (action_id, action_type, target, params, created_by, time.time(),
+             *(author if verified else (None, None, None)),
+             0 if verified else 1, None if verified else "author_unverified"),
         )
         conn.commit()
     return action_id
 
 
-def get_pending_actions():
+def get_pending_actions(limit=50):
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+        raise ValueError("pending_limit_invalid")
     with closing(get_conn()) as conn:
         rows = conn.execute(
-            "SELECT * FROM actions WHERE status = 'pending' AND profile_queue_hold = 0 ORDER BY created_at ASC"
+            "SELECT * FROM actions WHERE status = 'pending' AND profile_queue_hold = 0 "
+            "ORDER BY created_at ASC, id ASC LIMIT ?", (limit,)
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def hold_action_dispatch(action_id, reason, *, permanent):
+    """Known revocation is held for review; outages retry without granting rights."""
+    allowed = {"author_unverified", "author_profile_mismatch", "author_permission_revoked",
+               "author_membership_revoked", "authorization_unavailable", "action_type_unknown"}
+    if reason not in allowed:
+        raise ValueError("dispatch_reason_invalid")
+    with closing(get_conn()) as conn:
+        conn.execute(
+            "UPDATE actions SET dispatch_hold_reason = ?, "
+            "profile_queue_hold = CASE WHEN ? THEN 1 ELSE profile_queue_hold END "
+            "WHERE id = ? AND status = 'pending' AND "
+            "(dispatch_hold_reason IS NOT ? OR (? AND profile_queue_hold = 0))",
+            (reason, bool(permanent), action_id, reason, bool(permanent))
+        )
+        conn.commit()
+
+
+def prepare_action_dispatch(action_id, user_id, guild_id, profile_id):
+    """Recheck the same pending record after Discord awaits, before delivery."""
+    if profile_id != current_profile():
+        return None
+    with closing(get_conn()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT * FROM actions WHERE id = ? AND status = 'pending' AND profile_queue_hold = 0 "
+            "AND author_user_id = ? AND author_guild_id = ? AND author_profile_id = ?",
+            (action_id, user_id, guild_id, profile_id),
+        ).fetchone()
+        if row is None:
+            return None
+        conn.execute("UPDATE actions SET dispatch_hold_reason = NULL WHERE id = ? AND dispatch_hold_reason IS NOT NULL", (action_id,))
+        conn.commit()
+    return {key: row[key] for key in ("id", "action_type", "target", "params")}
 
 
 def _flag_result_review(conn, action_id: str, reason: str):

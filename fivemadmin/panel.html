@@ -614,7 +614,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
       Android/Chrome: Menü ⋮ → „App installieren“<br>
       iPhone/Safari: Teilen <span style="font-family:var(--font-mono)">⎋</span> → „Zum Home-Bildschirm“
     </p>
-    <p class="sub" id="panel-build-gate">Oberfläche: 29.10.2026 · Support v2.2.2</p>
+    <p class="sub" id="panel-build-gate">Oberfläche: 31.10.2026 · Support v2.2.6</p>
   </div>
 </div>
 
@@ -677,7 +677,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     <div class="vehicle-workspace">
       <section class="card">
         <div class="list-head"><h2>Fahrzeugakte suchen</h2><span class="count">Nur lesend</span></div>
-        <form id="vehicle-search-form"><div class="vehicle-search-fields"><div><label for="vehicle-query-kind">Suche über</label><select id="vehicle-query-kind"><option value="vehicleId">Fahrzeug-ID</option><option value="plate">Kennzeichen</option><option value="citizenid">CitizenID</option></select></div><div><label for="vehicle-query">Fahrzeug oder Halter</label><input id="vehicle-query" placeholder="Zum Beispiel 318" maxlength="50" required></div><div><label for="vehicle-holder-filter">Fahrzeugart</label><select id="vehicle-holder-filter"><option value="">Alle</option><option value="private">Privat</option><option value="lease">Leasing</option><option value="faction">Fraktion</option></select></div><button class="btn" id="vehicle-search-submit" type="submit">Akte suchen</button></div></form>
+        <form id="vehicle-search-form"><div class="vehicle-search-fields"><div><label for="vehicle-query-kind">Suche über</label><select id="vehicle-query-kind"><option value="vehicleId">Fahrzeug-ID</option><option value="plate">Kennzeichen</option><option value="citizenid">CitizenID</option><option value="character">Charaktername</option></select></div><div><label for="vehicle-query">Fahrzeug oder Halter</label><input id="vehicle-query" placeholder="Zum Beispiel 318" maxlength="50" required></div><div><label for="vehicle-holder-filter">Fahrzeugart</label><select id="vehicle-holder-filter"><option value="">Alle</option><option value="private">Privat</option><option value="lease">Leasing</option><option value="faction">Fraktion</option></select></div><button class="btn" id="vehicle-search-submit" type="submit">Akte suchen</button></div></form>
         <p class="hint" style="margin-top:12px">Gespeicherte Daten und das Fahrzeug im Spiel werden getrennt angezeigt. Ein Kennzeichentreffer allein bestätigt keine eindeutige Fahrzeugidentität.</p>
         <div class="msg" id="vehicle-msg" role="status" aria-live="polite"></div>
       </section>
@@ -919,7 +919,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
           <button class="btn small" id="diag-btn" style="margin-left:auto">Prüfen</button>
         </div>
         <p class="hint">Prüft, ob DB, Exports, Tabellen und das Society-System zu diesem Server passen – ideal beim ersten Livegang.</p>
-        <p class="hint" id="panel-build-server">Oberfläche: 29.10.2026 · Support v2.2.2. Die FiveM-Bridge wird getrennt aktualisiert.</p>
+        <p class="hint" id="panel-build-server">Oberfläche: 31.10.2026 · Support v2.2.6. Die FiveM-Bridge wird getrennt aktualisiert.</p>
         <div id="diag-wrap"><div class="empty">Noch nicht geprüft.</div></div>
       </section>
     </div>
@@ -1877,6 +1877,9 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     ids.forEach(function(id){
       var query=pendingQueries[id],action=byId[id];
       if (!query.current()) {delete pendingQueries[id];return;}
+      if (action && action.status==='pending' && (action.profile_queue_hold===true || action.profile_queue_hold===1)) {
+        delete pendingQueries[id];query.onFail(actionStatus(action)+'. Bitte den angehaltenen Auftrag im Protokoll prüfen.');return;
+      }
       if (action && (action.status==='done' || action.status==='failed')) {
         delete pendingQueries[id];
         if (action.status==='failed' || action.result_review_required===true) return query.onFail('Serverergebnis nicht bestätigt. Bitte das Aktionsprotokoll prüfen.');
@@ -2628,13 +2631,16 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
 
   var STATUS_DE = { pending: "Offen · nicht bestätigt", done: "Erledigt", failed: "Fehlgeschlagen" };
   function actionStatus(a) {
-    if (a.profile_queue_hold === true || a.profile_queue_hold === 1) return "Altauftrag · Prüfung nötig";
+    if (a.status === "pending" && (a.profile_queue_hold === true || a.profile_queue_hold === 1)) {
+      var held={author_unverified_legacy:"Altauftrag · Autor nicht verifizierbar",author_unverified:"Angehalten · Autor nicht verifiziert",author_profile_mismatch:"Angehalten · Profilbindung abweichend",author_permission_revoked:"Angehalten · Berechtigung entzogen",author_membership_revoked:"Angehalten · Discord-Mitgliedschaft beendet",action_type_unknown:"Angehalten · Aktion unbekannt"};
+      return held[a.dispatch_hold_reason]||"Angehalten · Prüfung nötig";
+    }
+    if (a.status === "pending" && a.dispatch_hold_reason === "authorization_unavailable") return "Wartet · Discord-Prüfung nicht verfügbar";
     if (a.result_review_required === true || a.result_review_required === 1) return a.result_review_reason === "terminal_callback_conflict" ? "Prüfung nötig · Ergebnis widersprüchlich" : "Prüfung nötig · Abschluss nicht eindeutig";
     if (a.status === "pending" && lastServer && lastServer.bridge && lastServer.bridge.mutation_queue_ready === false && READ_ACTIONS.indexOf(a.action_type) === -1) return "Angehalten · Prüfung nötig";
-    if (a.profile_queue_hold === true || a.profile_queue_hold === 1) return "Altauftrag · Prüfung nötig";
     return STATUS_DE[a.status] || esc(a.status);
   }
-  function actionClass(a) { return a.profile_queue_hold === true || a.profile_queue_hold === 1 || a.result_review_required === true || a.result_review_required === 1 ? "pending" : esc(a.status); }
+  function actionClass(a) { return a.status === "pending" && (a.profile_queue_hold === true || a.profile_queue_hold === 1) || a.result_review_required === true || a.result_review_required === 1 ? "pending" : esc(a.status); }
   var TYPE_DE = {
     teleport: "Teleport", teleport_coords: "TP Koordinaten", car_to_garage: "Einparken", repair_vehicle: "Fahrzeug reparieren",
     get_vehicles: "Fahrzeuge", heal: "Heal", revive: "Revive", kick: "Kick",
@@ -3138,6 +3144,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     $("case-list").innerHTML='<div class="empty">Wähle einen freigegebenen Server.</div>';
     $("case-workspace").innerHTML='<div class="empty">Wähle einen Fall oder lege einen neuen an.</div>';
     $("vehicle-results").textContent="";$("support-diag-report").textContent="";
+    $("vehicle-search-submit").disabled=false;
     $("case-workspace").closest(".support-layout").classList.remove("case-open");
     ["case-list-msg","vehicle-msg","support-diag-msg"].forEach(function (id) { setMsg(id,"",""); });
   }
@@ -3371,7 +3378,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   }
   function searchVehicleRecords(cursor) {
     var state=supportState,query=$("vehicle-query").value.trim(),kind=$("vehicle-query-kind").value;
-    if(!query)return setMsg("vehicle-msg","Bitte Fahrzeug-ID, Kennzeichen oder CitizenID eingeben.","err");
+    if(!query)return setMsg("vehicle-msg","Bitte Fahrzeug-ID, Kennzeichen, CitizenID oder Charaktername eingeben.","err");
     if(kind==="vehicleId"&&(!/^[1-9]\d*$/.test(query)||!Number.isSafeInteger(Number(query))||Number(query)>2147483647))return setMsg("vehicle-msg","Bitte eine positive persistente Fahrzeug-ID eingeben.","err");
     if((query.length<2 && !(kind==="vehicleId" && /^[1-9]$/.test(query)) && !(kind==="citizenid" && /^[A-Za-z0-9_-]$/.test(query)))||query.length>50)return setMsg("vehicle-msg","Für die Suche ein gültiges Fahrzeug oder 2 bis 50 Zeichen eingeben.","err");
     if(kind==="plate"&&query.length>15)return setMsg("vehicle-msg","Kennzeichen dürfen höchstens 15 Zeichen enthalten.","err");
@@ -3379,11 +3386,21 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     if(holder)params.kinds=[holder];
     if(cursor&&state.vehicleSearchParams)params=Object.assign({},state.vehicleSearchParams,{cursor:cursor});
     else state.vehicleSearchParams=Object.assign({},params);
-    var sequence=(state.vehicleSearchEpoch||0)+1;state.vehicleSearchEpoch=sequence;state.vehicleCaseEpoch=(state.vehicleCaseEpoch||0)+1;state.vehicleReport=null;
+    var sequence=(state.vehicleSearchEpoch||0)+1;state.vehicleSearchEpoch=sequence;state.vehicleCaseEpoch=(state.vehicleCaseEpoch||0)+1;state.vehicleReport=null;state.vehicleCharacters=[];
     $("vehicle-search-submit").disabled=true;$("vehicle-results").innerHTML='<div class="support-loading">Gespeicherte Fahrzeuge werden gesucht …</div>';
     setMsg("vehicle-msg","Lesende Serverabfrage läuft. Ein Auftrag ist noch kein Ergebnis.","");
     readAction("support_vehicle_search",params,function(report,action){
       if(state.vehicleSearchEpoch!==sequence)return;$("vehicle-search-submit").disabled=false;
+      if(confirmedReadReport(report)&&params.query_kind==="character"&&report.requires_character_selection===true&&Array.isArray(report.characters)&&report.characters.length<=20){
+        var characters=report.characters,seen=new Set();
+        if(characters.some(function(character){if(!character||typeof character.name!=="string"||!character.name||character.name.length>400||typeof character.citizenid!=="string"||!/^[A-Za-z0-9_-]{1,50}$/.test(character.citizenid)||seen.has(character.citizenid))return true;seen.add(character.citizenid);return false;})){
+          $("vehicle-results").innerHTML='<div class="empty">Die Charakterzuordnung wurde nicht eindeutig bestätigt.</div>';return;
+        }
+        state.vehicleSearch=report;state.vehicleCharacters=characters;
+        $("vehicle-results").innerHTML='<div class="vehicle-records">'+characters.map(function(character,index){return '<section class="card"><h3>'+esc(character.name)+'</h3><p class="case-footnote">CitizenID: '+esc(character.citizenid)+'</p><button type="button" class="btn ghost small" data-vehicle-character="'+index+'" data-vehicle-character-epoch="'+sequence+'">Fahrzeuge dieses Charakters suchen</button></section>';}).join("")+'</div>'+(characters.length?'':'<div class="empty">Kein passender Charakter in dieser bestätigten Momentaufnahme.</div>');
+        setMsg("vehicle-msg",report.truncated?"Mehr als 20 Charaktere gefunden. Suchbegriff bitte eingrenzen.":"Bitte den gewünschten Charakter ausdrücklich auswählen.","");
+        return;
+      }
       if(!confirmedReadReport(report)||!Array.isArray(report.vehicles)){$("vehicle-results").innerHTML='<div class="empty">Die Fahrzeugsuche wurde nicht eindeutig bestätigt.</div>';setMsg("vehicle-msg","Kein bestätigtes Suchergebnis. Den Auftrag im Protokoll prüfen.","err");return;}
       state.vehicleSearch=report;
       $("vehicle-results").innerHTML='<div class="vehicle-records">'+report.vehicles.map(function(vehicle){
@@ -3489,8 +3506,16 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     });
   }
   $("vehicle-search-form").addEventListener("submit",function(event){event.preventDefault();searchVehicleRecords();});
-  $("vehicle-query-kind").addEventListener("change",function(){$("vehicle-query").placeholder=this.value==="vehicleId"?"Zum Beispiel 318":this.value==="plate"?"Zum Beispiel LS GM 01":"CitizenID des Halters";});
-  $("vehicle-results").addEventListener("click",function(event){var button=event.target.closest("[data-vehicle-case]");if(button)openVehicleRecord(Number(button.dataset.vehicleCase));var next=event.target.closest("[data-vehicle-next]");if(next)searchVehicleRecords(Number(next.dataset.vehicleNext));});
+  $("vehicle-query-kind").addEventListener("change",function(){$("vehicle-query").placeholder=this.value==="vehicleId"?"Zum Beispiel 318":this.value==="plate"?"Zum Beispiel LS GM 01":this.value==="character"?"Vorname oder Nachname des Charakters":"CitizenID des Halters";});
+  $("vehicle-results").addEventListener("click",function(event){
+    var choice=event.target.closest("[data-vehicle-character]");
+    if(choice){
+      var state=supportState,index=Number(choice.dataset.vehicleCharacter),epoch=Number(choice.dataset.vehicleCharacterEpoch),character=state.vehicleCharacters?.[index];
+      if(!can("support_vehicles")||!Number.isInteger(index)||index<0||epoch!==state.vehicleSearchEpoch||state.vehicleSearch?.requires_character_selection!==true||!character)return;
+      $("vehicle-query-kind").value="citizenid";$("vehicle-query").value=character.citizenid;
+      state.vehicleCharacters=[];searchVehicleRecords();return;
+    }
+    var button=event.target.closest("[data-vehicle-case]");if(button)openVehicleRecord(Number(button.dataset.vehicleCase));var next=event.target.closest("[data-vehicle-next]");if(next)searchVehicleRecords(Number(next.dataset.vehicleNext));});
   $("support-diag-run").addEventListener("click",runSupportDiagnosis);
   $("support-diag-type").addEventListener("change",function(){var jobs=this.value==="civil_jobs";$("support-diag-vehicle").disabled=jobs;$("support-diag-cid").placeholder=jobs?"Pflicht · betroffener Charakter":"Optional · betroffener Charakter";});
 
