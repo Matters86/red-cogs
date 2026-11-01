@@ -614,7 +614,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
       Android/Chrome: Menü ⋮ → „App installieren“<br>
       iPhone/Safari: Teilen <span style="font-family:var(--font-mono)">⎋</span> → „Zum Home-Bildschirm“
     </p>
-    <p class="sub" id="panel-build-gate">Oberfläche: 31.10.2026 · Support v2.2.7</p>
+    <p class="sub" id="panel-build-gate">Oberfläche: 01.11.2026 · Support v2.2.8</p>
   </div>
 </div>
 
@@ -677,7 +677,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     <div class="vehicle-workspace">
       <section class="card">
         <div class="list-head"><h2>Fahrzeugakte suchen</h2><span class="count">Nur lesend</span></div>
-        <form id="vehicle-search-form"><div class="vehicle-search-fields"><div><label for="vehicle-query-kind">Suche über</label><select id="vehicle-query-kind"><option value="vehicleId">Fahrzeug-ID</option><option value="plate">Kennzeichen</option><option value="citizenid">CitizenID</option><option value="character">Charaktername</option></select></div><div><label for="vehicle-query">Fahrzeug oder Halter</label><div class="player-search-input" id="vehicle-character-input"><input id="vehicle-query" placeholder="Zum Beispiel 318" maxlength="50" required autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="vehicle-character-suggestions" aria-expanded="false"><div id="vehicle-character-suggestions" class="player-suggestions" role="listbox" aria-label="Passende Charaktere" hidden></div></div></div><div><label for="vehicle-holder-filter">Fahrzeugart</label><select id="vehicle-holder-filter"><option value="">Alle</option><option value="private">Privat</option><option value="lease">Leasing</option><option value="faction">Fraktion</option></select></div><button class="btn" id="vehicle-search-submit" type="submit">Akte suchen</button></div></form><p class="hint" id="vehicle-character-note" role="status" aria-live="polite"></p>
+        <form id="vehicle-search-form"><div class="vehicle-search-fields"><div><label for="vehicle-query-kind">Suche über</label><select id="vehicle-query-kind"><option value="vehicleId">Fahrzeug-ID</option><option value="plate">Kennzeichen</option><option value="citizenid">CitizenID</option><option value="character">Charaktername</option><option value="faction">Fraktionsname</option></select></div><div><label for="vehicle-query">Fahrzeug oder Halter</label><div class="player-search-input" id="vehicle-character-input"><input id="vehicle-query" placeholder="Zum Beispiel 318" maxlength="50" required autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="vehicle-character-suggestions" aria-expanded="false"><div id="vehicle-character-suggestions" class="player-suggestions" role="listbox" aria-label="Passende Charaktere" hidden></div></div></div><div><label for="vehicle-holder-filter">Fahrzeugart</label><select id="vehicle-holder-filter"><option value="">Alle</option><option value="private">Privat</option><option value="lease">Leasing</option><option value="faction">Fraktion</option></select></div><button class="btn" id="vehicle-search-submit" type="submit">Akte suchen</button></div></form><p class="hint" id="vehicle-character-note" role="status" aria-live="polite"></p>
         <p class="hint" style="margin-top:12px">Gespeicherte Daten und das Fahrzeug im Spiel werden getrennt angezeigt. Ein Kennzeichentreffer allein bestätigt keine eindeutige Fahrzeugidentität.</p>
         <div class="msg" id="vehicle-msg" role="status" aria-live="polite"></div>
       </section>
@@ -919,7 +919,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
           <button class="btn small" id="diag-btn" style="margin-left:auto">Prüfen</button>
         </div>
         <p class="hint">Prüft, ob DB, Exports, Tabellen und das Society-System zu diesem Server passen – ideal beim ersten Livegang.</p>
-        <p class="hint" id="panel-build-server">Oberfläche: 31.10.2026 · Support v2.2.7. Die FiveM-Bridge wird getrennt aktualisiert.</p>
+        <p class="hint" id="panel-build-server">Oberfläche: 01.11.2026 · Support v2.2.8. Die FiveM-Bridge wird getrennt aktualisiert.</p>
         <div id="diag-wrap"><div class="empty">Noch nicht geprüft.</div></div>
       </section>
     </div>
@@ -1310,7 +1310,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
       var pendingName=vehicleHintState().desired;cancelVehicleCharacterHints();
       if(pendingName?.explicit)failVehicleSearch("Namenssuche beim Ansichtswechsel beendet. Bitte bei Bedarf neu suchen.",pendingName.sequence);
     }
-    var titles = {support:["Supportfälle","Nachvollziehbar helfen – mit Zuständigkeit, Verlauf und Belegen."],vehicle:["Fahrzeugakte","Private, geleaste und Fraktionsfahrzeuge gezielt lesend prüfen."],players:["Spieler & Support","Schnell helfen, gezielt verwalten und jede Aktion nachvollziehen."],stats:["Wirtschaft im Blick","Konten, Gegenstände und Fahrzeuge aus einer gezielten Serverabfrage."],server:["Serverstatus","Verbindung, Ressourcen und Auftragsfreigabe getrennt prüfen."],audit:["Kontrolle & Verlauf","Maßnahmen und Freigaben nachvollziehen."],permissions:["Berechtigungen","Discord-Rollen gezielt verwalten – gespeichert wird erst nach deiner Bestätigung."],log:["Aktivitäten","Aufträge und Ereignisse mit ihrem zuletzt bestätigten Status."]};
+    var titles = {support:["Supportfälle","Nachvollziehbar helfen – mit Zuständigkeit, Verlauf und Belegen."],vehicle:["Fahrzeugakte","Private, geleaste und Fraktionsfahrzeuge suchen, prüfen und verwalten."],players:["Spieler & Support","Schnell helfen, gezielt verwalten und jede Aktion nachvollziehen."],stats:["Wirtschaft im Blick","Konten, Gegenstände und Fahrzeuge aus einer gezielten Serverabfrage."],server:["Serverstatus","Verbindung, Ressourcen und Auftragsfreigabe getrennt prüfen."],audit:["Kontrolle & Verlauf","Maßnahmen und Freigaben nachvollziehen."],permissions:["Berechtigungen","Discord-Rollen gezielt verwalten – gespeichert wird erst nach deiner Bestätigung."],log:["Aktivitäten","Aufträge und Ereignisse mit ihrem zuletzt bestätigten Status."]};
     $("page-title").textContent = titles[name][0];
     $("page-description").textContent = titles[name][1];
     ["support", "vehicle", "players", "stats", "server", "audit", "permissions", "log"].forEach(function (t) {
@@ -3510,16 +3510,29 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   document.addEventListener("pointerdown",function(event){if(!$("vehicle-character-input").contains(event.target))closeVehicleCharacterHints();});
   document.addEventListener("focusin",function(event){if(!$("vehicle-character-input").contains(event.target))closeVehicleCharacterHints();});
 
-  function searchVehicleRecords(cursor) {
+  function renderVehicleFactionMatches(report,sequence) {
+    if(report.requires_faction_selection!==true||!Array.isArray(report.factions)||report.factions.length>20)return false;
+    var seen=new Set(),rows=report.factions;
+    if(rows.some(function(f){if(!f||!Number.isInteger(f.id)||f.id<1||f.id>2147483647||seen.has(f.id)||typeof f.name!=="string"||!f.name||f.name.length>50||typeof f.label!=="string"||!f.label||f.label.length>180)return true;seen.add(f.id);return false;}))return false;
+    if(sequence!==supportState.vehicleSearchEpoch)return true;
+    supportState.vehicleSearch=report;supportState.vehicleFactions=rows;
+    if(rows.length){
+      $("vehicle-results").innerHTML='<section class="card"><div class="list-head"><h2>Fraktion auswählen</h2><span class="count">'+rows.length+' Treffer</span></div><label for="vehicle-faction-choice">Bestätigte Fraktionen</label><div class="case-form-actions"><select id="vehicle-faction-choice" style="flex:1"><option value="">Bitte Fraktion wählen</option>'+rows.map(function(f,i){return '<option value="'+i+'">'+esc(f.label)+(f.label!==f.name?' · '+esc(f.name):'')+'</option>';}).join("")+'</select><button type="button" class="btn" data-vehicle-faction-open data-faction-epoch="'+sequence+'">Fahrzeuge anzeigen</button></div></section>';
+    }else $("vehicle-results").innerHTML='<div class="empty">Keine passende Fraktion gefunden.</div>';
+    setMsg("vehicle-msg",report.truncated?"Mehr als 20 Fraktionen gefunden. Bitte den Namen genauer eingeben.":"Fraktion im Auswahlmenü wählen und ihre Fahrzeuge anzeigen.","");return true;
+  }
+  function searchVehicleRecords(cursor,faction) {
     var state=supportState,query=$("vehicle-query").value.trim(),kind=$("vehicle-query-kind").value;
     if(!can("support_vehicles"))return setMsg("vehicle-msg","Für diese Fahrzeugakte fehlt die Berechtigung.","err");
+    if(faction){query=String(faction.id);kind="factionId";}
     if(!query)return setMsg("vehicle-msg","Bitte Fahrzeug-ID, Kennzeichen, CitizenID oder Charaktername eingeben.","err");
-    if(kind==="vehicleId"&&(!/^[1-9]\d*$/.test(query)||!Number.isSafeInteger(Number(query))||Number(query)>2147483647))return setMsg("vehicle-msg","Bitte eine positive persistente Fahrzeug-ID eingeben.","err");
-    if((query.length<2 && !(kind==="vehicleId" && /^[1-9]$/.test(query)) && !(kind==="citizenid" && /^[A-Za-z0-9_-]$/.test(query)))||query.length>50)return setMsg("vehicle-msg","Für die Suche ein gültiges Fahrzeug oder 2 bis 50 Zeichen eingeben.","err");
+    if((kind==="vehicleId"||kind==="factionId")&&(!/^[1-9]\d*$/.test(query)||!Number.isSafeInteger(Number(query))||Number(query)>2147483647))return setMsg("vehicle-msg","Bitte eine positive persistente Fahrzeug-ID eingeben.","err");
+    if((query.length<2 && !((kind==="vehicleId"||kind==="factionId") && /^[1-9]$/.test(query)) && !(kind==="citizenid" && /^[A-Za-z0-9_-]$/.test(query)))||query.length>50)return setMsg("vehicle-msg","Für die Suche ein gültiges Fahrzeug oder 2 bis 50 Zeichen eingeben.","err");
     if(kind==="character"&&!validVehicleCharacterQuery(query,2))return setMsg("vehicle-msg","Für Charakternamen 2 bis 50 Zeichen und höchstens vier Namensteile ohne Steuerzeichen eingeben.","err");
     if(kind==="plate"&&query.length>15)return setMsg("vehicle-msg","Kennzeichen dürfen höchstens 15 Zeichen enthalten.","err");
     var params={query:query,limit:20,query_kind:kind},holder=$("vehicle-holder-filter").value;
     if(holder)params.kinds=[holder];
+    if(kind==="faction"||kind==="factionId")params.kinds=["faction"];
     if(cursor&&state.vehicleSearchParams)params=Object.assign({},state.vehicleSearchParams,{cursor:cursor});
     else state.vehicleSearchParams=Object.assign({},params);
     var sequence=(state.vehicleSearchEpoch||0)+1;state.vehicleSearchEpoch=sequence;state.vehicleCaseEpoch=(state.vehicleCaseEpoch||0)+1;state.vehicleReport=null;state.vehicleCharacters=[];
@@ -3529,16 +3542,43 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     setMsg("vehicle-msg","Lesende Serverabfrage läuft. Ein Auftrag ist noch kein Ergebnis.","");
     readAction("support_vehicle_search",params,function(report,action){
       if(state.vehicleSearchEpoch!==sequence)return;$("vehicle-search-submit").disabled=false;
+      if(confirmedReadReport(report)&&report.requires_faction_selection===true){if(renderVehicleFactionMatches(report,sequence))return;report=null;}
       if(!confirmedReadReport(report)||!Array.isArray(report.vehicles)){$("vehicle-results").innerHTML='<div class="empty">Die Fahrzeugsuche wurde nicht eindeutig bestätigt.</div>';setMsg("vehicle-msg","Kein bestätigtes Suchergebnis. Den Auftrag im Protokoll prüfen.","err");return;}
-      state.vehicleSearch=report;
+      state.vehicleSearch=report;state.vehicleFactions=[];
       $("vehicle-results").innerHTML='<div class="vehicle-records">'+report.vehicles.map(function(vehicle){
         var valid=Number.isInteger(vehicle.id)&&vehicle.id>0;
         return '<section class="card"><div class="vehicle-card-head"><h3>'+esc(vehicle.model||"Modell unbestätigt")+'</h3><span class="status-pill">'+esc(ownerKind(vehicle.holder?.kind))+'</span></div><div class="vehicle-datagrid"><div><span class="data-label">Persistente ID</span><span class="data-value">'+esc(valid?vehicle.id:"Unbestätigt")+'</span></div><div><span class="data-label">Kennzeichen</span><span class="data-value mono">'+esc(vehicle.plate||"Unbestätigt")+'</span></div><div><span class="data-label">Datenbankstatus</span><span class="data-value">'+esc(vehicleDatabaseState(vehicle.state))+'</span></div><div><span class="data-label">Garage</span><span class="data-value">'+esc(vehicle.garage||"Nicht bestätigt")+'</span></div></div>'+(valid?'<button type="button" class="btn ghost small" data-vehicle-case="'+esc(vehicle.id)+'" style="margin-top:18px">Fahrzeugakte öffnen</button>':'<p class="case-footnote">Ohne bestätigte Fahrzeug-ID ist keine eindeutige Akte auswählbar.</p>')+'</section>';
       }).join("")+'</div>'+(report.vehicles.length?'':'<div class="empty">In dieser bestätigten Momentaufnahme wurde kein passender Datensatz gemeldet.</div>');
+      if(report.faction&&typeof report.faction.label==="string"){var heading=document.createElement("p");heading.className="hint";heading.textContent="Fahrzeuge der Fraktion: "+report.faction.label;$("vehicle-results").prepend(heading);}
       setMsg("vehicle-msg","Momentaufnahme: "+whenText(report.observed_at)+(report.truncated?" · Ergebnis begrenzt, bitte gezielter suchen.":""),"");
       if(report.truncated&&Number.isInteger(report.next_cursor)&&report.next_cursor>0){var next=document.createElement("button");next.type="button";next.className="btn ghost small";next.dataset.vehicleNext=String(report.next_cursor);next.textContent="Nächste Treffer laden";next.style.marginTop="16px";$("vehicle-results").append(next);}
       if(can("support_cases"))renderReportSave("vehicle-results",action.id,report);
     },function(message,action){if(state.vehicleSearchEpoch!==sequence)return;failVehicleSearch(vehicleReadFailure(message,action,kind),sequence);});
+  }
+  function appendVehicleRecordActions(card,v,report,state,sequence) {
+    var context={session:sessionEpoch,access:accessEpoch,profile:profileGeneration};
+    function current(permission){return state===supportState&&state.vehicleCaseEpoch===sequence&&state.vehicleReport===report&&can(permission)&&context.session===sessionEpoch&&context.access===accessEpoch&&context.profile===profileGeneration;}
+    var identity=Number.isInteger(v.id)&&v.id>0&&v.id<=2147483647&&typeof v.plate==="string"&&v.plate.trim().length>0&&v.plate.length<=15;
+    var outside=v.state===0,stored=v.state===1,impounded=v.state===2;
+    var controls=document.createElement("div");controls.className="case-form-actions";controls.style.marginTop="18px";
+    var authorized=false;
+    function add(permission,action,label,question,params,enabled,attribute){
+      if(!can(permission))return;authorized=true;
+      var button=document.createElement("button");button.type="button";button.className="btn ghost";button.textContent=label;button.disabled=!identity||!enabled;button.setAttribute(attribute,"");
+      button.addEventListener("click",function(){
+        if(button.disabled||!identity||!enabled||!current(permission))return;
+        if(!window.confirm(question)||!current(permission))return;
+        controls.querySelectorAll("button").forEach(function(b){b.disabled=true;});
+        createAction(action,v.plate,params,"vehicle-msg");
+      });controls.append(button);
+    }
+    var target=v.plate+" (#"+v.id+")";
+    add("car_to_garage","car_to_garage",stored?"Bereits eingeparkt":v.holder?.kind==="faction"?"In Fraktionsgarage einparken":"Einparken",target+" in die zugehörige passende Garage einparken? Das Fahrzeug muss leer stehen und der Motor aus sein.",{garage:"",vehicle_id:v.id,expected_plate:v.plate},outside,"data-vehicle-park");
+    add("repair_vehicle","repair_vehicle","Reparieren · auch Wracks",target+" am vorhandenen Fahrzeug vollständig reparieren? Alle müssen aussteigen und der Motor muss aus sein.",{vehicle_id:v.id,expected_plate:v.plate},outside,"data-vehicle-repair");
+    if(authorized)card.append(controls);
+    var note=document.createElement("p");note.className="case-footnote";
+    note.textContent=!identity?"Die Fahrzeugauswahl ist nicht eindeutig bestätigt. Bitte erneut suchen.":!authorized?"Für Einparken und Reparieren fehlen die entsprechenden Berechtigungen.":stored?"Das Fahrzeug ist bereits eingeparkt. Für eine Reparatur zuerst regulär ausparken; anschließend die Akte neu öffnen.":impounded?"Das Fahrzeug liegt im Impound. Zuerst über das zuständige Depot freigeben und abholen; diese Aktionen umgehen keine Beschlagnahme.":outside?"Einparken und Reparieren gelten auch für Fraktionsfahrzeuge. Das vorhandene Fahrzeug muss leer stehen, der Motor aus sein. Beim Einparken wird seine passende Garage bestimmt.":"Der Fahrzeugstatus ist nicht bestätigt. Bitte die Akte erneut laden.";
+    card.append(note);
   }
   function openVehicleRecord(id) {
     var state=supportState,vehicle=(state.vehicleSearch?.vehicles||[]).find(function(v){return v.id===id;});
@@ -3553,15 +3593,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
       var card=document.createElement("section");card.className="card";card.style.marginTop="20px";
       card.innerHTML='<div class="list-head"><h2>Fahrzeugakte #'+esc(v.id)+'</h2><span class="count">'+esc(ownerKind(v.holder?.kind))+'</span></div><div class="vehicle-datagrid"><div><span class="data-label">Modell</span><span class="data-value">'+esc(v.model||"Unbestätigt")+'</span></div><div><span class="data-label">Gespeichertes Kennzeichen</span><span class="data-value">'+esc(v.plate||"Unbestätigt")+'</span></div><div><span class="data-label">Datenbankstatus</span><span class="data-value">'+esc(vehicleDatabaseState(v.state))+'</span></div><div><span class="data-label">Garage</span><span class="data-value">'+esc(v.garage||"Unbestätigt")+'</span></div></div>'+renderReadReport(report);
       card.querySelector(".vehicle-datagrid").insertAdjacentHTML("afterend",vehicleObservedSummary(report));
-      if(can("repair_vehicle")&&v.state===0&&Number.isInteger(v.id)&&v.id>0&&v.id<=2147483647&&v.plate){
-        var repairContext={session:sessionEpoch,access:accessEpoch,profile:profileGeneration};
-        var repair=document.createElement("button");repair.type="button";repair.className="btn ghost";repair.textContent="Vorhandenes Fahrzeug reparieren";
-        repair.addEventListener("click",function(){
-          if(state!==supportState||state.vehicleCaseEpoch!==sequence||state.vehicleReport!==report||!can("repair_vehicle")||repairContext.session!==sessionEpoch||repairContext.access!==accessEpoch||repairContext.profile!==profileGeneration)return;
-          if(!window.confirm("Fahrzeug "+v.plate+" (#"+v.id+") einschließlich Wrackschäden vollständig reparieren?"))return;
-          repair.disabled=true;createAction("repair_vehicle",v.plate,{vehicle_id:v.id,expected_plate:v.plate},"vehicle-msg");
-        });card.append(repair);
-      }
+      appendVehicleRecordActions(card,v,report,state,sequence);
       var previous=$("vehicle-results").querySelector("[data-vehicle-detail]");if(previous)previous.remove();card.dataset.vehicleDetail="true";$("vehicle-results").append(card);
       setMsg("vehicle-msg","Fahrzeugakte als lesende Momentaufnahme geladen. Keine Reparatur oder Freigabe ausgeführt.","");
       if(can("support_cases"))renderReportSave(card,action.id,report);
@@ -3634,8 +3666,15 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     });
   }
   $("vehicle-search-form").addEventListener("submit",function(event){event.preventDefault();searchVehicleRecords();});
-  $("vehicle-query-kind").addEventListener("change",function(){$("vehicle-query").placeholder=this.value==="vehicleId"?"Zum Beispiel 318":this.value==="plate"?"Zum Beispiel LS GM 01":this.value==="character"?"Vorname oder Nachname des Charakters":"CitizenID des Halters";cancelVehicleCharacterHints();$("vehicle-character-note").textContent="";});
+  $("vehicle-query-kind").addEventListener("change",function(){$("vehicle-query").placeholder=this.value==="vehicleId"?"Zum Beispiel 318":this.value==="plate"?"Zum Beispiel LS GM 01":this.value==="character"?"Vorname oder Nachname des Charakters":this.value==="faction"?"Zum Beispiel LSPD, LSMD oder Government":"CitizenID des Halters";if(this.value==="faction")$("vehicle-holder-filter").value="faction";cancelVehicleCharacterHints();$("vehicle-character-note").textContent="";});
   $("vehicle-results").addEventListener("click",function(event){
+    var factionButton=event.target.closest("[data-vehicle-faction-open]");
+    if(factionButton){
+      var fs=supportState,select=$("vehicle-faction-choice"),index=select&&select.value!==""?Number(select.value):-1,epoch=Number(factionButton.dataset.factionEpoch),faction=fs.vehicleFactions?.[index];
+      if(!can("support_vehicles")||!Number.isInteger(index)||index<0||epoch!==fs.vehicleSearchEpoch||fs.vehicleSearch?.requires_faction_selection!==true||!faction)return;
+      $("vehicle-query-kind").value="faction";$("vehicle-query").value=faction.name;searchVehicleRecords(null,faction);return;
+    }
+
     var choice=event.target.closest("[data-vehicle-character]");
     if(choice){
       var state=supportState,index=Number(choice.dataset.vehicleCharacter),epoch=Number(choice.dataset.vehicleCharacterEpoch),character=state.vehicleCharacters?.[index];

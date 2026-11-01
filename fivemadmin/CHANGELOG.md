@@ -1,3 +1,15 @@
+## 01.11.2026 – Support v2.2.8 (Dev-Testbuild)
+
+- Die Fahrzeugakte zeigt Einparken und Reparieren auch für Fraktionsfahrzeuge.
+- Neue Suchart Fraktionsname mit ausdrücklicher Auswahl im Dropdown und Fahrzeugliste mit Folgeseiten.
+- Aktionen verwenden die bestätigte persistente Fahrzeug-ID und das Kennzeichen;
+  eigene Funktionsrechte, Bestätigung, Profilbindung und bestehende Bridgeprüfungen bleiben erhalten.
+- Bereits eingeparkte Fahrzeuge und Impound zeigen den Grund statt fehlender Knöpfe.
+  Für die echte Reparatur einschließlich Wracks muss das vorhandene Fahrzeug draußen stehen.
+- Kein Ersatz-Spawn, keine gespeicherte Offline-Reparatur, keine Umgehung einer Beschlagnahme.
+- Vollständigen Cog v2.2.8 und AP-Bridge 1.3.1 gemeinsam übernehmen; für die neue Fraktionssuche braucht der Zielserver den neuen Reader.
+  Spiel-/Live-Abnahme offen; kein NAS-Reload oder echte Fahrzeugaktion durch Codex.
+
 ## 31.10.2026 – Support v2.2.5 (Dev-Testbuild)
 
 - Aktive Leasingfahrzeuge in Charakterliste/CitizenID-Fahrzeugakte mit überprüfter Vertragszuordnung berücksichtigen.
