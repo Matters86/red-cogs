@@ -1,7 +1,7 @@
 {
     "name": "Tickets",
     "short": "Mehrsprachiges Ticketsystem mit Panels, Transcripts und Dashboard-Verwaltung.",
-    "description": "Vollständiges Support-Ticketsystem für Red. Panels mit Buttons oder Dropdown, optionalem Modal (bis zu 5 Fragen), Tickets als eigener Kanal, privater Thread oder Forum-Beitrag. Getrennte Support-, Admin-, View-, Ping- und Inhaber-Rollen, Übernehmen/Sperren/Schließen/Wiederöffnen/Löschen, Mitglieder verwalten, Limit für offene Tickets. Mehrsprachig (Deutsch als Standard, pro Server umschaltbar, eigene Texte überschreibbar), HTML-Transcripts, Logging. Einstellungen, Panels, Transcripts und Statistik laufen über das WebCore-Dashboard.",
+    "description": "Vollständiges Support-Ticketsystem für Red. Panels mit Buttons oder Dropdown, optionalem Modal (bis zu 5 Fragen), Tickets als eigener Kanal, privater Thread oder Forum-Beitrag. Getrennte Support-, Admin-, View-, Ping- und Inhaber-Rollen, Übernehmen/Sperren/Schließen/Wiederöffnen/Löschen, Mitglieder verwalten, Limit für offene Tickets. Pro Ticket manuell startbarer 24-Stunden-Inaktivitätstimer mit Zurücksetzen bei neuen Nachrichten, Abbrechen über Offen halten und Neustart-Persistenz; sofortiges Schließen jederzeit möglich. Mehrsprachig (Deutsch als Standard, pro Server umschaltbar, eigene Texte überschreibbar), HTML-Transcripts, Logging. Einstellungen, Panels, Transcripts, Timer und Statistik laufen über das WebCore-Dashboard.",
     "tags": ["tickets", "support", "dashboard", "i18n", "moderation"],
     "requirements": [],
     "min_bot_version": "3.5.0",

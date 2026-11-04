@@ -2,9 +2,10 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import discord
+from discord.ext import tasks
 from redbot.core import Config, commands
 from redbot.core.bot import Red
 from redbot.core.data_manager import cog_data_path
@@ -14,9 +15,11 @@ from .member import member_handler
 from .strings import LANGUAGES, OVERRIDABLE_KEYS, t
 from .transcript import build_transcript, redact_user
 from .views import (
+    CID_AUTOCLOSE,
     CID_CLAIM,
     CID_CLOSE,
     CID_LOCK,
+    CID_KEEP_OPEN,
     CID_OPEN,
     CID_SELECT,
     CID_UNCLAIM,
@@ -30,6 +33,7 @@ from .views import (
 log = logging.getLogger("red.red-cogs.tickets")
 
 EMBED_COLOR = 0x3DDC97
+INACTIVITY_TIMEOUT = timedelta(hours=24)
 
 # Rollen-Pings müssen explizit erlaubt werden – Reds Standard blockt roles=False,
 # sonst würden die Ping-Rollen beim Öffnen eines Tickets nicht benachrichtigt.
@@ -100,6 +104,10 @@ class Tickets(commands.Cog):
         self.transcripts_dir.mkdir(parents=True, exist_ok=True)
         # Serialisiert Öffnen (pro Nutzer) und Schließen (pro Kanal) gegen Doppelklicks.
         self._locks: dict[tuple, asyncio.Lock] = {}
+        self._active_timer_channels: set[int] = set()
+        # Gateway-Aktivität sofort merken, auch wenn die Ablaufprüfung gerade auf Discord wartet.
+        self._latest_activity: dict[int, datetime] = {}
+        self._controls_restored = False
 
     # ----------------------------------------------------------------- #
     #  Dashboard-Anbindung (1:1-Muster aus example)
@@ -108,8 +116,10 @@ class Tickets(commands.Cog):
         webcore = self.bot.get_cog("WebCore")
         if webcore is not None:
             self._register_dashboard(webcore)
+        self._autoclose_loop.start()
 
     async def cog_unload(self):
+        self._autoclose_loop.cancel()
         webcore = self.bot.get_cog("WebCore")
         if webcore is not None:
             webcore.unregister_owner(self)
@@ -219,7 +229,7 @@ class Tickets(commands.Cog):
         page = dict(owner=self, slug="tickets", name="Tickets", icon="bi-life-preserver", handler=self.dashboard_page)
         try:
             # Tagesgeschäft für die Stufe „Bedienen“: einzelne Tickets schließen.
-            webcore.register_page(**page, operate_forms={"ticket_close"})
+            webcore.register_page(**page, operate_forms={"ticket_close", "ticket_autoclose", "ticket_keepopen"})
         except TypeError:  # ältere WebCore-Versionen ohne Stufe „Bedienen“
             webcore.register_page(**page)
         if hasattr(webcore, "register_member_page"):  # ältere WebCore-Versionen ohne „Mein Bereich“
@@ -490,6 +500,10 @@ class Tickets(commands.Cog):
                 await self._handle_open(interaction, panel_id, reason_id)
             elif cid == CID_CLOSE:
                 await self._control_close(interaction)
+            elif cid == CID_AUTOCLOSE:
+                await self._control_autoclose(interaction, enabled=True)
+            elif cid == CID_KEEP_OPEN:
+                await self._control_autoclose(interaction, enabled=False)
             elif cid == CID_CLAIM:
                 await self._control_claim(interaction, claim=True)
             elif cid == CID_UNCLAIM:
@@ -692,6 +706,8 @@ class Tickets(commands.Cog):
             "locked": False,
             "type": ttype,
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "auto_close_at": None,
+            "auto_close_started_at": None,
             "message_id": opening_msg.id if opening_msg else None,
             "answers": answers or {},
         }
@@ -711,15 +727,161 @@ class Tickets(commands.Cog):
         return tickets.get(str(channel_id))
 
     async def _refresh_controls(self, guild, channel, record, lang):
+        record = await self._get_record(guild, channel.id)
+        if not record:
+            return
         if not record.get("message_id"):
             return
         try:
             msg = await channel.fetch_message(record["message_id"])
             await msg.edit(view=build_controls_view(
-                lang, claimed=bool(record.get("claimed_by")), locked=bool(record.get("locked"))
-            ))
+                lang, claimed=bool(record.get("claimed_by")), locked=bool(record.get("locked")),
+                auto_close=bool(record.get("auto_close_at")),
+            ) if record.get("status") == "open" else None)
         except discord.HTTPException:
             pass
+
+    @staticmethod
+    def _timer_time(value) -> datetime | None:
+        try:
+            stamp = datetime.fromisoformat(value)
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            return stamp.astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _human_message(message) -> bool:
+        return (
+            not getattr(message.author, "bot", False)
+            and not getattr(message, "webhook_id", None)
+            and getattr(message, "type", discord.MessageType.default)
+            in (discord.MessageType.default, discord.MessageType.reply)
+        )
+
+    async def _control_autoclose(self, interaction, enabled: bool):
+        guild, channel, member = interaction.guild, interaction.channel, interaction.user
+        conf = await self.config.guild(guild).all()
+        lang = conf["language"]
+        record = conf["tickets"].get(str(channel.id))
+        if not record:
+            return await interaction.response.send_message(t(lang, "not_a_ticket"), ephemeral=True)
+        is_owner = record.get("owner_id") == member.id
+        # Der Ersteller darf einen Timer auch dann stoppen, wenn nur das Team schließen darf.
+        if not (self._is_staff(member, conf, record)
+                or (is_owner and (not enabled or conf["user_can_close"]))):
+            return await interaction.response.send_message(t(lang, "no_permission"), ephemeral=True)
+        if record.get("status") != "open":
+            return await interaction.response.send_message(t(lang, "already_closed"), ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        changed = await self._set_ticket_autoclose(guild, channel, enabled, member, conf)
+        key = ("autoclose_ack" if enabled else "keep_open_ack") if changed else "already_closed"
+        await interaction.followup.send(t(lang, key), ephemeral=True)
+
+    async def _set_ticket_autoclose(self, guild, channel, enabled, actor, conf) -> bool:
+        """Start/Abbruch aus Discord und Dashboard, mit derselben Sperre wie Schließen."""
+        async with self._lock("close", channel.id):
+            now = datetime.now(timezone.utc)
+            async with self.config.guild(guild).tickets() as tickets:
+                record = tickets.get(str(channel.id))
+                if not record or record.get("status") != "open":
+                    return False
+                record["auto_close_at"] = (now + INACTIVITY_TIMEOUT).isoformat() if enabled else None
+                record["auto_close_started_at"] = now.isoformat() if enabled else None
+                record = dict(record)
+            self._latest_activity.pop(channel.id, None)
+            if enabled:
+                self._active_timer_channels.add(channel.id)
+            else:
+                self._active_timer_channels.discard(channel.id)
+            lang = conf["language"]
+            try:
+                await channel.send(
+                    t(lang, "autoclose_started" if enabled else "autoclose_cancelled", user=actor.mention),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except discord.HTTPException:
+                log.warning("Timer-Hinweis für Ticket %s nicht sendbar", channel.id)
+            await self._refresh_controls(guild, channel, record, lang)
+            return True
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.guild is None or not self._human_message(message):
+            return
+        cid = message.channel.id
+        stamp = message.created_at.astimezone(timezone.utc)
+        if cid in self._active_timer_channels:
+            self._latest_activity[cid] = max(stamp, self._latest_activity.get(cid, stamp))
+        record = await self._get_record(message.guild, cid)
+        if not record or record.get("status") != "open" or not record.get("auto_close_at"):
+            return
+        self._latest_activity[cid] = max(stamp, self._latest_activity.get(cid, stamp))
+        async with self._lock("close", cid):
+            async with self.config.guild(message.guild).tickets() as tickets:
+                current = tickets.get(str(cid))
+                if not current or current.get("status") != "open":
+                    return
+                deadline = self._timer_time(current.get("auto_close_at"))
+                if deadline is not None:
+                    current["auto_close_at"] = max(deadline, stamp + INACTIVITY_TIMEOUT).isoformat()
+
+    @tasks.loop(seconds=60)
+    async def _autoclose_loop(self):
+        if not self._controls_restored:
+            try:
+                await self._restore_ticket_controls()
+                self._controls_restored = True
+            except Exception:  # noqa: BLE001 – beim nächsten Durchlauf erneut versuchen
+                log.exception("Ticket-Steuerleisten konnten nicht wiederhergestellt werden")
+        try:
+            await self._check_autoclose()
+        except Exception:  # noqa: BLE001 – temporäre Config-Fehler dürfen den Timer nicht beenden
+            log.exception("Ticket-Timer-Prüfung fehlgeschlagen")
+
+    @_autoclose_loop.before_loop
+    async def _before_autoclose_loop(self):
+        await self.bot.wait_until_red_ready()
+
+    async def _restore_ticket_controls(self):
+        for gid, conf in (await self.config.all_guilds()).items():
+            guild = self.bot.get_guild(int(gid))
+            if guild is None or await self.bot.cog_disabled_in_guild(self, guild):
+                continue
+            for cid, record in conf.get("tickets", {}).items():
+                if record.get("status") != "open":
+                    continue
+                if record.get("auto_close_at"):
+                    self._active_timer_channels.add(int(cid))
+                # Auch bestehende Tickets bekommen die neuen persistenten Buttons.
+                try:
+                    channel = guild.get_channel_or_thread(int(cid))
+                    if channel is None:
+                        channel = await guild.fetch_channel(int(cid))
+                    await self._refresh_controls(guild, channel, record, conf["language"])
+                except discord.HTTPException:
+                    log.warning("Steuerleiste für Ticket %s (Guild %s) nicht erreichbar", cid, gid)
+
+    async def _check_autoclose(self):
+        now = datetime.now(timezone.utc)
+        for gid, conf in (await self.config.all_guilds()).items():
+            guild = self.bot.get_guild(int(gid))
+            if guild is None or await self.bot.cog_disabled_in_guild(self, guild):
+                continue
+            for cid, record in conf.get("tickets", {}).items():
+                deadline = self._timer_time(record.get("auto_close_at"))
+                if record.get("status") != "open" or deadline is None or deadline > now:
+                    continue
+                try:
+                    channel = guild.get_channel_or_thread(int(cid))
+                    if channel is None:
+                        channel = await guild.fetch_channel(int(cid))
+                    if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+                        continue
+                    await self._close_ticket(guild, channel, record, guild.me, conf, inactivity=True)
+                except Exception:  # noqa: BLE001 – ein Ticket darf andere Timer nicht blockieren
+                    log.exception("Auto-Close für Ticket %s (Guild %s) fehlgeschlagen", cid, gid)
 
     async def _control_close(self, interaction):
         guild = interaction.guild
@@ -823,13 +985,38 @@ class Tickets(commands.Cog):
         except discord.HTTPException:
             pass
 
-    async def _close_ticket(self, guild, channel, record, closer, conf) -> bool:
+    async def _close_ticket(self, guild, channel, record, closer, conf, *, inactivity=False) -> bool:
         """Schließt (bzw. löscht) ein Ticket. Pro Kanal serialisiert; ein bereits
         geschlossenes Ticket wird nicht erneut gezählt/transkribiert."""
         async with self._lock("close", channel.id):
             current = await self._get_record(guild, channel.id)
             if current is None:
                 return False
+            if inactivity:
+                now = datetime.now(timezone.utc)
+                deadline = self._timer_time(current.get("auto_close_at"))
+                if current.get("status") != "open" or deadline is None or deadline > now:
+                    return False
+                # Der Bot kann während eines Ausfalls Nachrichten verpasst haben.
+                # Bei fehlenden Leserechten wird hier abgebrochen und später erneut geprüft.
+                started = self._timer_time(current.get("auto_close_started_at"))
+                after = max(started or now - INACTIVITY_TIMEOUT, now - INACTIVITY_TIMEOUT)
+                latest = self._latest_activity.get(channel.id)
+                async for message in channel.history(limit=None, after=after, oldest_first=False):
+                    if self._human_message(message):
+                        stamp = message.created_at.astimezone(timezone.utc)
+                        latest = max(latest, stamp) if latest is not None else stamp
+                        break
+                pending = self._latest_activity.get(channel.id)
+                if pending is not None:
+                    latest = max(latest, pending) if latest is not None else pending
+                if latest is not None:
+                    deadline = max(deadline, latest + INACTIVITY_TIMEOUT)
+                if deadline > datetime.now(timezone.utc):
+                    async with self.config.guild(guild).tickets() as tickets:
+                        tickets[str(channel.id)]["auto_close_at"] = deadline.isoformat()
+                    return False
+                current["auto_closed"] = True
             if current.get("status") == "closed":
                 if conf["delete_on_close"]:  # z. B. [p]ticket delete auf archiviertem Ticket
                     async with self.config.guild(guild).tickets() as tickets:
@@ -839,7 +1026,10 @@ class Tickets(commands.Cog):
                     except discord.HTTPException:
                         pass
                 return False
-            await self._close_ticket_locked(guild, channel, record, closer, conf)
+            await self._close_ticket_locked(guild, channel, current, closer, conf)
+            self._active_timer_channels.discard(channel.id)
+            self._latest_activity.pop(channel.id, None)
+            await self._refresh_controls(guild, channel, current, conf["language"])
             return True
 
     async def _close_ticket_locked(self, guild, channel, record, closer, conf):
@@ -863,7 +1053,7 @@ class Tickets(commands.Cog):
             "reason": record.get("reason_label"),
             "opened": record.get("created_at", "")[:19].replace("T", " "),
             "closed": record["closed_at"][:19].replace("T", " "),
-            "closed_by": str(closer),
+            "closed_by": str(closer) + (" · " + t(lang, "auto_closed") if record.get("auto_closed") else ""),
             "owner_id": record.get("owner_id"),       # nur als data-uid (Datenlöschung)
             "closed_by_id": getattr(closer, "id", None),
         }
@@ -895,7 +1085,8 @@ class Tickets(commands.Cog):
         await self._log(
             guild, conf,
             t(lang, "log_closed", num=record["num"], user=str(closer),
-              duration=self._fmt_dur(duration)),
+              duration=self._fmt_dur(duration))
+            + (" " + t(lang, "auto_closed") if record.get("auto_closed") else ""),
             transcript_file=self.transcripts_dir / filename,
         )
 
@@ -918,7 +1109,8 @@ class Tickets(commands.Cog):
 
         # Archivieren statt löschen
         try:
-            await channel.send(t(lang, "closed_by", user=closer.mention))
+            await channel.send(t(lang, "auto_closed") if record.get("auto_closed")
+                               else t(lang, "closed_by", user=closer.mention))
         except discord.HTTPException:
             pass
         try:
@@ -938,6 +1130,8 @@ class Tickets(commands.Cog):
             if str(channel.id) in tickets:
                 tickets[str(channel.id)]["status"] = "closed"
                 tickets[str(channel.id)]["closed_at"] = record["closed_at"]
+                tickets[str(channel.id)]["auto_close_at"] = None
+                tickets[str(channel.id)]["auto_close_started_at"] = None
 
     async def _reopen_ticket(self, guild, channel, record, conf):
         owner = guild.get_member(record["owner_id"])
@@ -962,6 +1156,13 @@ class Tickets(commands.Cog):
         async with self.config.guild(guild).tickets() as tickets:
             if str(channel.id) in tickets:
                 tickets[str(channel.id)]["status"] = "open"
+                tickets[str(channel.id)]["auto_close_at"] = None
+                tickets[str(channel.id)]["auto_close_started_at"] = None
+        self._active_timer_channels.discard(channel.id)
+        self._latest_activity.pop(channel.id, None)
+        record = await self._get_record(guild, channel.id)
+        if record is not None:
+            await self._refresh_controls(guild, channel, record, conf["language"])
 
     async def _log(self, guild, conf, text, transcript_file=None):
         chan = guild.get_channel(conf.get("log_channel")) if conf.get("log_channel") else None
@@ -1009,6 +1210,30 @@ class Tickets(commands.Cog):
             return await ctx.send(t(lang, "already_closed"))
         await ctx.send("🔒")
         await self._close_ticket(ctx.guild, ctx.channel, record, ctx.author, conf)
+
+    @ticket.command(name="autoclose")
+    async def ticket_autoclose(self, ctx):
+        """Startet den 24-Stunden-Timer; neue Nachrichten setzen ihn zurück."""
+        await self._ctx_autoclose(ctx, enabled=True)
+
+    @ticket.command(name="keepopen")
+    async def ticket_keepopen(self, ctx):
+        """Stoppt den Timer dauerhaft, bis er erneut gestartet wird."""
+        await self._ctx_autoclose(ctx, enabled=False)
+
+    async def _ctx_autoclose(self, ctx, enabled):
+        conf, record = await self._ctx_record(ctx)
+        lang = conf["language"]
+        if not record:
+            return await ctx.send(t(lang, "not_a_ticket"))
+        is_owner = record.get("owner_id") == ctx.author.id
+        if not (self._is_staff(ctx.author, conf, record)
+                or (is_owner and (not enabled or conf["user_can_close"]))):
+            return await ctx.send(t(lang, "no_permission"))
+        await ctx.defer(ephemeral=True)
+        changed = await self._set_ticket_autoclose(ctx.guild, ctx.channel, enabled, ctx.author, conf)
+        key = ("autoclose_ack" if enabled else "keep_open_ack") if changed else "already_closed"
+        await ctx.send(t(lang, key), ephemeral=True)
 
     @ticket.command(name="open")
     async def ticket_open(self, ctx):

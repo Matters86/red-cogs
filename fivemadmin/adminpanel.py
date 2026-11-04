@@ -51,7 +51,7 @@ from .serverprofiles import Profiles, PROFILE_ID, ENV_NAME, ALLOWED_PROFILES
 log = logging.getLogger("red.adminpanel")
 
 # This identifies the loaded Python module independently of a later source copy.
-PANEL_BUILD = "2026-11-01-support-v2.2.8"
+PANEL_BUILD = "2026-11-04-support-v2.2.9"
 try:
     with open(__file__, "rb") as _module_source:
         LOADED_MODULE_SHA256 = hashlib.sha256(_module_source.read()).hexdigest()
@@ -340,6 +340,31 @@ def parking_action_params(target, params):
             raise ValueError("parking_vehicle_id_invalid")
         clean["vehicle_id"] = value
     return clean
+
+
+def parking_catalog(payload):
+    """Labels describe registry IDs; only IDs are ever sent to the park action."""
+    def text(value, limit):
+        return isinstance(value, str) and 0 < len(value) <= limit and not any(ord(c) < 32 for c in value)
+    payload = payload if isinstance(payload, dict) else {}
+    garages, seen = [], set()
+    raw = payload.get("garages")
+    for identifier in raw[:100] if isinstance(raw, list) else []:
+        if text(identifier, 100) and identifier not in seen:
+            garages.append(identifier)
+            seen.add(identifier)
+    labels, selectable = {}, {}
+    raw = payload.get("garage_options")
+    for option in raw[:100] if isinstance(raw, list) else []:
+        if (isinstance(option, dict) and text(option.get("id"), 100)
+                and option["id"] in seen and option["id"] not in labels
+                and text(option.get("label"), 200)):
+            labels[option["id"]] = option["label"]
+            if "selectable" in option:
+                selectable[option["id"]] = option["selectable"] is True
+    return {"garages": garages, "garage_options": [
+        {"id": identifier, "label": labels.get(identifier, identifier),
+         **({"selectable": selectable[identifier]} if identifier in selectable else {})} for identifier in garages]}
 
 
 class AdminPanel(commands.Cog):
@@ -1511,20 +1536,45 @@ class AdminPanel(commands.Cog):
 
     async def http_bridge_catalog(self, request: web.Request):
         data = await self._read_json(request)
+        if (not isinstance(data, dict) or not isinstance(data.get("items"), list)
+                or ("garages" in data and not isinstance(data["garages"], list))
+                or ("garage_options" in data and not isinstance(data["garage_options"], list))):
+            return web.json_response({"error": "invalid_catalog"}, status=400)
         items = data.get("items")
-        garages = data.get("garages")
-        if isinstance(items, list):
-            await asyncio.to_thread(db.save_catalog, {
-                "items": items[:5000],
-                "garages": garages[:100] if isinstance(garages, list) else [],
-            })
+        await asyncio.to_thread(db.save_catalog, {"items": items[:5000], **parking_catalog(data)})
         return web.json_response({"ok": True})
 
+    async def _catalog_permissions_current(self, request, profile):
+        original = request["session"]
+        session = await asyncio.to_thread(db.get_session, original["token"])
+        if (not session or str(session.get("user_id")) != str(original.get("user_id"))
+                or str(session.get("guild_id")) != str(original.get("guild_id"))):
+            return set()
+        member, permissions = await self.session_permissions(session)
+        if (member is None or self._closing or str(member.id) != str(original.get("user_id"))
+                or str(member.guild.id) != str(original.get("guild_id"))
+                or self.profiles.select(profile.id, member.guild.id) is not profile
+                or db.current_profile() != profile.id):
+            return set()
+        return permissions
+
     async def http_panel_catalog(self, request: web.Request):
-        if "items" not in request["perms"] and "view_inventory" not in request["perms"]:
+        if not {"items", "view_inventory", "car_to_garage"} & request["perms"]:
             return web.json_response({"error": "keine Berechtigung"}, status=403)
-        catalog = await asyncio.to_thread(db.get_catalog)
-        return web.json_response(catalog or {"items": []})
+        profile = self.profiles.select(request["profile"]["id"], request["member"].guild.id)
+        if profile is None:
+            return web.json_response({"error": "server_profile_forbidden"}, status=403)
+        try:
+            catalog = await asyncio.to_thread(db.get_catalog)
+        except (ValueError, TypeError):
+            return web.json_response({"error": "Katalog nicht lesbar. Bitte später neu laden."}, status=503)
+        permissions = await self._catalog_permissions_current(request, profile)
+        if not {"items", "view_inventory", "car_to_garage"} & permissions:
+            return web.json_response({"error": "Sitzung, Serverprofil oder Katalogrecht hat sich geändert."}, status=403)
+        catalog = catalog if isinstance(catalog, dict) else {}
+        items = catalog.get("items")
+        return web.json_response({"items": items[:5000] if isinstance(items, list)
+            and {"items", "view_inventory"} & permissions else [], **parking_catalog(catalog)})
 
     async def http_bridge_result(self, request: web.Request):
         data = await self._read_json(request)

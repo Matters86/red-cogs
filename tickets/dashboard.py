@@ -8,7 +8,7 @@ Drei Aufgaben:
 Aufbau mit dem UI-Baukasten von WebCore (``request.app["webcore"].ui``): Reiter
 Übersicht · Panels · Einstellungen · Texte · Transcripts – kein eigenes CSS.
 
-Rechte: ``form=ticket_close`` (einzelnes Ticket schließen) ist Tagesgeschäft und geht schon mit der
+Rechte: Einzelne Tickets schließen und deren 24-Stunden-Timer steuern ist Tagesgeschäft und geht mit der
 WebCore-Stufe „Bedienen“; alle anderen Formulare (Einstellungen, Panels, Team-Zuordnung) brauchen
 „Bearbeiten“ – das prüft WebCore zentral anhand von ``register_page(operate_forms=…)``.
 """
@@ -198,7 +198,7 @@ def _fmt_iso(value) -> str:
 
 
 def _render_open_tickets(ui, guild, conf, csrf) -> str:
-    """Offene Tickets mit „Schließen“ (Tagesgeschäft – schon mit „Bedienen“ möglich)."""
+    """Offene Tickets mit Schließen und Timer-Steuerung (Tagesgeschäft)."""
     open_items = sorted(((cid, r) for cid, r in (conf.get("tickets") or {}).items() if r.get("status") == "open"),
                         key=lambda kv: kv[1].get("num") or 0)
     rows = []
@@ -221,25 +221,41 @@ def _render_open_tickets(ui, guild, conf, csrf) -> str:
             csrf=csrf, hidden={"form": "ticket_close", "guild": guild.id, "channel_id": cid},
             confirm=confirm, operate=True,
         )
+        timer_active = bool(rec.get("auto_close_at"))
+        timer_status = (f"<span class='mono'>{_esc(_fmt_iso(rec['auto_close_at']))}</span>"
+                        if timer_active else ui.badge("Aus", "muted"))
+        timer_action = ""
+        if ch is not None:
+            timer_action = ui.form(
+                "/cogs/tickets",
+                ui.button("Offen halten" if timer_active else "24h-Timer starten",
+                          icon="bi-pause-circle" if timer_active else "bi-clock", small=True),
+                csrf=csrf,
+                hidden={"form": "ticket_keepopen" if timer_active else "ticket_autoclose",
+                        "guild": guild.id, "channel_id": cid},
+                operate=True,
+            )
         rows.append(ui.row(
             f"<span class='mono'>#{_esc(num)}</span>",
             f"<div class='wc-cell-title'>{_esc(owner_name)}</div><div class='wc-cell-sub'>{_esc(where)}</div>",
             _esc(rec.get("reason_label") or "—"),
             f"<span class='mono'>{_esc(_fmt_iso(rec.get('created_at')))}</span>",
             claimed,
-            f"><div class='wc-row-actions'>{close}</div>",
+            timer_status,
+            f"><div class='wc-row-actions'>{timer_action}{close}</div>",
         ))
     more = ""
     if len(open_items) > 100:
         more = ui.callout(f"Es werden 100 von {len(open_items)} offenen Tickets gezeigt.", tone="info")
     return ui.card(
         "Offene Tickets",
-        ui.table(["#", "Inhaber", "Grund", "Geöffnet (UTC)", "Übernommen", ">"], rows,
+        ui.table(["#", "Inhaber", "Grund", "Geöffnet (UTC)", "Übernommen", "Auto-Close (UTC)", ">"], rows,
                  empty_text="Keine offenen Tickets.", search=len(rows) > 8,
                  search_placeholder="Nummer, Inhaber, Grund …", id="tk-open") + more,
         icon="bi-envelope-open",
         desc="Schließen wirkt wie der Button im Ticket: Transcript, Log, Inhaber-Rolle entfernen, "
-             "archivieren bzw. löschen.",
+             "archivieren bzw. löschen. Der 24h-Timer wird pro Ticket gestartet; jede menschliche "
+             "Nachricht setzt ihn zurück. „Offen halten“ stoppt ihn bis zum erneuten Start.",
     )
 
 
@@ -539,6 +555,11 @@ async def _handle_post(cog, request):
     if form == "ticket_close":
         return await _close_from_dashboard(cog, request, guild, data.get("channel_id"))
 
+    if form in {"ticket_autoclose", "ticket_keepopen"}:
+        return await _autoclose_from_dashboard(
+            cog, request, guild, data.get("channel_id"), enabled=form == "ticket_autoclose"
+        )
+
     if form == "settings":
         lang = data.get("language") or "de"
         await gconf.language.set(lang if lang in LANGUAGES else "de")
@@ -715,6 +736,36 @@ async def _close_from_dashboard(cog, request, guild, raw_cid):
     if not closed:
         raise web.HTTPFound(back + "&err=" + quote_plus(f"Ticket #{num} ist bereits geschlossen"))
     raise web.HTTPFound(back + "&ok=" + quote_plus(f"Ticket #{num} geschlossen"))
+
+
+async def _autoclose_from_dashboard(cog, request, guild, raw_cid, *, enabled):
+    """Timer über dieselbe Logik wie die persistenten Discord-Buttons steuern."""
+    back = f"/cogs/tickets?guild={guild.id}"
+    cid = str(raw_cid or "").strip()
+    if not cid.isdigit():
+        raise web.HTTPFound(back + "&err=" + quote_plus("Ticket nicht gefunden"))
+    conf = await cog.config.guild(guild).all()
+    record = (conf.get("tickets") or {}).get(cid)
+    if not record:
+        raise web.HTTPFound(back + "&err=" + quote_plus("Ticket nicht gefunden"))
+    num = record.get("num")
+    if record.get("status") != "open":
+        raise web.HTTPFound(back + "&err=" + quote_plus(f"Ticket #{num} ist bereits geschlossen"))
+    channel = _ticket_channel(guild, cid)
+    if channel is None:
+        raise web.HTTPFound(back + "&err=" + quote_plus(f"Ticket #{num}: Kanal nicht gefunden"))
+    webcore = request.app["webcore"]
+    getter = getattr(webcore, "current_user", None) or webcore._get_user
+    user = await getter(request) or {}
+    uid = int(user.get("id") or 0)
+    actor = guild.get_member(uid) if uid else None
+    if actor is None:
+        actor = _DashboardCloser(uid, f"{user.get('name') or 'Dashboard'} (Dashboard)")
+    changed = await cog._set_ticket_autoclose(guild, channel, enabled, actor, conf)
+    if not changed:
+        raise web.HTTPFound(back + "&err=" + quote_plus(f"Ticket #{num} ist bereits geschlossen"))
+    result = "24h-Timer gestartet" if enabled else "Timer gestoppt – bleibt offen"
+    raise web.HTTPFound(back + "&ok=" + quote_plus(f"Ticket #{num}: {result}"))
 
 
 def _parse_reasons(raw: str) -> list[dict]:

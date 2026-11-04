@@ -25,6 +25,8 @@ CID_CLAIM = "tickets:claim"
 CID_UNCLAIM = "tickets:unclaim"
 CID_LOCK = "tickets:lock"
 CID_UNLOCK = "tickets:unlock"
+CID_AUTOCLOSE = "tickets:autoclose"
+CID_KEEP_OPEN = "tickets:keep_open"
 
 ANSWER_MAX = 1000  # max. Zeichen je Antwort (Discord-Modal und Website)
 
@@ -85,7 +87,8 @@ def build_panel_view(panel: dict, *, open_label: str | None = None, emojis: bool
     return view
 
 
-def build_controls_view(lang: str, *, claimed: bool = False, locked: bool = False) -> discord.ui.View:
+def build_controls_view(lang: str, *, claimed: bool = False, locked: bool = False,
+                        auto_close: bool = False) -> discord.ui.View:
     """Steuerleiste innerhalb eines Tickets (statische custom_ids → persistent)."""
     view = discord.ui.View(timeout=None)
     view.add_item(
@@ -129,6 +132,12 @@ def build_controls_view(lang: str, *, claimed: bool = False, locked: bool = Fals
                 custom_id=CID_LOCK,
             )
         )
+    view.add_item(discord.ui.Button(
+        style=discord.ButtonStyle.secondary,
+        label=t(lang, "btn_keep_open" if auto_close else "btn_autoclose"),
+        emoji="⏱️",
+        custom_id=CID_KEEP_OPEN if auto_close else CID_AUTOCLOSE,
+    ))
     return view
 
 

@@ -1,3 +1,17 @@
+## 04.11.2026 – Support v2.2.9 (Dev-Quellen, Live-Abnahme offen)
+
+- Fahrzeugfenster: echte Garagenauswahl mit Namen, Kennungen und Automatik.
+- Eigenes Einpark-/Reparaturergebnis je Zeile; Wartestatus, Fehler und ungeklärte
+  Ergebnisse sichtbar. Kein grüner Erfolg allein durch die Auftragsannahme.
+- Lesender Prüfen-Knopf und Schutz gegen doppelte/unbestätigte Wiederholungen.
+- Private Fahrzeuge können ein geprüftes öffentliches Ziel wählen; vorhandene
+  Klassen-, Ausparkpunkt-, Identitäts-, Beschlagnahme- und Werkstattprüfungen bleiben.
+- Serverkatalog auch mit reinem Einparkrecht verfügbar, ohne Itemkatalog-Zugriff.
+- AP-Bridge 1.3.2 und matters-garage 0.3.2 gemeinsam erforderlich. Keine SQL-Datei.
+- Leasing-/Firmen-Rückgaben und gebundene Fraktionsziele behalten ihre eigenen
+  Abläufe. Keine pauschale Umlagerung oder Vertragsänderung.
+- Nur isolierte Code-/Browserprüfungen; keine NAS-/Live-Aktivierung durch Codex.
+
 ## 01.11.2026 – Support v2.2.8 (Dev-Testbuild)
 
 - Die Fahrzeugakte zeigt Einparken und Reparieren auch für Fraktionsfahrzeuge.

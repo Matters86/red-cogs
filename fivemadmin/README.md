@@ -1,3 +1,18 @@
+## Einpark-Korrektur vom 04.11.2026
+
+Aktuell: `2026-11-04-support-v2.2.9`, AP-Bridge `1.3.2`, matters-garage `0.3.2`.
+Den vollständigen Cog und die zusammengehörigen FiveM-Dateien gemeinsam sichern
+und übernehmen. Den Cog/Bot lädt der Betreiber auf der NAS neu; die FiveM-Dateien
+beim regulären Serverstart laden. Es gibt keine neue SQL-Migration.
+
+Im Fahrzeugfenster die Zielgarage per Namen wählen oder Automatik verwenden.
+Fahrzeug muss leer und der Motor aus sein. Erst die Serverbestätigung bestätigt
+das Einparken. Bei unklarem Ergebnis zuerst „Prüfen“/Aktionsprotokoll verwenden;
+keinen Auftrag blind wiederholen. Leasing-/Firmenfahrzeuge behalten ihre
+Rückgabewege; Fraktionsfahrzeuge ihre bestätigten Fraktionsziele.
+
+Spiel-/Live-Abnahme offen. Der Quellstand allein bestätigt keine Live-Aktion.
+
 ## 01.11.2026 – Support v2.2.8 (Dev-Testbuild)
 
 - Die Fahrzeugakte zeigt Einparken und Reparieren auch für Fraktionsfahrzeuge.

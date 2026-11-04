@@ -74,7 +74,7 @@ async def tickets_changelog():
     await tc_seed.seed(bot, tk, cl)
     g = bot.guilds[0]
     gc = tk.config.guild(g)
-    assert wc.pages["tickets"].operate_forms == {"ticket_close"}
+    assert wc.pages["tickets"].operate_forms == {"ticket_close", "ticket_autoclose", "ticket_keepopen"}
     assert callable(wc.pages["changelog"].operate_forms)
     await wc.config.role_perms.set({"1000": {"1101": {"tickets": "operate", "changelog": "operate"},
                                              "1102": {"tickets": "view", "changelog": "view"},
@@ -84,7 +84,7 @@ async def tickets_changelog():
 
     # ---- Oberfläche
     t = await page(client, LENA, "/cogs/tickets?guild=1000")
-    assert_operate_page(t, "ticket_close")
+    assert_operate_page(t, "ticket_autoclose,ticket_close,ticket_keepopen")
     assert "Offene Tickets" in t and t.count("value='ticket_close'") == 2, t.count("value='ticket_close'")
     assert "Du kannst Aktionen ausführen, aber keine Einstellungen ändern." in t
     tok = csrf(t)

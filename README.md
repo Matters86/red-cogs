@@ -35,7 +35,7 @@ Danach `webcore` einrichten (siehe [`webcore/README.md`](webcore/README.md)).
 | [`scheduler`](scheduler/) | Geplante Nachrichten (Text/Embed, Rollen-Ping): einmalig, täglich, Wochentage, monatlich, Intervall – mit Zeitzone/Sommerzeit, Auto-Pause bei Fehlern, Dashboard mit Vorschau und „Jetzt testen“. |
 | [`serverstats`](serverstats/) | Server-Statistik ohne Personendaten: Beitritte, Abgänge, Mitglieder, Nachrichten und Voice-Zeit je Kanal – Dashboard „Statistik“ mit Diagrammen (7/30/90 Tage), Top-Kanälen, CSV-Export und `[p]stats`. |
 | [`sticky`](sticky/) | Hält eine Nachricht am unteren Ende eines Kanals fest – mit Webhook-Modus, Platzhaltern und Dashboard. |
-| [`tickets`](tickets/) | Mehrsprachiges Ticketsystem mit Panels, Team-Zuordnung je Grund, Transcripts und Dashboard. |
+| [`tickets`](tickets/) | Mehrsprachiges Ticketsystem mit Panels, Team-Zuordnung je Grund, abbrechbarem 24h-Inaktivitätstimer, Transcripts und Dashboard. |
 | [`twitchlive`](twitchlive/) | Twitch-Live-Benachrichtigungen: genau eine Meldung pro Stream mit Vorschaubild, Rollen-Ping, eigener Nachricht, „war live“-Bearbeitung nach Stream-Ende, optionaler Live-Rolle und Dashboard. |
 | [`warns`](warns/) | Verwarnsystem mit Punkten, Verfall, automatischen Maßnahmen (inkl. Hierarchie-Schutz), DM und Log sowie Dashboard. Hinweis: Reds eingebauten Cog `warnings` vorher entladen (`[p]unload warnings`). |
 | [`welcome`](welcome/) | Willkommens- und Abschiedsnachrichten, Willkommensbild mit Avatar, Willkommens-DM und Dashboard mit Live-Vorschau. |

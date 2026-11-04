@@ -32,6 +32,7 @@ SUITES = [
     ("rm_functest", "raidhelper: Mitgliederseite /me/raids (Sichtbarkeit, Anmelden, Ablehnungen)"),
     ("pr_test", "poll + autorole: Mitgliederseiten /me/umfragen und /me/rollen"),
     ("tc_functest", "tickets + changelog: „Meine Tickets“ und öffentliche Changelog-API"),
+    ("ticket_timer_test", "tickets: 24h-Inaktivitätstimer, Abbruch, Neustart/Downtime, Rechte und Nebenläufigkeit"),
     ("tw_functest", "twitchlive: gemockte Twitch-API, Live-Meldungen, Live-Rolle, Befehle, Dashboard"),
     ("wl_test_welcome", "welcome: Beitritt/Verlassen, Willkommensbild, DM, Befehle, Dashboard"),
     ("wl_test_warns", "warns: Punkte, Verfall, Maßnahmen mit Hierarchie-Schutz, Befehle, Dashboard"),

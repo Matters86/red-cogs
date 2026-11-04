@@ -569,6 +569,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
 @media(max-width:720px){.support-layout{grid-template-columns:1fr}.case-browser{position:static}.case-list{max-height:50vh}.support-layout.case-open .case-browser{display:none}.support-layout:not(.case-open) .case-workspace{display:none}.case-back{display:inline-flex;margin-bottom:16px}.case-titlebar h2{font-size:21px}.case-form-grid{grid-template-columns:1fr}.case-form-grid .wide{grid-column:auto}.case-info-grid{gap:13px}.vehicle-search-fields{grid-template-columns:1fr}.vehicle-search-fields label{margin-top:0}.vehicle-records{grid-template-columns:1fr}.diag-controls{grid-template-columns:1fr}.case-operation .split{flex-direction:column;align-items:stretch}.case-operation .split>*{width:100%}.server-context{margin:0 14px 15px;gap:8px 11px;padding:12px}.server-context select{min-width:0;max-width:none;width:100%;font-size:15px}.server-context>label{flex-basis:100%}.server-context-badge{flex:1;flex-wrap:wrap;font-size:11px}.profile-state{margin:0;font-size:10px}.server-context~#profile-content nav.tabs{top:calc(var(--server-context-height,75px) + 8px)}.profile-prompt{margin:20px 14px}.report-save{align-items:stretch;flex-direction:column}.report-save>div{min-width:0}.case-photo-button{min-height:38px}.case-form-actions .btn{flex:1}.case-section h3{font-size:14px}}
 
 .modal-body,.scroll-y,#search-wrap,#roles-wrap,#users-wrap,#audit-wrap,#bans-wrap{max-width:100%;overflow-x:auto}.modal-box,.tools-grid>*{min-width:0}.report-json{max-width:100%;box-sizing:border-box}
+#veh-modal .modal-box{max-width:780px}#veh-body{min-height:0}.vehicle-garage-choice{margin-bottom:14px;flex-shrink:0}.vehicle-garage-choice .hint{font-size:11px;margin-top:7px}.vehicle-modal-table{table-layout:fixed;width:100%;min-width:0!important}.vehicle-modal-table th:nth-child(1){width:20%}.vehicle-modal-table th:nth-child(2){width:19%}.vehicle-modal-table th:nth-child(3){width:20%}.vehicle-modal-table td{vertical-align:top;overflow-wrap:anywhere}.vehicle-modal-table [data-vehicle-state]{font-family:var(--font-mono);font-size:12px}.vehicle-row-buttons{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}.vehicle-action-status{margin-top:8px;font-size:11px;line-height:1.6;text-align:left;overflow-wrap:anywhere;white-space:pre-wrap}.vehicle-action-status:empty{display:none}@media(max-width:640px){#veh-modal .modal-box{max-height:92dvh}#veh-body{overflow-x:hidden}.vehicle-modal-table,.vehicle-modal-table tbody{display:block}.vehicle-modal-table thead{display:none}.vehicle-modal-table tr{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px 12px;padding:15px 0;border-bottom:1px solid var(--line)}.vehicle-modal-table tr:first-child{padding-top:2px}.vehicle-modal-table tr:last-child{border-bottom:0}.vehicle-modal-table td{display:block;min-width:0;padding:0!important;border:0}.vehicle-modal-table td[data-label]:before{content:attr(data-label);display:block;color:var(--muted);font-family:var(--font-body);font-size:10px;margin-bottom:4px}.vehicle-modal-table td:nth-child(3),.vehicle-row-controls{grid-column:1/-1}.vehicle-row-buttons{justify-content:flex-start}.vehicle-row-buttons button{min-height:40px}.vehicle-action-status{font-size:12px}.vehicle-garage-choice select{font-size:16px;min-height:44px}}
 
 /* Feed entries keep their content height inside the bounded scrolling lists. */
 .feed>.frow{flex:0 0 auto;min-height:64px;align-items:start}
@@ -614,7 +615,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
       Android/Chrome: Menü ⋮ → „App installieren“<br>
       iPhone/Safari: Teilen <span style="font-family:var(--font-mono)">⎋</span> → „Zum Home-Bildschirm“
     </p>
-    <p class="sub" id="panel-build-gate">Oberfläche: 01.11.2026 · Support v2.2.8</p>
+    <p class="sub" id="panel-build-gate">Oberfläche: 04.11.2026 · Support v2.2.9</p>
   </div>
 </div>
 
@@ -743,9 +744,9 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
         <p class="hint">Per Kennzeichen in eine Garage setzen. Gespawnte Fahrzeuge werden entfernt.</p>
         <label for="car-plate">Kennzeichen</label>
         <input id="car-plate" placeholder="SA 1234" autocomplete="off">
-        <label for="car-garage">Garage <span class="dim" style="font-weight:400">(leer = automatisch: letzte bzw. nächste passende)</span></label>
-        <input id="car-garage" list="garage-list" placeholder="leer = automatisch" autocomplete="off">
-        <datalist id="garage-list"></datalist>
+        <label for="car-garage">Ziel-Garage</label>
+        <select id="car-garage"><option value="">Automatisch · passende Garage</option></select>
+        <p class="hint" id="car-garage-note">Garagenliste wird geladen. Automatisch bleibt verfügbar.</p>
         <button class="btn block" id="car-btn">Fahrzeug einparken</button>
         <div class="msg" id="car-msg" role="status" aria-live="polite"></div>
         <div data-perm="park_all" style="margin-top:14px;border-top:1px solid var(--line);padding-top:14px">
@@ -919,7 +920,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
           <button class="btn small" id="diag-btn" style="margin-left:auto">Prüfen</button>
         </div>
         <p class="hint">Prüft, ob DB, Exports, Tabellen und das Society-System zu diesem Server passen – ideal beim ersten Livegang.</p>
-        <p class="hint" id="panel-build-server">Oberfläche: 01.11.2026 · Support v2.2.8. Die FiveM-Bridge wird getrennt aktualisiert.</p>
+        <p class="hint" id="panel-build-server">Oberfläche: 04.11.2026 · Support v2.2.9. Die FiveM-Bridge wird getrennt aktualisiert.</p>
         <div id="diag-wrap"><div class="empty">Noch nicht geprüft.</div></div>
       </section>
     </div>
@@ -1019,12 +1020,14 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   <div class="modal-box card">
     <div class="modal-head">
       <h2>Fahrzeuge · <span class="mono-title" id="veh-cid"></span></h2>
+      <button class="btn ghost small" id="veh-refresh" type="button" style="white-space:nowrap;flex-shrink:0">Prüfen</button>
       <button class="modal-close" id="veh-close" aria-label="Schließen">✕</button>
     </div>
-    <div class="split" style="align-items:flex-end;margin-bottom:12px">
+    <div class="vehicle-garage-choice">
       <div>
-        <label for="veh-garage" style="margin-top:0">Ziel-Garage fürs Einparken <span class="dim" style="font-weight:400">(leer = automatisch)</span></label>
-        <input id="veh-garage" list="garage-list" placeholder="leer = automatisch" autocomplete="off">
+        <label for="veh-garage" style="margin-top:0">Ziel-Garage fürs Einparken</label>
+        <select id="veh-garage" aria-describedby="veh-garage-note"><option value="">Automatisch · passende Garage</option></select>
+        <p class="hint" id="veh-garage-note">Garagenliste wird geladen. Automatisch bleibt verfügbar.</p>
       </div>
     </div>
     <div class="modal-body" id="veh-body"><div class="empty">Lade Fahrzeuge…</div></div>
@@ -1171,6 +1174,8 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   var modalFocus = {};
   var viewScopes = {};
   var catalogRetryAt = 0;
+  var garageOptions = [];
+  var vehicleActions = {};
   var READ_ACTIONS = ["diag", "get_stats", "get_inventory", "get_vehicles", "search_player", "support_vehicle_search", "support_vehicle_case", "support_diagnose"];
   var activeTab = "players";
   var statsData = null;
@@ -1604,8 +1609,16 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   $("it-add").addEventListener("click", function () { itemOp("give_item"); });
   $("it-remove").addEventListener("click", function () { itemOp("remove_item"); });
 
+  function renderGarageChoices(note) {
+    ['car-garage','veh-garage'].forEach(function(id){
+      var select=$(id),chosen=select.value;
+      select.innerHTML='<option value="">Automatisch · passende Garage</option>'+garageOptions.map(function(g){return '<option value="'+esc(g.id)+'"'+(g.selectable?'':' disabled')+'>'+esc((g.label===g.id?g.label:g.label+' · '+g.id)+(g.selectable?'':' · nicht frei wählbar'))+'</option>';}).join('');
+      select.value=garageOptions.some(function(g){return g.id===chosen&&g.selectable;})?chosen:'';
+      $(id+'-note').textContent=note || 'Automatisch empfohlen. Der Server prüft Fahrzeugtyp und gewählte Garage.';
+    });
+  }
   function loadCatalog() {
-    if(catalogLoaded || Date.now()<catalogRetryAt || (!can('items') && !can('view_inventory')))return;
+    if(catalogLoaded || Date.now()<catalogRetryAt || (!can('items') && !can('view_inventory') && !can('car_to_garage')))return;
     catalogLoaded=true;var view=beginView('catalog');
     api('/api/panel/catalog').then(function(data){
       if(!viewCurrent(view))return;
@@ -1613,12 +1626,14 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
       var items=data.items,html='';catalogMap={};
       items.forEach(function(item){if(!item || typeof item.name!=='string')return;catalogMap[item.name]=item.label||item.name;html+='<option value="'+esc(item.name)+'">'+esc(item.label||item.name)+'</option>';});
       $('item-list').innerHTML=html;
-      var garages=Array.isArray(data.garages)?data.garages.filter(function(name){return typeof name==='string' && name.length>0 && name.length<=96;}):[],input=$('veh-garage');
-      $('garage-list').innerHTML=garages.map(function(name){return '<option value="'+esc(name)+'"></option>';}).join('');
-      var hint=garages.length?'leer = automatisch · z. B. '+garages[0]:'leer = automatisch (Namensliste noch nicht bestätigt)';
-      $('car-garage').placeholder=hint;if(input)input.placeholder=hint;
-      if(!garages.length){catalogLoaded=false;catalogRetryAt=Date.now()+60000;}
-    }).catch(function(error){if(viewCurrent(view)){catalogLoaded=false;catalogRetryAt=Date.now()+60000;}});
+      var rows=Array.isArray(data.garage_options)?data.garage_options:Array.isArray(data.garages)?data.garages.map(function(id){return {id:id,label:id};}):[],seen=new Set();
+      garageOptions=rows.slice(0,100).filter(function(g){
+        if(!g || typeof g.id!=='string' || !g.id.trim() || g.id.length>100 || /[\x00-\x1f\x7f]/.test(g.id) || typeof g.label!=='string' || !g.label.trim() || g.label.length>200 || /[\x00-\x1f\x7f]/.test(g.label) || seen.has(g.id))return false;
+        seen.add(g.id);return true;
+      }).map(function(g){return {id:g.id,label:g.label,selectable:g.selectable===undefined||g.selectable===true};});
+      renderGarageChoices(garageOptions.length?'':'Keine bestätigte Garagenliste verfügbar. Automatisch bleibt verfügbar.');
+      if(!garageOptions.length){catalogLoaded=false;catalogRetryAt=Date.now()+60000;}
+    }).catch(function(error){if(viewCurrent(view)){catalogLoaded=false;catalogRetryAt=Date.now()+60000;garageOptions=[];renderGarageChoices('Garagenliste nicht erreichbar. Automatisch bleibt verfügbar.');}});
   }
 
   /* ---------- Offline-Suche ---------- */
@@ -1930,55 +1945,147 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   function openVehicles(cid) {
     $('veh-cid').textContent=cid;$('veh-body').innerHTML='<div class="empty">Lade Fahrzeuge…</div>';openModal('veh-modal');
     var view=beginView('veh-modal',cid);
-    function failed(message){if(viewCurrent(view))$('veh-body').innerHTML='<div class="empty">'+esc(message)+'</div>';}
+    view.requestedAt=Date.now();
+    $('veh-refresh').disabled=true;
+    loadCatalog();
+    function failed(message){if(viewCurrent(view)){$('veh-refresh').disabled=false;$('veh-body').innerHTML='<div class="empty">'+esc(message)+'</div>';}}
     createAction('get_vehicles',cid,{}).then(function(data){
       if(!viewCurrent(view))return;
-      trackQuery(data && data.id,function(action){renderVehicles(actionArray(action,'vehicles'));},failed,view);
+      trackQuery(data && data.id,function(action){renderVehicles(actionArray(action,'vehicles'));$('veh-refresh').disabled=false;},failed,view);
     }).catch(function(error){if(error.message!=='stale_session')failed('Abfrage konnte nicht bestätigt werden.');});
   }
 
+  function vehicleJobCurrent(job) {
+    return job.session===sessionEpoch && job.access===accessEpoch && job.profile===profileGeneration && can(job.type==='repair_vehicle'?'repair_vehicle':'car_to_garage');
+  }
+  function resetVehicleActions() {
+    Object.keys(vehicleActions).forEach(function(key){clearTimeout(vehicleActions[key].timer);});
+    vehicleActions={};
+  }
+  function vehicleJobKey(type,cid,id,plate) { return JSON.stringify([type,cid,id,plate]); }
+  function vehicleRowJobs(cid,id,plate) {
+    return Object.keys(vehicleActions).map(function(key){return vehicleActions[key];}).filter(function(job){return vehicleJobCurrent(job)&&job.cid===cid&&job.vehicleId===id&&job.plate===plate;});
+  }
+  function renderVehicleJob(job) {
+    var view=viewScopes['veh-modal'];
+    if(!vehicleJobCurrent(job)||!viewCurrent(view)||view.identity!==job.cid)return;
+    var row=Array.from($('veh-body').querySelectorAll('[data-vehicle-row]')).find(function(el){return Number(el.dataset.vehicleRow)===job.vehicleId&&el.dataset.vehiclePlate===job.plate;});
+    if(!row)return;
+    var jobs=vehicleRowJobs(job.cid,job.vehicleId,job.plate),busy=jobs.some(function(j){return j.phase==='submitting'||j.phase==='pending'||j.phase==='uncertain'||j.phase==='failed';}),parked=jobs.some(function(j){return j.type==='car_to_garage'&&j.phase==='done';}),repaired=jobs.some(function(j){return j.type==='repair_vehicle'&&j.phase==='done';});
+    row.querySelectorAll('button').forEach(function(button){
+      var repair=button.hasAttribute('data-repair-id'),complete=parked||repair&&repaired;
+      button.disabled=busy||complete||button.dataset.available!=='1';
+      button.textContent=repair?(repaired?'Repariert':'Reparieren'):parked?'Eingeparkt':'Einparken';
+      button.setAttribute('aria-busy',String(jobs.some(function(j){return j.phase==='submitting'||j.phase==='pending';})));
+    });
+    var state=row.querySelector('[data-vehicle-state]'),uncertain=jobs.some(function(j){return j.phase==='uncertain'||j.phase==='failed'&&j.manualReview;});
+    state.textContent=uncertain?'Abschluss unbestätigt':parked?'Eingeparkt · bestätigt':state.dataset.observedText;
+    state.className='v '+(uncertain?'warn':parked?'good':state.dataset.observedClass);
+    var latest=jobs.reduce(function(a,b){return !a||b.startedAt>=a.startedAt?b:a;},null);
+    if(!latest)return;
+    var status=row.querySelector('[data-vehicle-action-status]');
+    status.textContent=latest.message;
+    status.className='vehicle-action-status '+(latest.phase==='done'?'good':latest.phase==='failed'||latest.phase==='rejected'?'bad':'warn');
+  }
+  function updateVehicleJob(job,phase,message) {
+    if(!vehicleJobCurrent(job))return;
+    if(job.phase===phase&&job.message===message)return;
+    if((phase==='done'||phase==='failed')&&!job.finishedAt)job.finishedAt=Date.now();
+    job.phase=phase;job.message=message;
+    if(phase!=='pending'&&phase!=='submitting'){clearTimeout(job.timer);job.timer=null;}
+    renderVehicleJob(job);
+  }
+  function checkVehicleActionResults(actions) {
+    var byId={};actions.forEach(function(action){byId[action.id]=action;});
+    Object.keys(vehicleActions).forEach(function(key){
+      var job=vehicleActions[key];
+      if(!vehicleJobCurrent(job)){clearTimeout(job.timer);delete vehicleActions[key];return;}
+      if(!job.actionId)return;
+      var action=byId[job.actionId];if(!action)return;
+      var params;try{params=typeof action.params==='string'?JSON.parse(action.params):action.params;}catch(_){params=null;}
+      if(action.action_type!==job.type||typeof action.target!=='string'||action.target.trim()!==job.plate||!params||params.vehicle_id!==job.vehicleId||params.expected_plate!==job.plate||job.type==='car_to_garage'&&params.garage!==job.garage){updateVehicleJob(job,'uncertain','Auftrag nicht eindeutig zugeordnet. Bitte das Aktionsprotokoll prüfen; nicht erneut senden.');return;}
+      var suffix=' · Auftrag #'+job.actionId;
+      if(action.result_review_required===true||action.result_review_required===1){updateVehicleJob(job,'uncertain','Abschluss nicht eindeutig. Bitte das Aktionsprotokoll prüfen; nicht erneut senden.'+suffix);return;}
+      if(action.status==='done'){
+        if(typeof action.result!=='string'||!action.result.trim()){updateVehicleJob(job,'uncertain','Abschluss ohne bestätigtes Ergebnis. Bitte das Aktionsprotokoll prüfen.'+suffix);return;}
+        updateVehicleJob(job,'done',(job.type==='car_to_garage'?'Einparken vom Server bestätigt.':'Reparatur vom Server bestätigt.')+suffix);
+      }else if(action.status==='failed'){
+        var result=typeof action.result==='string'?action.result.trim().slice(0,300):'';
+        job.manualReview=!result||/nicht best.tigt|unbest.tigt|ungekl.rt|manuell|pr.fen/i.test(result);
+        updateVehicleJob(job,'failed','Fehlgeschlagen'+(result?': '+result:'. Details im Aktionsprotokoll.')+(job.manualReview?' Vor weiterer Aktion manuell prüfen; nicht erneut senden.':' Mit „Prüfen“ die Fahrzeugliste neu laden, bevor du erneut sendest.')+suffix);
+      }else if(action.status==='pending'){
+        if(job.phase==='done'||job.phase==='failed'){updateVehicleJob(job,'uncertain','Auftragsstatus widersprüchlich. Bitte das Aktionsprotokoll prüfen; nicht erneut senden.'+suffix);return;}
+        var held=action.profile_queue_hold===true||action.profile_queue_hold===1||action.dispatch_hold_reason||lastServer?.bridge?.mutation_queue_ready===false;
+        if(held)updateVehicleJob(job,'uncertain',actionStatus(action)+'. Bitte das Aktionsprotokoll prüfen; nicht erneut senden.'+suffix);
+        else if(job.phase==='pending')updateVehicleJob(job,'pending','Auftrag wartet auf Serverbestätigung'+(job.garageLabel?' · Ziel: '+job.garageLabel:'')+suffix);
+      }else updateVehicleJob(job,'uncertain','Auftragsstatus nicht bestätigt. Bitte das Aktionsprotokoll prüfen; nicht erneut senden.'+suffix);
+    });
+  }
+  function submitVehicleJob(type,id,plate,cid,garage) {
+    var existing=vehicleRowJobs(cid,id,plate);
+    if(existing.some(function(job){return job.phase==='submitting'||job.phase==='pending'||job.phase==='uncertain'||job.phase==='failed'||job.type==='car_to_garage'&&job.phase==='done';}))return;
+    var option=garageOptions.find(function(g){return g.id===garage;}),job={type:type,vehicleId:id,plate:plate,cid:cid,session:sessionEpoch,access:accessEpoch,profile:profileGeneration,startedAt:Date.now(),phase:'submitting',message:'Anfrage wird gesendet …',garage:garage,garageLabel:type==='car_to_garage'?(garage?option.label+' · '+garage:'Automatisch'):null};
+    vehicleActions[vehicleJobKey(type,cid,id,plate)]=job;renderVehicleJob(job);
+    var params={vehicle_id:id,expected_plate:plate};if(type==='car_to_garage')params.garage=garage;
+    createAction(type,plate,params).then(function(data){
+      if(!vehicleJobCurrent(job))return;
+      if(!data||typeof data.id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.id)){updateVehicleJob(job,'uncertain','Auftragsnummer nicht bestätigt. Bitte das Aktionsprotokoll prüfen; nicht erneut senden.');return;}
+      job.actionId=data.id;
+      updateVehicleJob(job,'pending','Auftrag wartet auf Serverbestätigung'+(job.garageLabel?' · Ziel: '+job.garageLabel:'')+' · Auftrag #'+data.id);
+      job.timer=setTimeout(function(){updateVehicleJob(job,'uncertain','Noch keine Serverbestätigung. Bitte das Aktionsprotokoll prüfen; nicht erneut senden. · Auftrag #'+data.id);},45000);
+      poll();
+    }).catch(function(error){
+      if(!vehicleJobCurrent(job)||error.message==='stale_session')return;
+      var rejected=error.message==='locked'||error.message==='queue_held'||error.status>=400&&error.status<500&&error.status!==408;
+      var reason=error.status===400?'Fahrzeugauswahl oder Eingaben ungültig.':error.status===409?'Der Serverzustand hat sich geändert. Bitte neu prüfen.':error.status===429?'Zu viele Anfragen. Bitte kurz warten.':errText(error);
+      updateVehicleJob(job,rejected?'rejected':'uncertain',rejected?'Anfrage abgelehnt: '+reason:'Antwort nicht bestätigt. Bitte das Aktionsprotokoll prüfen; nicht erneut senden.');
+    });
+  }
   function renderVehicles(vehicles) {
     if (!vehicles.length) {
       $("veh-body").innerHTML = '<div class="empty">Keine eigenen oder aktiv geleasten Fahrzeuge gefunden.</div>';
       return;
     }
-    var html = '<table class="t"><thead><tr>' +
-      '<th>Modell</th><th>Kennzeichen</th><th>Status</th><th></th>' +
+    var html = '<table class="t vehicle-modal-table"><thead><tr>' +
+      '<th>Modell</th><th>Kennzeichen</th><th>Status</th><th>Aktionen</th>' +
       '</tr></thead><tbody>';
     vehicles.forEach(function (v) {
-      var st = VEH_STATE[v.state] != null ? VEH_STATE[v.state] : "?";
+      var st = VEH_STATE[v.state] != null ? VEH_STATE[v.state] : "Nicht bestätigt";
       var stCls = v.state === 1 ? "good" : (v.state === 0 ? "warn" : "bad");
-      if (v.state === 1 && v.garage) st += ": " + esc(v.garage);
-      html += '<tr>' +
-        '<td>' + esc(v.vehicle || "?") + (Number.isInteger(v.id) && v.id>0 && v.id<=2147483647 ? '<div class="p-sub">ID '+esc(v.id)+'</div>' : '<div class="p-sub">ID nicht bestätigt</div>') + '</td>' +
-        '<td class="mono dim">' + esc(v.plate || "?") + (v.relation==="lease"?'<div class="p-sub">Leasing #'+esc(v.contract_id)+'</div>':'') + '</td>' +
-        '<td><span class="v ' + stCls + '" style="font-family:var(--font-mono);font-size:12.5px">' + st + '</span></td>' +
-        '<td style="text-align:right"><button class="abtn" data-vplate="' + esc(v.plate || "") + '" data-vid="'+esc(Number.isInteger(v.id)?v.id:'')+'"'+(Number.isInteger(v.id)&&v.id>0&&v.id<=2147483647?'':' disabled')+'>Einparken</button>' + (can('repair_vehicle')&&Number.isInteger(v.id)&&v.id>0&&v.id<=2147483647&&v.state===0?'<button class="abtn" data-repair-id="'+esc(v.id)+'" data-repair-plate="'+esc(v.plate||'')+'">Reparieren</button>':'') + '</td>' +
+      if (v.state === 1 && v.garage) st += ": " + v.garage;
+      var plate=typeof v.plate==='string'?v.plate.trim():'';
+      var identity=Number.isInteger(v.id)&&v.id>0&&v.id<=2147483647&&plate&&plate.length<=15;
+      var parkable=identity&&can('car_to_garage')&&v.state===0&&v.relation!=='lease';
+      var note=!identity?'Fahrzeug-ID oder Kennzeichen nicht bestätigt.':v.relation==='lease'?'Einparken für Leasingfahrzeuge hier nicht verfügbar.':v.state===1?'Bereits eingeparkt.':v.state===2?'Beschlagnahmt · Freigabe über das zuständige Depot.':v.state!==0?'Fahrzeugstatus nicht bestätigt.':'';
+      html += '<tr data-vehicle-row="'+esc(identity?v.id:'')+'" data-vehicle-plate="'+esc(plate)+'">' +
+        '<td data-label="Modell">' + esc(v.vehicle || "?") + (identity ? '<div class="p-sub">ID '+esc(v.id)+'</div>' : '<div class="p-sub">ID nicht bestätigt</div>') + '</td>' +
+        '<td data-label="Kennzeichen" class="mono dim">' + esc(v.plate || "?") + (v.relation==="lease"?'<div class="p-sub">Leasing #'+esc(v.contract_id)+'</div>':'') + '</td>' +
+        '<td data-label="Status"><span data-vehicle-state data-observed-text="'+esc(st)+'" data-observed-class="'+esc(stCls)+'" class="v ' + stCls + '">' + esc(st) + '</span></td>' +
+        '<td class="vehicle-row-controls"><div class="vehicle-row-buttons"><button class="abtn" data-vplate="' + esc(plate) + '" data-vid="'+esc(identity?v.id:'')+'" data-available="'+(parkable?'1':'0')+'"'+(parkable?'':' disabled')+'>Einparken</button>' + (can('repair_vehicle')&&identity&&v.state===0?'<button class="abtn" data-repair-id="'+esc(v.id)+'" data-repair-plate="'+esc(plate)+'" data-available="1">Reparieren</button>':'') + '</div><div data-vehicle-action-status class="vehicle-action-status" role="status" aria-live="polite" aria-atomic="true">'+esc(note)+'</div></td>' +
       '</tr>';
     });
     $("veh-body").innerHTML = html + "</tbody></table>";
+    var view=viewScopes['veh-modal'];
+    if(viewCurrent(view))vehicles.forEach(function(v){
+      var plate=typeof v.plate==='string'?v.plate.trim():'';
+      vehicleRowJobs(view.identity,v.id,plate).forEach(function(job){
+        if((job.phase==='done'||job.phase==='failed'&&!job.manualReview)&&view.requestedAt>job.finishedAt)delete vehicleActions[vehicleJobKey(job.type,job.cid,job.vehicleId,job.plate)];
+        else renderVehicleJob(job);
+      });
+    });
   }
 
   $("veh-body").addEventListener("click", function (ev) {
-    var repair=ev.target.closest("[data-repair-id]");
-    if(repair){
-      var rv=viewScopes["veh-modal"],ri=Number(repair.dataset.repairId),rp=repair.dataset.repairPlate;
-      if(!viewCurrent(rv)||!can("repair_vehicle")||!Number.isInteger(ri)||ri<1||ri>2147483647)return;
-      if(!window.confirm("Fahrzeug "+rp+" (#"+ri+") vollständig reparieren? Auch ein vorhandenes Wrack wird instand gesetzt. Alle müssen ausgestiegen sein."))return;
-      repair.disabled=true;
-      createAction("repair_vehicle",rp,{vehicle_id:ri,expected_plate:rp},"players-msg",rv);
-      return;
-    }
-    var el = ev.target.closest("[data-vplate]");
-    if (!el) return;
-    var plate = el.getAttribute("data-vplate"),id=Number(el.getAttribute("data-vid")),view=viewScopes["veh-modal"];
-    if(!viewCurrent(view)||!Number.isInteger(id)||id<1||id>2147483647)return;
-    // Leer = Bridge entscheidet (letzte Garage des Fahrzeugs bzw. nächste passende)
-    var garage = $("veh-garage").value.trim();
-    el.disabled = true;
-    el.textContent = "→ " + (garage || "automatisch");
-    createAction("car_to_garage", plate, { garage: garage,vehicle_id:id,expected_plate:plate }, "players-msg",view);
+    var button=ev.target.closest('[data-repair-id],[data-vplate]');if(!button||button.disabled)return;
+    var view=viewScopes['veh-modal'],repair=button.hasAttribute('data-repair-id'),id=Number(repair?button.dataset.repairId:button.dataset.vid),plate=repair?button.dataset.repairPlate:button.dataset.vplate;
+    if(!viewCurrent(view)||!can(repair?'repair_vehicle':'car_to_garage')||!Number.isInteger(id)||id<1||id>2147483647||button.dataset.available!=='1')return;
+    if(repair&&!window.confirm('Fahrzeug '+plate+' (#'+id+') vollständig reparieren? Auch ein vorhandenes Wrack wird instand gesetzt. Alle müssen ausgestiegen sein.'))return;
+    var garage=repair?'':$('veh-garage').value;
+    if(garage&&!garageOptions.some(function(g){return g.id===garage&&g.selectable;}))return;
+    submitVehicleJob(repair?'repair_vehicle':'car_to_garage',id,plate,view.identity,garage);
   });
+
+  $('veh-refresh').addEventListener('click',function(){var view=viewScopes['veh-modal'];if(viewCurrent(view)&&can('car_to_garage'))openVehicles(view.identity);});
 
   function openModal(id) {
     modalFocus[id] = document.activeElement;
@@ -2900,7 +3007,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     if (data.limits) applyLimits(data.limits);
     renderServer(data.server);
     var actions = Array.isArray(data.actions) ? data.actions : [];
-    renderFeed(actions); checkQueryResults(actions);
+    renderFeed(actions); checkQueryResults(actions); checkVehicleActionResults(actions);
     renderLogs(Array.isArray(data.events) ? data.events : []);
     var pending = actions.filter(function (a) { return a.status === "pending"; }).length;
     var failed = actions.filter(function (a) { return a.status === "failed"; }).length;
@@ -2940,7 +3047,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
       pollInFlight = null;
       $("refresh-btn").disabled = false;
       $("refresh-btn").removeAttribute("aria-busy");
-      var delay = pollFailures ? Math.min(30000,5000*Math.pow(2,pollFailures)) : Object.keys(pendingQueries).length ? 3000 : 5000;
+      var delay = pollFailures ? Math.min(30000,5000*Math.pow(2,pollFailures)) : Object.keys(pendingQueries).length || Object.keys(vehicleActions).some(function(key){return vehicleActions[key].phase==='pending';}) ? 3000 : 5000;
       schedulePoll(delay);
     });
     pollInFlight = request;
@@ -2970,6 +3077,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     }
     if (previousPerms !== null && previousPerms !== perms.slice().sort().join("|")) {
       accessEpoch++;
+      resetVehicleActions();garageOptions=[];catalogLoaded=false;catalogRetryAt=0;renderGarageChoices();
       resetRolePermissions();
       resetSupportState();
       pendingQueries = {}; statsLoading = false; clearPlayerSearchRequest();
@@ -3071,6 +3179,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   function rememberProfile(id) { try { if (id) localStorage.setItem("dnp_admin_profile",id); else localStorage.removeItem("dnp_admin_profile"); } catch (_) {} }
   function clearProfileContext() {
     sessionEpoch++; profileGeneration++; accessEpoch++;
+    resetVehicleActions();garageOptions=[];renderGarageChoices('Garagenliste wird geladen. Automatisch bleibt verfügbar.');
     viewScopes={};catalogRetryAt=0;clearPlayerSearchRequest();
     if (pollTimer) clearTimeout(pollTimer);
     pollTimer = null; pollInFlight = null; pollFailures = 0;

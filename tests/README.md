@@ -47,6 +47,7 @@ Red-Instanz im System-Temp an und löscht sie am Ende wieder.
 | `rm_functest.py` | raidhelper: Mitgliederseite `/me/raids` (Sichtbarkeit nach Kanal, Anmelden/Abmelden, Ablehnungen, Discord-Update) |
 | `pr_test.py` | poll + autorole: Mitgliederseiten `/me/umfragen` und `/me/rollen` (gleiche Logik wie Buttons, Hierarchie, Fehler) |
 | `tc_functest.py` | tickets + changelog: „Meine Tickets“ (eigene und hinzugefügte Tickets/Transcripts, keine fremden) und öffentliche Changelog-API |
+| `ticket_timer_test.py` | tickets: 24h ab Start/letzter menschlicher Nachricht, Abbruch und Rechte, Neustart/Downtime, fehlende Leserechte, veraltete Timer und paralleles Schließen, Wiederöffnen |
 | `tw_functest.py` | twitchlive: gemockte Twitch-API (Token, 401/429/5xx, Backoff), genau eine Meldung pro Stream, Live-Rolle, Befehle, Dashboard |
 | `wl_test_welcome.py` | welcome: Beitritt/Verlassen, Willkommensbild mit Avatar, DM, Befehle, Dashboard mit Vorschau |
 | `wl_test_warns.py` | warns: Punkte, Verfall, automatische Maßnahmen mit Hierarchie-Schutz, DM/Log, Befehle, Dashboard |

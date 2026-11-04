@@ -21,12 +21,16 @@ umschaltbar und alle Texte sind überschreibbar.
 - HTML-Transcripts + Statistik im Dashboard
 - **Meine Tickets** im Mitglieder-Bereich: eigene Tickets + Verläufe ansehen und Tickets auch über die Website öffnen
 - Persistente Buttons (überstehen Neustarts)
+- 24-Stunden-Timer pro Ticket: per Button starten, bei jeder neuen menschlichen Nachricht zurücksetzen,
+  mit „Offen halten“ stoppen; sofortiges Schließen bleibt verfügbar
 
 **Befehle**
 
 | Befehl | Beschreibung | Rechte |
 |---|---|---|
 | `[p]ticket close [grund]` | Schließt das aktuelle Ticket. | Ersteller (falls erlaubt) / Support |
+| `[p]ticket autoclose` | Startet den 24-Stunden-Timer für das aktuelle Ticket. | Ersteller (falls Schließen erlaubt) / Support |
+| `[p]ticket keepopen` | Stoppt den Timer; das Ticket bleibt offen. | Ersteller / Support |
 | `[p]ticket open` | Öffnet ein archiviertes Ticket wieder. | Support |
 | `[p]ticket claim` | Übernimmt das aktuelle Ticket. | Support |
 | `[p]ticket unclaim` | Gibt das Ticket wieder frei. | Support |
@@ -52,4 +56,11 @@ umschaltbar und alle Texte sind überschreibbar.
 | `[p]ticketset settings` | Aktuelle Einstellungen anzeigen. | Admin / Manage Server |
 | `[p]ticketset dashboard` | Hinweis auf das Dashboard. | Admin / Manage Server |
 
-**Dashboard:** Tab **Tickets** → Einstellungen, Panels (inkl. Editor und Team-Zuordnung je Grund), Transcripts und Statistik pro Server. Mitglieder finden unter **Mein Bereich → Meine Tickets** ihre eigenen Tickets und Verläufe und können dort (gleiche Fragen und Limits wie der Button) ein Ticket öffnen – abschaltbar im Reiter Einstellungen.
+**24-Stunden-Timer:** Tickets haben zunächst keinen Timer. **24h-Timer starten** aktiviert ihn ab jetzt;
+jede neue Nachricht vom Nutzer oder Team setzt die Frist auf weitere 24 Stunden. Bots, Webhooks und
+Systemmeldungen zählen nicht. **Offen halten** stoppt ihn bis zum nächsten manuellen Start – auch über
+Neustarts hinweg. **Schließen** schließt weiterhin sofort. Die Prüfung erfolgt ungefähr jede Minute;
+Nachrichten während eines Bot-Ausfalls werden vor dem Schließen berücksichtigt. Transcripts, Logs und
+Archiv-/Löscheinstellungen gelten wie beim manuellen Schließen. Wieder geöffnete Tickets haben keinen Timer.
+
+**Dashboard:** Tab **Tickets** → Einstellungen, Panels (inkl. Editor und Team-Zuordnung je Grund), Transcripts und Statistik pro Server. In **Offene Tickets** stehen die aktuelle Auto-Close-Frist (UTC) und Aktionen zum Starten/Stoppen des Timers sowie zum sofortigen Schließen bereit (ab WebCore-Stufe **Bedienen**). Mitglieder finden unter **Mein Bereich → Meine Tickets** ihre eigenen Tickets und Verläufe und können dort (gleiche Fragen und Limits wie der Button) ein Ticket öffnen – abschaltbar im Reiter Einstellungen.

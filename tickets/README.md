@@ -12,6 +12,8 @@ wahlweise als **eigener Kanal**, **privater Thread** oder **Forum-Beitrag**.
   sich zusätzlich frei überschreiben.
 - **HTML-Transcripts** beim Schließen, im Dashboard lesbar, plus **Statistik**.
 - **Persistente Buttons** – Panels und Steuerleisten funktionieren auch nach einem Bot-Neustart.
+- **24-Stunden-Timer pro Ticket** – manuell starten, bei neuen Nachrichten zurücksetzen und mit
+  „Offen halten“ dauerhaft stoppen; sofortiges Schließen ist jederzeit möglich.
 
 Die Buttons (Panels, Schließen/Übernehmen/Sperren) decken den Alltag ab; die Befehle unten sind
 für Sonderfälle. Konfiguriert wird am bequemsten über das **Dashboard**.
@@ -32,6 +34,8 @@ Voraussetzung für die Verwaltung im Browser ist ein geladenes **WebCore** (sieh
 | Befehl | Beschreibung | Rechte |
 |---|---|---|
 | `[p]ticket close [grund]` | Schließt das aktuelle Ticket. | Ersteller (falls erlaubt) / Support |
+| `[p]ticket autoclose` | Startet den 24-Stunden-Timer für das aktuelle Ticket. | Ersteller (falls Schließen erlaubt) / Support |
+| `[p]ticket keepopen` | Stoppt den Timer; das Ticket bleibt offen. | Ersteller / Support |
 | `[p]ticket open` | Öffnet ein archiviertes Ticket wieder. | Support |
 | `[p]ticket claim` | Übernimmt das aktuelle Ticket. | Support |
 | `[p]ticket unclaim` | Gibt das Ticket wieder frei. | Support |
@@ -57,6 +61,25 @@ Voraussetzung für die Verwaltung im Browser ist ein geladenes **WebCore** (sieh
 | `[p]ticketset settings` | Aktuelle Einstellungen anzeigen. | Admin / Manage Server |
 | `[p]ticketset dashboard` | Hinweis auf das Dashboard. | Admin / Manage Server |
 
+## Schließen nach Inaktivität
+
+Neue und bestehende Tickets bleiben zunächst ohne automatischen Schließtimer offen. Im Ticket
+startet **24h-Timer starten** (oder `[p]ticket autoclose`) die Frist ab jetzt. Schreibt danach der
+Ersteller, ein hinzugefügtes Mitglied oder das Team, beginnt die Frist erneut: Erst nach
+**24 Stunden ohne neue menschliche Nachricht** wird geschlossen. Auch Nachrichten mit Anhängen
+zählen; Bots, Webhooks und Discord-Systemmeldungen verlängern die Frist nicht.
+
+**Offen halten** (oder `[p]ticket keepopen`) stoppt den Timer für dieses Ticket. Weitere Nachrichten
+und Bot-Neustarts schalten ihn nicht wieder ein; dazu muss **24h-Timer starten** erneut gedrückt
+werden. Der Ersteller darf den Timer auch stoppen, wenn er Tickets selbst nicht schließen darf.
+**Schließen** bzw. `[p]ticket close` schließt weiterhin sofort, unabhängig vom Timer.
+
+Die Frist wird gespeichert und ungefähr einmal pro Minute geprüft. Nach einem Neustart werden
+auch während der Bot-Auszeit geschriebene Nachrichten berücksichtigt, bevor ein überfälliges Ticket
+geschlossen wird. Dafür braucht der Bot Zugriff auf den Nachrichtenverlauf. Das automatische Schließen
+verwendet dieselben Transcripts, Logs, Statistiken und Archiv-/Löscheinstellungen wie manuelles
+Schließen. Ein wieder geöffnetes Ticket startet ohne Timer.
+
 ## Dashboard
 
 Ist `webcore` geladen, erscheint der Tab **Tickets**. Dort lassen sich pro Server einstellen:
@@ -72,7 +95,9 @@ Ist `webcore` geladen, erscheint der Tab **Tickets**. Dort lassen sich pro Serve
   plus die Admin-Rollen; das Team darf sie auch übernehmen, sperren und schließen. Leer = globale
   Einstellungen. Tickets mit Grund heißen automatisch `<grund>-<nummer>` (Umlaute werden zu
   ae/oe/ue/ss).
-- **Offene Tickets** (Übersicht) – Nummer, Inhaber, Grund, Öffnungszeit und Übernahme; **Schließen** mit
+- **Offene Tickets** (Übersicht) – Nummer, Inhaber, Grund, Öffnungszeit, Übernahme und aktuelle
+  Auto-Close-Frist (UTC). **24h-Timer starten** und **Offen halten** steuern den Timer;
+  **Schließen** mit
   Bestätigung wirkt wie der Button im Ticket (Transcript, Log, Inhaber-Rolle entfernen, archivieren bzw.
   löschen). Existiert der Kanal nicht mehr, entfernt „Schließen“ nur den verwaisten Eintrag.
 - **Transcripts** – gespeicherte Ticket-Verläufe als eigene Seite öffnen.
@@ -83,7 +108,7 @@ Ist `webcore` geladen, erscheint der Tab **Tickets**. Dort lassen sich pro Serve
 | WebCore-Stufe | Darf |
 |---|---|
 | Ansehen | alles ansehen, Transcripts öffnen |
-| **Bedienen** | zusätzlich **einzelne Tickets schließen** (Tagesgeschäft) |
+| **Bedienen** | zusätzlich **einzelne Tickets schließen und deren Timer starten/stoppen** (Tagesgeschäft) |
 | Bearbeiten | zusätzlich Einstellungen, Rollen (Support/Admin/Inhaber …), Texte, Panels anlegen/bearbeiten/löschen und die Team-Zuordnung je Grund |
 
 Panels und Team-Zuordnung gelten als Einrichtung des Ticketsystems (Rollen, Fragen, Eingangskanäle) und
