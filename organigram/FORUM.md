@@ -38,6 +38,12 @@ benannte Organigramme pro Server, komplett über das Web-Dashboard konfigurierba
 `modus` = `bild` · `embed` · `text` (optional; sonst Standard des Organigramms). Alias: `org`.
 
 ## Dashboard
+**Löschen ohne Suchen:** **Organigramm löschen** steht in der Übersicht und oben im geöffneten
+Editor. **Position löschen** ist direkt in der Teamstruktur und beim Bearbeiten erreichbar.
+Beides erfordert **Bearbeiten** und eine Bestätigung. Unterpositionen rücken beim Entfernen einer
+Position eine Ebene hoch; Discord-Rollen und Mitglieder bleiben erhalten. Bereits gepostete
+Discord-Nachrichten bleiben beim Entfernen eines Organigramms bestehen.
+
 Ist `webcore` geladen, erscheint automatisch der Tab **Organigramm**: Organigramme anlegen,
 Muster/Modus/Farbe wählen, Positionen pflegen (Rolle + manuelle Namen, übergeordnete Position,
 Emoji, Farbe, Reihenfolge), Live-Vorschau ansehen, PNG herunterladen und in einen Kanal posten.

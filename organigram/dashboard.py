@@ -106,6 +106,24 @@ def _posted_channels(guild, chart: dict) -> list[str]:
     return result
 
 
+def _delete_chart_form(ui, guild, cid, chart, csrf):
+    return ui.form(
+        "/cogs/organigram", ui.button("Organigramm löschen", icon="bi-trash", kind="danger", small=True),
+        csrf=csrf, hidden={"form": "chart_delete", "guild": guild.id, "chart": cid},
+        confirm=f"Organigramm „{chart.get('name', '?')}“ mit allen Positionen wirklich löschen? "
+                "Die Discord-Rollen und bereits gepostete Nachrichten bleiben bestehen.",
+    )
+
+
+def _delete_node_form(ui, guild, cid, nid, label, csrf):
+    return ui.form(
+        "/cogs/organigram", ui.button("Position löschen", icon="bi-trash", kind="danger", small=True),
+        csrf=csrf, hidden={"form": "node_delete", "guild": guild.id, "chart": cid, "node": nid},
+        confirm=f"Position „{label}“ wirklich löschen? Untergeordnete Positionen rücken eine Ebene nach oben. "
+                "Die verknüpfte Discord-Rolle und ihre Mitglieder bleiben unverändert.",
+    )
+
+
 def _accent(value) -> str:
     accent = (value or "#3ddc97").strip()
     return accent if accent.startswith("#") else "#" + accent
@@ -278,12 +296,7 @@ def _render_list(ui, guild, charts, csrf) -> str:
         pat = PATTERNS.get(c.get("pattern", "baum"), c.get("pattern", "baum"))
         edit_link = f"/cogs/organigram?guild={guild.id}&chart={_esc(cid)}"
         edit = ui.button("Bearbeiten", icon="bi-pencil", kind="ghost", small=True, href=edit_link)
-        delete = ui.form(
-            "/cogs/organigram",
-            ui.button("", icon="bi-trash", kind="danger", small=True, attrs={"title": "Organigramm löschen"}),
-            csrf=csrf, hidden={"form": "chart_delete", "guild": guild.id, "chart": cid},
-            confirm=f"Organigramm „{c.get('name', '?')}“ wirklich löschen? Bereits gepostete Nachrichten bleiben bestehen.",
-        )
+        delete = _delete_chart_form(ui, guild, cid, c, csrf)
         posted = ", ".join(where) if where else ""
         rows.append(ui.row(
             f"<div class='wc-cell-title'><a href='{edit_link}'>{_esc(c.get('name', '?'))}</a></div>"
@@ -421,7 +434,8 @@ def _render_editor(ui, guild, cid, chart, csrf, request, manifest=None) -> str:
     back = ui.button("Alle Organigramme", icon="bi-arrow-left", kind="ghost",
                      href=f"/cogs/organigram?guild={guild.id}#organigramme")
     # Zurück-Button als eigene Leiste (Hero-Aktionen brechen auf dem Handy nicht um).
-    head = f"<div class='wc-toolbar'>{back}</div>" + ui.hero(
+    delete = _delete_chart_form(ui, guild, cid, chart, csrf)
+    head = f"<div class='wc-toolbar'>{back}{delete}</div>" + ui.hero(
         "bi-diagram-3", chart.get("name", "?"),
         "Lege Positionen an, passe das Aussehen an und poste das Organigramm in einen Kanal.",
     ) + ui.stats([
@@ -470,6 +484,7 @@ def _position_tree(ui, guild, cid, nodes, csrf, node_people):
             controls = ui.button("Bearbeiten", kind="ghost", small=True, href=f"{link}&node={_esc(nid)}#positionen")
             controls += ui.button("Unterposition", icon="bi-plus", kind="ghost", small=True,
                                   href=f"{link}&parent={_esc(nid)}#positionen")
+            controls += _delete_node_form(ui, guild, cid, nid, label, csrf)
             for direction, caption, icon, disabled in (
                     ("up", "Nach oben", "bi-arrow-up", index == 0),
                     ("down", "Nach unten", "bi-arrow-down", index == len(siblings) - 1)):
@@ -502,12 +517,7 @@ def _render_positions(ui, guild, cid, nodes, csrf, request, node_people) -> str:
         manual = len([m for m in nd.get("manual_names", []) if (m or "").strip()])
         edit_link = f"/cogs/organigram?guild={guild.id}&chart={_esc(cid)}&node={_esc(nid)}#positionen"
         edit = ui.button("Bearbeiten", icon="bi-pencil", kind="ghost", small=True, href=edit_link)
-        delete = ui.form(
-            "/cogs/organigram",
-            ui.button("", icon="bi-trash", kind="danger", small=True, attrs={"title": "Position löschen"}),
-            csrf=csrf, hidden={"form": "node_delete", "guild": guild.id, "chart": cid, "node": nid},
-            confirm="Position wirklich löschen? Untergeordnete Positionen rücken eine Ebene nach oben.",
-        )
+        delete = _delete_node_form(ui, guild, cid, nid, _label_of(guild, nodes, nid), csrf)
         sub = f"{parent_lbl} · Reihenfolge {int(nd.get('order', 0) or 0)}" + (f" · {manual} zusätzl. Name(n)" if manual else "")
         prows.append(ui.row(
             f"<div class='wc-cell-title'>{_esc(nd.get('emoji') or '')} "
@@ -593,9 +603,10 @@ def _render_node_editor(ui, guild, cid, nodes, csrf, request) -> str:
         buttons.append(ui.button("Abbrechen", icon="bi-x-lg", kind="ghost",
                                  href=f"/cogs/organigram?guild={guild.id}&chart={_esc(cid)}#positionen"))
     title = f"Position bearbeiten: {_label_of(guild, nodes, sel_nid)}" if is_edit else "Neue Position"
+    delete = _delete_node_form(ui, guild, cid, sel_nid, _label_of(guild, nodes, sel_nid), csrf) if is_edit else ""
     return ui.card(
         title,
-        ui.form("/cogs/organigram", fields + ui.actions(*buttons), csrf=csrf, hidden=hidden, savebar=is_edit),
+        ui.form("/cogs/organigram", fields + ui.actions(*buttons), csrf=csrf, hidden=hidden, savebar=is_edit) + delete,
         icon="bi-pencil-square" if is_edit else "bi-plus-square",
         desc="Bezeichnung oder Rolle ist Pflicht." if not is_edit else None,
     )

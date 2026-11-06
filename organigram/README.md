@@ -58,6 +58,14 @@ Dashboard gewählte Standard-Modus des Organigramms. Alias für die Befehlsgrupp
 
 ## Dashboard
 
+**Löschen:** Ein ganzes Organigramm lässt sich mit **Organigramm löschen** in der Übersicht
+oder oben im geöffneten Editor entfernen. Einzelne Positionen haben **Position löschen** direkt
+in der Teamstruktur und beim Bearbeiten. Beide Aktionen brauchen **Bearbeiten** und eine Bestätigung.
+Beim Löschen einer Position rücken ihre Unterpositionen eine Ebene hoch. Discord-Rollen und
+Mitglieder werden nicht gelöscht; beim Entfernen eines ganzen Organigramms bleiben bereits gepostete
+Discord-Nachrichten bestehen. Die festen Bedienreiter wie **Positionen** und **Layout-Beispiele**
+sind keine Organigramm-Inhalte und können nicht gelöscht werden.
+
 Ist `webcore` geladen, erscheint automatisch der Tab **Organigramm**. Dort lassen sich:
 
 - Organigramme anlegen, umbenennen und löschen,
