@@ -117,3 +117,12 @@ bzw. `[p]webcore portal on`), finden normale Mitglieder unter **Mein Bereich →
 ## Datenspeicherung
 
 Pro Umfrage werden Frage, Optionen, Stimmen und der Zeitpunkt des Schließens (`closed_ts`, für „Beendet“ im Mitglieder-Bereich) gespeichert; je Stimme die Discord-ID, der Anzeigename und die gewählten Optionen. Bei anonymen Umfragen werden Namen nirgends angezeigt. Daten werden beim Löschen einer Umfrage, beim Entfernen des Cogs oder beim Verlassen des Servers entfernt.
+
+## Entwürfe und fehlende Nachrichten
+
+Bei Eingabefehlern bleiben Frage, Optionen, Kanal, Laufzeit und Schalter in derselben Sitzung und auf
+demselben Server für 30 Minuten erhalten. Nach erfolgreichem Posten wird der Entwurf entfernt.
+In der Übersicht prüft **Neu posten / prüfen** die vorhandene Nachricht und ersetzt sie nur, wenn sie
+fehlt. Stimmen, Laufzeit und Status bleiben erhalten. Auch parallele Reparatur-Klicks erstellen keine
+doppelten Nachrichten. Bei fehlenden Leserechten wird zuerst ein verständlicher Hinweis angezeigt.
+Ergebnis-Aktualisierungen lesen den aktuellen gespeicherten Stand und laufen je Umfrage nacheinander.

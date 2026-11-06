@@ -31,6 +31,8 @@ def csrf(text):
 
 
 async def page(client, headers, path):
+    if path.startswith("/cogs/fivemadmin?") and "server_profile=" not in path:
+        path += "&server_profile=legacy"
     r = await client.get(path, headers=headers)
     t = await r.text()
     assert r.status == 200, (path, r.status, t[:500])
@@ -40,6 +42,9 @@ async def page(client, headers, path):
 
 async def post(client, headers, slug, data):
     """POST mit Feldern als dict oder Liste von Paaren -> (Status, dekodierte Location)."""
+    if slug == "fivemadmin":
+        data = dict(data)
+        data.setdefault("server_profile", "legacy")
     r = await client.post(f"/cogs/{slug}", headers=headers, data=data, **NR)
     return r.status, unquote_plus(r.headers.get("Location", ""))
 
@@ -74,7 +79,7 @@ async def tickets_changelog():
     await tc_seed.seed(bot, tk, cl)
     g = bot.guilds[0]
     gc = tk.config.guild(g)
-    assert wc.pages["tickets"].operate_forms == {"ticket_close", "ticket_autoclose", "ticket_keepopen"}
+    assert wc.pages["tickets"].operate_forms == {"ticket_close", "ticket_autoclose", "ticket_keepopen", "ticket_assign", "ticket_waiting", "ticket_priority", "ticket_reply_preview", "ticket_reply_send"}
     assert callable(wc.pages["changelog"].operate_forms)
     await wc.config.role_perms.set({"1000": {"1101": {"tickets": "operate", "changelog": "operate"},
                                              "1102": {"tickets": "view", "changelog": "view"},
@@ -84,7 +89,7 @@ async def tickets_changelog():
 
     # ---- Oberfläche
     t = await page(client, LENA, "/cogs/tickets?guild=1000")
-    assert_operate_page(t, "ticket_autoclose,ticket_close,ticket_keepopen")
+    assert_operate_page(t, "ticket_assign,ticket_autoclose,ticket_close,ticket_keepopen,ticket_priority,ticket_reply_preview,ticket_reply_send,ticket_waiting")
     assert "Offene Tickets" in t and t.count("value='ticket_close'") == 2, t.count("value='ticket_close'")
     assert "Du kannst Aktionen ausführen, aber keine Einstellungen ändern." in t
     tok = csrf(t)
@@ -201,7 +206,7 @@ async def welcome_warns_guard_sticky_autorole():
     assert wc.pages["welcome"].operate_forms == {"test"}
     assert wc.pages["warnings"].operate_forms == {"warn", "revoke"}
     assert wc.pages["guard"].operate_forms == {"lockdown"}
-    assert wc.pages["sticky"].operate_forms == {"save", "toggle", "delete"}
+    assert wc.pages["sticky"].operate_forms == {"save", "toggle", "delete", "refresh"}
     assert not wc.pages["autorole"].supports_operate
     slugs = ("welcome", "warnings", "guard", "sticky", "autorole")
     await wc.config.role_perms.set({"1000": {"1101": {s: "operate" for s in slugs},
@@ -305,13 +310,29 @@ async def welcome_warns_guard_sticky_autorole():
     # ---------------------------------------------------------------- guard
     gu = bot._cogs["Guard"]
     uconf = gu.config.guild(g)
+    # Discords Guild.edit wird für diesen Erfolgsfall wirklich simuliert. Ohne
+    # Methode ist der korrekte Produktzustand "Wiederherstellung ausstehend".
+    invite_changes = []
+    async def guild_edit(*, invites_disabled, reason=None):
+        if not g.me.guild_permissions.manage_guild:
+            raise T.L.forbidden()
+        invite_changes.append(invites_disabled)
+        g.features = [feature for feature in g.features if feature != "INVITES_DISABLED"]
+        if invites_disabled:
+            g.features.append("INVITES_DISABLED")
+        return g
+    g.edit = guild_edit
+    old_slowmodes = {channel.id: channel.slowmode_delay for channel in g.text_channels}
     t = await page(client, LENA, "/cogs/guard?guild=1000")
     assert_operate_page(t, "lockdown")
     assert "Notmodus jetzt aktivieren" in t
     st, loc = await post(client, LENA, "guard", {"csrf_token": tok, "guild": "1000", "form": "lockdown", "state": "on"})
     assert "ok=Notmodus aktiviert" in loc and await uconf.lockdown_until(), loc
+    assert "INVITES_DISABLED" in g.features
     st, loc = await post(client, LENA, "guard", {"csrf_token": tok, "guild": "1000", "form": "lockdown", "state": "off"})
     assert "ok=Notmodus beendet" in loc and not await uconf.lockdown_until(), loc
+    assert invite_changes == [True, False] and "INVITES_DISABLED" not in g.features
+    assert all(channel.slowmode_delay == old_slowmodes[channel.id] for channel in g.text_channels)
 
     async def gu_snapshot():
         conf = await uconf.all()
@@ -327,7 +348,7 @@ async def welcome_warns_guard_sticky_autorole():
     sk = bot._cogs["Sticky"]
     kconf = sk.config.guild(g)
     t = await page(client, LENA, "/cogs/sticky?guild=1000")
-    assert_operate_page(t, "delete,save,toggle")
+    assert_operate_page(t, "delete,refresh,save,toggle")
     cid = str(allg.id)
     st, loc = await post(client, LENA, "sticky", {"csrf_token": tok, "guild": "1000", "form": "save", "channel": cid,
                                                    "mode": "text", "text": "Bitte Regeln lesen"})
@@ -370,52 +391,53 @@ async def welcome_warns_guard_sticky_autorole():
 async def fivemadmin():
     from rc.fivemadmin import db
     wc, bot, app, cog = await F.make_app()
-    g = bot.guilds[0]
-    assert wc.pages["fivemadmin"].operate_forms == {"sso", "lockdown", "unban"}
-    g.get_member(13).guild_permissions = H.Perms(admin=True)   # Kai: Discord-Administrator
-    await wc.config.role_perms.set({"1000": {"1101": {"fivemadmin": "operate"},   # Lena: Preset support
-                                             "1102": {"fivemadmin": "operate"},   # Tom: Preset moderator
-                                             "1104": {"fivemadmin": "operate"}}})  # Kai: Discord-Admin
-    client = TestClient(TestServer(app))
-    await client.start_server()
-    t = await page(client, LENA, "/cogs/fivemadmin?guild=1000")
-    assert_operate_page(t, "lockdown,sso,unban")
-    assert "Im Live-Panel anmelden" in t and "braucht auf dieser Seite" not in t
-    assert F.SECRET_API_KEY not in t and F.SECRET_OAUTH not in t
-    tok = csrf(t)
-    # Anmelden (SSO): Bedienen reicht, echte Panel-Rechte nötig
-    st, loc = await post(client, LENA, "fivemadmin", {"csrf_token": tok, "guild": "1000", "form": "sso"})
-    assert loc.startswith(F.PUBLIC_URL + "/?login="), loc
-    # Entbannen: Bedienen + Panel-Recht „ban“ (Support hat es nicht, Moderator schon)
-    st, loc = await post(client, LENA, "fivemadmin", {"csrf_token": tok, "guild": "1000", "form": "unban",
-                                                       "cid": "ABC12345"})
-    assert "err=" in loc and "Panel-Recht" in loc, loc
-    st, loc = await post(client, TOM, "fivemadmin", {"csrf_token": tok, "guild": "1000", "form": "unban",
-                                                      "cid": "ABC12345"})
-    assert "ok=Sperre für ABC12345 aufgehoben" in loc, loc
-    assert "ABC12345" not in {b["citizenid"] for b in await asyncio.to_thread(db.get_active_bans)}
-    # Not-Aus: Bedienen + Discord-Administrator
-    st, loc = await post(client, LENA, "fivemadmin", {"csrf_token": tok, "guild": "1000", "form": "lockdown",
-                                                       "state": "on"})
-    assert "err=" in loc and "Discord-Administratoren" in loc and not await cog.config.locked(), loc
-    st, loc = await post(client, KAI, "fivemadmin", {"csrf_token": tok, "guild": "1000", "form": "lockdown",
-                                                      "state": "on"})
-    assert "ok=Lockdown aktiv" in loc and await cog.config.locked(), loc
-    st, loc = await post(client, KAI, "fivemadmin", {"csrf_token": tok, "guild": "1000", "form": "lockdown",
-                                                      "state": "off"})
-    assert "ok=Lockdown aufgehoben" in loc and not await cog.config.locked(), loc
+    with db.profile_scope("legacy"):
+        g = bot.guilds[0]
+        assert wc.pages["fivemadmin"].operate_forms == {"sso", "lockdown", "unban"}
+        g.get_member(13).guild_permissions = H.Perms(admin=True)   # Kai: Discord-Administrator
+        await wc.config.role_perms.set({"1000": {"1101": {"fivemadmin": "operate"},   # Lena: Preset support
+                                                 "1102": {"fivemadmin": "operate"},   # Tom: Preset moderator
+                                                 "1104": {"fivemadmin": "operate"}}})  # Kai: Discord-Admin
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        t = await page(client, LENA, "/cogs/fivemadmin?guild=1000")
+        assert_operate_page(t, "lockdown,sso,unban")
+        assert "Im Live-Panel anmelden" in t and "braucht auf dieser Seite" not in t
+        assert F.SECRET_API_KEY not in t and F.SECRET_OAUTH not in t
+        tok = csrf(t)
+        # Anmelden (SSO): Bedienen reicht, echte Panel-Rechte nötig
+        st, loc = await post(client, LENA, "fivemadmin", {"csrf_token": tok, "guild": "1000", "form": "sso"})
+        assert loc.startswith(F.PUBLIC_URL + "/?login="), loc
+        # Entbannen: Bedienen + Panel-Recht „ban“ (Support hat es nicht, Moderator schon)
+        st, loc = await post(client, LENA, "fivemadmin", {"csrf_token": tok, "guild": "1000", "form": "unban",
+                                                           "cid": "ABC12345"})
+        assert "err=" in loc and "Panel-Recht" in loc, loc
+        st, loc = await post(client, TOM, "fivemadmin", {"csrf_token": tok, "guild": "1000", "form": "unban",
+                                                          "cid": "ABC12345"})
+        assert "ok=Sperre für ABC12345 aufgehoben" in loc, loc
+        assert "ABC12345" not in {b["citizenid"] for b in await asyncio.to_thread(db.get_active_bans)}
+        # Not-Aus: Bedienen + Discord-Administrator
+        st, loc = await post(client, LENA, "fivemadmin", {"csrf_token": tok, "guild": "1000", "form": "lockdown",
+                                                           "state": "on"})
+        assert "err=" in loc and "Discord-Administratoren" in loc and not await cog.profile_locked(), loc
+        st, loc = await post(client, KAI, "fivemadmin", {"csrf_token": tok, "guild": "1000", "form": "lockdown",
+                                                          "state": "on"})
+        assert "ok=Lockdown aktiv" in loc and await cog.profile_locked(), loc
+        st, loc = await post(client, KAI, "fivemadmin", {"csrf_token": tok, "guild": "1000", "form": "lockdown",
+                                                          "state": "off"})
+        assert "ok=Lockdown aufgehoben" in loc and not await cog.profile_locked(), loc
 
-    async def fa_snapshot():
-        gconf = await cog.config.guild(g).all()
-        return (gconf["role_map"], gconf["user_map"], await cog.config.money_max(), await cog.config.public_url())
-    for who in (LENA, KAI):   # auch ein Discord-Administrator braucht für Panel-Rechte WebCore-„Bearbeiten“
-        await denied_edit(client, who, "fivemadmin", tok, [
-            {"form": "rights", "role:1101": "admin", "user_add": "13", "user_preset": "admin"},
-            {"form": "settings", "money_max": "999999", "public_url": "https://evil.example"},
-        ], fa_snapshot)
-    print("fivemadmin: Anmelden/Entbannen/Not-Aus mit Bedienen (Panel-Recht bzw. Discord-Admin weiter geprüft), "
-          "Panel-Rechte/Einstellungen abgelehnt – OK")
-    await client.close()
+        async def fa_snapshot():
+            gconf = await cog.config.guild(g).all()
+            return (gconf["role_map"], gconf["user_map"], await cog.config.money_max(), await cog.config.public_url())
+        for who in (LENA, KAI):   # auch ein Discord-Administrator braucht für Panel-Rechte WebCore-„Bearbeiten“
+            await denied_edit(client, who, "fivemadmin", tok, [
+                {"form": "rights", "role:1101": "admin", "user_add": "13", "user_preset": "admin"},
+                {"form": "settings", "money_max": "999999", "public_url": "https://evil.example"},
+            ], fa_snapshot)
+        print("fivemadmin: Anmelden/Entbannen/Not-Aus mit Bedienen (Panel-Recht bzw. Discord-Admin weiter geprüft), "
+              "Panel-Rechte/Einstellungen abgelehnt – OK")
+        await client.close()
 
 
 # =========================================================================== #

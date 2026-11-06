@@ -51,3 +51,12 @@ Voraussetzung: der Cog `webcore` ist installiert und eingerichtet; für Umfragen
 **Dashboard:** Seite **Ideen** – Kennzahlen, Ideen-Tabelle mit Filtern und Auswahl, Details mit Verlauf, Umfrage aus
 Ideen, Einstellungen (Forum anlegen, Panel, Tags), Sperren, CSV-Export. Stufe **Bedienen** reicht für Status,
 Kommentar, Zusammenführen, Bearbeiten, Löschen und Umfragen; Einstellungen und Sperren brauchen **Bearbeiten**.
+
+## Ähnliche Ideen vor dem Einreichen
+
+Bei einem sehr ähnlichen Titel werden zunächst vorhandene Beiträge verlinkt. Zu diesem Zeitpunkt
+wird **kein neuer Beitrag angelegt**, keine Nummer vergeben und keine Wartezeit gestartet. Öffne eine
+vorhandene Idee oder wähle ausdrücklich **Trotzdem neue Idee einreichen**. Diese Wahl gibt es sowohl
+im Discord-Formular als auch unter Mein Bereich → Ideen. Die Web-Bestätigung ist an die eigene Sitzung,
+den Server und die geprüften Angaben gebunden und nur einmal verwendbar. Entwürfe bleiben dort
+30 Minuten erhalten; bei erneutem Einreichen gelten aktuelle Sperren, Limits und Wartezeiten weiter.

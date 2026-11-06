@@ -17,8 +17,8 @@ import csv
 import io
 import logging
 import time
-from datetime import datetime, timezone
-from urllib.parse import quote_plus
+from datetime import date, datetime, timedelta, timezone
+from urllib.parse import quote_plus, urlencode
 
 import discord
 from aiohttp import web
@@ -58,6 +58,21 @@ def _range(request) -> int:
     from .serverstats import RANGES
     raw = request.query.get("range", "")
     return int(raw) if raw.isdigit() and int(raw) in RANGES else 30
+
+
+def _date_window(request, today):
+    start_raw, end_raw = request.query.get("start"), request.query.get("end")
+    if not start_raw and not end_raw:
+        return today - timedelta(days=_range(request) - 1), today
+    try:
+        start, end = date.fromisoformat(start_raw or ""), date.fromisoformat(end_raw or "")
+    except ValueError:
+        raise ValueError("Bitte Start- und Enddatum vollständig angeben (JJJJ-MM-TT).") from None
+    if start > end or end > today or (end - start).days >= 730:
+        raise ValueError("Wähle einen Zeitraum von 1 bis 730 Tagen bis einschließlich heute.")
+    if start < date.min + timedelta(days=(end - start).days + 1):
+        raise ValueError("Für diesen Zeitraum lässt sich kein vorheriger Vergleichszeitraum bilden.")
+    return start, end
 
 
 def _short(day: str) -> str:
@@ -127,10 +142,22 @@ async def _render(cog, request):
         return {"title": TITLE, "content": ui.card(body=ui.empty("bi-hdd-network", "Keine Server verfügbar."))}
     conf = await cog.config.guild(guild).all()
     csrf = request.get("webcore_csrf", "")
-    rng = _range(request)
     tz = await cog.guild_tz(guild)
-    data = await cog.get_days(guild, rng)
+    today = datetime.fromtimestamp(cog._clock(), tz).date()
+    period_error = ""
+    try:
+        start, end = _date_window(request, today)
+    except ValueError as exc:
+        start, end = today - timedelta(days=29), today
+        period_error = ui.callout(ui.esc(str(exc)) + " Angezeigt werden vorerst die letzten 30 Tage.", tone="bad")
+    rng = (end - start).days + 1
+    data = await cog.get_period(guild, start, end)
     s = cog.summarize(data)
+    previous_end = start - timedelta(days=1)
+    previous_start = previous_end - timedelta(days=rng - 1)
+    previous = cog.summarize(await cog.get_period(guild, previous_start, previous_end))
+    period_label = f"{_long(start.isoformat())} bis {_long(end.isoformat())}"
+    period_caption = period_label if request.query.get("start") or request.query.get("end") else f"letzte {rng} Tage"
     labels = [_short(d) for d, _ in data]
 
     picker = ""
@@ -142,15 +169,16 @@ async def _render(cog, request):
         ))
 
     base = f"/cogs/{SLUG}?guild={guild.id}"
+    period_query = urlencode({"start": start.isoformat(), "end": end.isoformat()})
     range_btns = "".join(
         ui.button(f"{n} Tage", kind="accent" if n == rng else "ghost", small=True, href=f"{base}&range={n}",
                   attrs={"aria-current": "true" if n == rng else None})
         for n in (7, 30, 90)
     )
     export_btns = (
-        ui.button("CSV je Tag", icon="bi-download", kind="ghost", small=True, href=f"{base}&range={rng}&export=days")
+        ui.button("CSV je Tag", icon="bi-download", kind="ghost", small=True, href=f"{base}&{period_query}&export=days")
         + ui.button("CSV je Kanal", icon="bi-download", kind="ghost", small=True,
-                    href=f"{base}&range={rng}&export=channels")
+                    href=f"{base}&{period_query}&export=channels")
     )
     head = ui.hero(
         "bi-graph-up", "",
@@ -159,8 +187,14 @@ async def _render(cog, request):
         actions=range_btns,
     )
     net = s["net"]
+    period_form = ui.form(f"/cogs/{SLUG}", ui.grid(
+        ui.field("Von", ui.text_input("start", request.query.get("start") or start.isoformat(), type="date")),
+        ui.field("Bis", ui.text_input("end", request.query.get("end") or end.isoformat(), type="date",
+                                     attrs={"max": today.isoformat()})),
+    ) + ui.button("Zeitraum anzeigen", icon="bi-calendar-range"), method="get", csrf="", hidden={"guild": guild.id})
+    period_card = ui.card("Zeitraum", period_error + period_form, desc=period_label)
     kpis = ui.stats([
-        ("Mitglieder", charts.fmt_num(s["members"]), "bi-people", "aktuell", None),
+        ("Mitglieder", charts.fmt_num(s["members"]), "bi-people", "aktuell" if end == today else f"Stand {_long(end.isoformat())}", None),
         ("Netto-Wachstum", f"{net:+d}", "bi-person-plus", f"{s['joins']} rein · {s['leaves']} raus",
          "ok" if net > 0 else ("bad" if net < 0 else None)),
         ("Nachrichten", charts.fmt_num(s["messages"]), "bi-chat-dots", f"Ø {charts.fmt_num(round(s['messages'] / rng, 1))} pro Tag", None),
@@ -171,19 +205,19 @@ async def _render(cog, request):
 
     # --- Diagramme ---
     members = [r["members"] for _, r in data]
-    member_svg = charts.line_chart(labels, members, label=f"Mitglieder, letzte {rng} Tage",
+    member_svg = charts.line_chart(labels, members, label=f"Mitglieder, {period_caption}",
                                    tips=[f"{_long(d)}: {charts.fmt_num(r['members'])} Mitglieder"
                                          if r["members"] is not None else "" for d, r in data])
     joins = [r["joins"] for _, r in data]
     leaves = [r["leaves"] for _, r in data]
-    jl_svg = charts.diverging_chart(labels, joins, leaves, label=f"Beitritte und Abgänge, letzte {rng} Tage",
+    jl_svg = charts.diverging_chart(labels, joins, leaves, label=f"Beitritte und Abgänge, {period_caption}",
                                     tips=[f"{_long(d)}: {r['joins']} Beitritte, {r['leaves']} Abgänge "
                                           f"(netto {r['joins'] - r['leaves']:+d})" for d, r in data])
     msgs = [sum(r["messages"].values()) for _, r in data]
-    msg_svg = charts.bar_chart(labels, msgs, label=f"Nachrichten pro Tag, letzte {rng} Tage",
+    msg_svg = charts.bar_chart(labels, msgs, label=f"Nachrichten pro Tag, {period_caption}",
                                tips=[f"{_long(d)}: {charts.fmt_num(v)} Nachrichten" for (d, _), v in zip(data, msgs)])
     voice = [round(sum(r["voice_sec"].values()) / 3600, 1) for _, r in data]
-    voice_svg = charts.bar_chart(labels, voice, label=f"Voice-Stunden pro Tag, letzte {rng} Tage",
+    voice_svg = charts.bar_chart(labels, voice, label=f"Voice-Stunden pro Tag, {period_caption}",
                                  tips=[f"{_long(d)}: {charts.fmt_num(v)} Voice-Stunden" for (d, _), v in zip(data, voice)],
                                  color=charts.C_AMBER)
     top_msg = sorted(s["by_channel_messages"].items(), key=lambda kv: -kv[1])[:10]
@@ -197,6 +231,16 @@ async def _render(cog, request):
     legend = (f"<span style='color:{charts.C_ACCENT}'>■</span> Beitritte · "
               f"<span style='color:{charts.C_DANGER}'>■</span> Abgänge")
     overview = (
+        period_card
+        + ui.card("Vergleich mit vorherigem Zeitraum", ui.table(
+            ["Kennzahl", "Gewählt", "Vorher", "Änderung"], [ui.row(label, str(current), str(old), f"{current - old:+g}")
+            for label, current, old in (("Nachrichten", s["messages"], previous["messages"]),
+                                       ("Voice-Stunden", round(s["voice_hours"], 1), round(previous["voice_hours"], 1)),
+                                       ("Beitritte", s["joins"], previous["joins"]),
+                                       ("Abgänge", s["leaves"], previous["leaves"]))]),
+                  desc=f"Vorher: {_long(previous_start.isoformat())} bis {_long(previous_end.isoformat())}. "
+                       "Verglichen werden vorhandene Zählungen; außerhalb der Aufbewahrungszeit fehlen Daten.")
+        +
         ui.columns(
             ui.card("Mitglieder", member_svg, icon="bi-people", desc="Mitgliederzahl am Tagesende."),
             ui.card("Beitritte & Abgänge", jl_svg, icon="bi-arrow-left-right", desc=legend),
@@ -206,10 +250,10 @@ async def _render(cog, request):
             ui.card("Voice-Stunden pro Tag", voice_svg, icon="bi-mic", desc="Zeit in Sprachkanälen, ohne AFK-Kanal."),
         )
         + ui.columns(
-            ui.card("Top-10-Textkanäle", top_msg_svg, icon="bi-hash", desc=f"Nachrichten, letzte {rng} Tage."),
-            ui.card("Top-10-Sprachkanäle", top_voice_svg, icon="bi-volume-up", desc=f"Voice-Stunden, letzte {rng} Tage."),
+            ui.card("Top-10-Textkanäle", top_msg_svg, icon="bi-hash", desc=f"Nachrichten, {period_caption}."),
+            ui.card("Top-10-Sprachkanäle", top_voice_svg, icon="bi-volume-up", desc=f"Voice-Stunden, {period_caption}."),
         )
-        + ui.card("Export", ui.actions(export_btns, f"<span class='wc-help'>Zeitraum: letzte {rng} Tage.</span>"),
+        + ui.card("Export", ui.actions(export_btns, f"<span class='wc-help'>Zeitraum: {period_caption}.</span>"),
                   icon="bi-filetype-csv", desc="Rohdaten als CSV (UTF-8, Komma-getrennt) – z. B. für Excel.")
     )
 
@@ -290,8 +334,12 @@ async def _export(cog, request):
     guild = _pick(await _visible(request), request.query.get("guild"))
     if guild is None:
         raise web.HTTPNotFound(text="Server nicht gefunden")
-    rng = _range(request)
-    data = await cog.get_days(guild, rng)
+    tz = await cog.guild_tz(guild)
+    try:
+        start, end = _date_window(request, datetime.fromtimestamp(cog._clock(), tz).date())
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from None
+    data = await cog.get_period(guild, start, end)
     buf = io.StringIO()
     w = csv.writer(buf, lineterminator="\r\n")
     kind = request.query.get("export")
@@ -301,14 +349,14 @@ async def _export(cog, request):
         for cid in sorted(set(s["by_channel_messages"]) | set(s["by_channel_voice"])):
             w.writerow([cid, _cell(cog.channel_name(guild, cid)), s["by_channel_messages"].get(cid, 0),
                         round(s["by_channel_voice"].get(cid, 0) / 60, 1)])
-        name = f"statistik-kanaele-{guild.id}-{rng}d.csv"
+        name = f"statistik-kanaele-{guild.id}-{start}-{end}.csv"
     else:
         w.writerow(["datum", "beitritte", "abgaenge", "netto", "mitglieder", "nachrichten", "voice_minuten"])
         for d, r in data:
             w.writerow([d, r["joins"], r["leaves"], r["joins"] - r["leaves"],
                         "" if r["members"] is None else r["members"],
                         sum(r["messages"].values()), round(sum(r["voice_sec"].values()) / 60, 1)])
-        name = f"statistik-{guild.id}-{rng}d.csv"
+        name = f"statistik-{guild.id}-{start}-{end}.csv"
     body = ("﻿" + buf.getvalue()).encode("utf-8")
     return web.Response(body=body, content_type="text/csv", charset="utf-8",
                         headers={"Content-Disposition": f"attachment; filename=\"{name}\"",

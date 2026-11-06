@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import logging
@@ -61,6 +62,7 @@ class RaidHelper(commands.Cog):
 
     def __init__(self, bot: Red):
         self.bot = bot
+        self._message_locks = {}
         self.config = Config.get_conf(self, identifier=615238947104, force_registration=True)
         self.config.register_guild(
             language="de",
@@ -306,6 +308,12 @@ class RaidHelper(commands.Cog):
             return None
 
     async def refresh_event_message(self, guild, event: dict):
+        async with self._message_locks.setdefault((guild.id, event["id"]), asyncio.Lock()):
+            current = await self._get_event(guild, event["id"])
+            if current is not None:
+                await self._refresh_event_message(guild, current)
+
+    async def _refresh_event_message(self, guild, event):
         if not event.get("channel_id") or not event.get("message_id"):
             return
         channel = guild.get_channel(event["channel_id"])
@@ -1198,6 +1206,38 @@ class RaidHelper(commands.Cog):
                     pass
         await ctx.send(t(lang, "deleted", id=event_id))
 
+    async def manage_signup(self, guild, event_id, member_id, *, action="signed", class_id=None,
+                            spec_id=None, actor=None, authorized=False):
+        """Teilnehmerverwaltung gemeinsam für Discord und das autorisierte WebCore-Formular."""
+        if not authorized and (actor is None or not await self._is_manager(actor)):
+            raise ValueError("Dazu fehlen dir die Event-Verwaltungsrechte")
+        if action not in ("signed", "bench", "remove"):
+            raise ValueError("Unbekannte Teilnehmeraktion")
+        uid = str(member_id)
+        async with self.config.guild(guild).events() as events:
+            event = events.get(event_id)
+            if event is None:
+                raise ValueError("Event nicht gefunden")
+            signups = event.setdefault("signups", {})
+            if action == "remove":
+                signups.pop(uid, None)
+            elif action == "bench":
+                if uid not in signups:
+                    raise ValueError("Dieses Mitglied ist noch nicht angemeldet")
+                signups[uid]["status"] = "bench"
+            else:
+                member = guild.get_member(int(member_id)) if uid.isdigit() else None
+                if member is None or getattr(member, "bot", False):
+                    raise ValueError("Bitte ein Mitglied dieses Servers wählen")
+                if not class_id or not spec_id or not games.is_valid(event["game"], class_id, spec_id):
+                    raise ValueError("Bitte eine gültige Klasse und Spezialisierung wählen")
+                signups[uid] = {"name": member.display_name, "class": class_id, "spec": spec_id,
+                                "role": games.spec_role(event["game"], class_id, spec_id), "status": "signed",
+                                "at": int(datetime.now(tz=timezone.utc).timestamp())}
+            snapshot = dict(event)
+        await self.refresh_event_message(guild, snapshot)
+        return snapshot
+
     @raid.command(name="add")
     async def raid_add(self, ctx, event_id: str, member: discord.Member, class_id: str, spec_id: str):
         """Mitglied manuell eintragen."""
@@ -1205,22 +1245,12 @@ class RaidHelper(commands.Cog):
         lang = await self._lang(guild)
         if not await self._is_manager(ctx.author):
             return await ctx.send(t(lang, "no_permission"))
-        async with self.config.guild(guild).events() as events:
-            event = events.get(event_id)
-            if event is None:
-                return await ctx.send(t(lang, "not_found", id=event_id))
-            game_id = event["game"]
-            if not games.is_valid(game_id, class_id, spec_id):
-                return await ctx.send(t(lang, "unknown_pick"))
-            role = games.spec_role(game_id, class_id, spec_id)
-            event["signups"][str(member.id)] = {
-                "name": member.display_name, "class": class_id, "spec": spec_id,
-                "role": role, "status": "signed",
-                "at": int(datetime.now(tz=timezone.utc).timestamp()),
-            }
-            events[event_id] = event
-            snapshot = dict(event)
-        await self.refresh_event_message(guild, snapshot)
+        try:
+            snapshot = await self.manage_signup(guild, event_id, member.id, class_id=class_id,
+                                                spec_id=spec_id, actor=ctx.author)
+        except ValueError as exc:
+            return await ctx.send(str(exc))
+        game_id = snapshot["game"]
         await ctx.send(t(lang, "added_manual", user=member.display_name,
                          spec=games.spec_label(game_id, class_id, spec_id),
                          cls=games.class_label(game_id, class_id)))
@@ -1232,14 +1262,10 @@ class RaidHelper(commands.Cog):
         lang = await self._lang(guild)
         if not await self._is_manager(ctx.author):
             return await ctx.send(t(lang, "no_permission"))
-        async with self.config.guild(guild).events() as events:
-            event = events.get(event_id)
-            if event is None:
-                return await ctx.send(t(lang, "not_found", id=event_id))
-            event["signups"].pop(str(member.id), None)
-            events[event_id] = event
-            snapshot = dict(event)
-        await self.refresh_event_message(guild, snapshot)
+        try:
+            await self.manage_signup(guild, event_id, member.id, action="remove", actor=ctx.author)
+        except ValueError as exc:
+            return await ctx.send(str(exc))
         await ctx.send(t(lang, "removed_manual", user=member.display_name))
 
     @raid.command(name="export")

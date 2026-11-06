@@ -44,3 +44,7 @@ Unterstützte Kanaltypen: Text-, Voice- und Forum-Kanäle.
 In `#memes` und `#clips` (samt Threads) werden ab sofort reine Textnachrichten entfernt. Erlaubt bleibt jede Nachricht mit Bild, Video, GIF, Sticker oder einem entsprechenden Link.
 
 Verwaltung komplett auch im **WebCore-Dashboard** möglich (Seite „Nur Medien" unter `/cogs/onlyimagevideo`): Kanäle, Ausnahme-Rollen, alle Schalter, Hinweistext und eine Übersicht „Funktionsweise".
+
+## Konkrete Kanalprüfung
+
+Die Übersicht prüft die Bot-Rechte für jeden eingetragenen Kanal einzeln und nennt fehlendes Kanal-Ansehen, Nachrichten-Verwalten sowie bei eingeschalteten Hinweisen Nachrichten-Senden. Die Meldung erklärt den Weg über **Kanal bearbeiten → Berechtigungen → Bot-Rolle**. Eigene Einschränkungen in Threads zusätzlich in Discord prüfen.

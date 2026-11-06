@@ -70,3 +70,7 @@ Die WebCore-Stufe **Bedienen** wirkt hier wie **Ansehen** (alles inkl. CSV-Expor
 Gespeichert werden nur **Tages-Summen je Kanal** – keine Nachrichteninhalte, keine Nutzer-IDs, keine Namen.
 Wer gerade in einem Sprachkanal sitzt (für die Zeitmessung), steht nur im Arbeitsspeicher, bis die Sitzung
 endet. `red_delete_data_for_user` hat deshalb nichts zu löschen.
+
+## Eigene Zeiträume und Vergleich
+
+Neben 7/30/90 Tagen kannst du einen eigenen Zeitraum von bis zu 730 Tagen wählen. Er wird mit dem gleich langen vorherigen Zeitraum verglichen. Tage richten sich weiter nach der Server-Zeitzone. CSV-Exporte verwenden denselben gewählten Bereich. Daten außerhalb der eingestellten Aufbewahrungszeit sind nicht verfügbar; fehlende Zählungen sind keine rückwirkende Messung.

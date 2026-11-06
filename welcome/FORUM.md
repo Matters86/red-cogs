@@ -45,3 +45,7 @@ Der **Mitglieder-Intent** muss aktiv sein.
 Seite **Willkommen**: Reiter **Willkommen**, **Abschied**, **DM** (Kanal, Text/Embed, Beispiel-Vorschau)
 und **Bild** (Farben, Überschrift, Hintergrund-URL mit **Live-Vorschau**). Knopf **„Testnachricht posten“**
 postet mit dir als Beispiel in den eingestellten Kanal.
+
+## Live-Vorschau und Entwürfe
+
+Text, Embed-Titel, Farbe und Bild werden während der Eingabe als Vorschau aktualisiert. Die Vorschau sendet keine Discord-Nachricht und ändert keine Einstellungen. Ungespeicherte Werte sind nur mit **Bearbeiten** nutzbar; **Ansehen/Bedienen** verwendet gespeicherte Werte. Bei ungültigen Eingaben bleibt der Formularentwurf für diese Sitzung und diesen Server erhalten.

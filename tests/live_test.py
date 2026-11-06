@@ -234,6 +234,7 @@ async def main():
     await cl.config.guild(g).ping_role_id.set(1101); await cl.config.guild(g).ping_enabled.set(True)
     inter = interaction(g, lena)
     n = len(L.LOG)
+    await cl.config.guild(g).poster_roles.set([1101])
     await cl.handle_modal_submit(inter, title="Version 1.2", neu="A\nB", geaendert="C", fixes="", hinweis="Achtung",
                                  category_emoji="✨", category_label="Feature", lang="de")
     check("changelog: Eintrag posten (Ping + Embed)", len(ops(n, "send", ank.id)) == 2 and inter.response.sent, str(inter.response.sent))

@@ -71,8 +71,56 @@ def _redirect(guild_id, *, ok: str | None = None, err: str | None = None, extra:
 # --------------------------------------------------------------------------- #
 async def dashboard_handler(cog, request):
     if request.method == "POST":
-        return await _handle_post(cog, request)
+        data = await request.post()
+        if data.get("action") == "editor_preview":
+            return await _editor_preview(cog, request, data)
+        try:
+            result = await _handle_post(cog, request)
+        except web.HTTPFound as redirect:
+            if data.get("action") in ("add", "save"):
+                if "err=" in redirect.location:
+                    redirect.location += "&draft=1"
+                    if data.get("action") == "save":
+                        redirect.location += "&edit=" + quote(data.get("login") or "")
+                else:
+                    entity = "streamer:" + (data.get("login") or "").strip().lower() if data.get("action") == "save" else "streamer:new"
+                    request.app["webcore"].drafts.discard(cog, request, data.get("guild"), entity)
+            raise
+        return result
+    if request.query.get("livepreview") == "1":
+        return await _editor_preview(cog, request)
     return await _render(cog, request)
+
+
+def _editor_preview_html(cog, guild, conf, login, message, ping_role):
+    from .twitchlive import normalize_login, valid_login
+    login = normalize_login(login)
+    if not valid_login(login):
+        login = "deinkanal"
+    lang = conf.get("language") or "de"
+    name = (cog.user_info(login) or {}).get("display_name") or login
+    stream = {"title": "Beispiel-Streamtitel", "game_name": "Just Chatting", "viewer_count": 128, "thumbnail_url": ""}
+    role = guild.get_role(int(ping_role)) if str(ping_role or "").isdigit() else None
+    text = render_template(message or conf.get("default_message") or default_message(lang),
+                           streamer=discord.utils.escape_markdown(name), title=stream["title"],
+                           game=stream["game_name"], url=stream_url(login), ping=role.mention if role else "")
+    return _message_mock(_discord_text(guild, text) + _embed_mock(
+        cog, login=login, name=name, stream=stream, lang=lang, now=cog._now()))
+
+
+async def _editor_preview(cog, request, values=None):
+    values = request.query if values is None else values
+    guild = _pick(await _guilds(request), values.get("guild"))
+    if guild is None:
+        raise web.HTTPNotFound(text="Server nicht gefunden")
+    conf = await cog.config.guild(guild).all()
+    login = values.get("login") or ""
+    entry = (conf.get("channels") or {}).get(login) or {}
+    if await request.app["webcore"].can_edit(request, guild):
+        entry = {"message": (values.get("message") or "")[:LIMIT_TEMPLATE],
+                 "ping_role": values.get("ping_role")}
+    html = _editor_preview_html(cog, guild, conf, login, entry.get("message"), entry.get("ping_role"))
+    return web.json_response({"html": html}, headers={"Cache-Control": "no-store"})
 
 
 async def _guilds(request):
@@ -167,7 +215,9 @@ async def _render(cog, request):
                count=len(chans))
         + ui.tab("editor", f"Bearbeiten: {editing}" if editing else "Hinzufügen",
                  "bi-pencil-square" if editing else "bi-plus-square",
-                 _tab_editor(cog, ui, guild, conf, csrf, editing))
+                 _tab_editor(cog, ui, guild, conf, csrf, editing,
+                             webcore.drafts.restore(cog, request, guild.id, "streamer:" + editing if editing else "streamer:new")
+                             if request.query.get("draft") == "1" else {}))
         + ui.tab("vorschau", "Vorschau", "bi-eye", _tab_preview(cog, ui, guild, conf, csrf, request, now))
         + ui.tab("einstellungen", "Einstellungen", "bi-sliders", _tab_settings(ui, guild, conf, csrf))
         + ui.tab("liverole", "Live-Rolle", "bi-person-badge", _tab_liverole(cog, ui, guild, conf, csrf))
@@ -287,9 +337,12 @@ def _placeholder_help() -> str:
             f"Max. {LIMIT_TEMPLATE} Zeichen, die fertige Nachricht wird auf 2000 gekürzt.")
 
 
-def _tab_editor(cog, ui, guild, conf, csrf, editing) -> str:
+def _tab_editor(cog, ui, guild, conf, csrf, editing, draft=None) -> str:
     chans = conf.get("channels") or {}
     e = chans.get(editing) or {} if editing else {}
+    if draft:
+        e = dict(e, channel_id=draft.get("channel"), ping_role=draft.get("ping_role"),
+                 message=draft.get("message"), enabled=draft.get("enabled", False))
     lang = conf.get("language") or "de"
     default_cid = conf.get("default_channel")
     default_ch = guild.get_channel(int(default_cid)) if default_cid else None
@@ -301,7 +354,7 @@ def _tab_editor(cog, ui, guild, conf, csrf, editing) -> str:
                  " – der Login lässt sich nicht ändern (entfernen und neu anlegen).")
     else:
         login_field = ui.field(
-            "Twitch-Login", ui.text_input("login", "", placeholder="z. B. matters86 oder https://twitch.tv/matters86",
+            "Twitch-Login", ui.text_input("login", (draft or {}).get("login", ""), placeholder="z. B. matters86 oder https://twitch.tv/matters86",
                                           attrs={"required": True, "maxlength": 80, "autocomplete": "off"}),
             help="Der Kanalname aus der Twitch-Adresse. Mit Zugangsdaten wird er bei Twitch geprüft.")
     grid = ui.grid(
@@ -313,7 +366,7 @@ def _tab_editor(cog, ui, guild, conf, csrf, editing) -> str:
                                          none_label="— kein Ping —"),
                  help="Wird nur bei echten Live-Meldungen erwähnt – nie @everyone/@here. Nicht erwähnbare Rollen "
                       "pingen nur, wenn der Bot „@everyone erwähnen“ darf."),
-        ui.field("Status", ui.switches(ui.switch("enabled", "Meldungen aktiv", e.get("enabled", True) if editing else True,
+        ui.field("Status", ui.switches(ui.switch("enabled", "Meldungen aktiv", e.get("enabled", True),
                                                  desc="Aus = pausiert, der Streamer bleibt in der Liste."))),
         ui.field("Eigene Nachricht (optional)",
                  ui.textarea("message", e.get("message") or "", rows=3,
@@ -332,8 +385,14 @@ def _tab_editor(cog, ui, guild, conf, csrf, editing) -> str:
         ui.card(f"Streamer bearbeiten: {editing}" if editing else "Streamer hinzufügen", grid,
                 icon="bi-pencil-square" if editing else "bi-plus-square", actions=actions,
                 desc="Pro Server beliebig viele Streamer (max. 100), jeweils mit eigenem Kanal, Ping und Text.")
+        + ui.card("Live-Vorschau", "<div data-wc-preview-output>" + _editor_preview_html(
+            cog, guild, conf, editing or (draft or {}).get("login", ""), e.get("message"), e.get("ping_role"))
+            + "</div>", icon="bi-eye", desc="Ungespeicherte Eingaben; es wird nichts gepostet.")
         + ui.save_row("Speichern" if editing else "Hinzufügen"),
         csrf=csrf, hidden=hidden, savebar=bool(editing),
+        attrs={"data-wc-preview-url": BASE + "?livepreview=1",
+               "data-wc-preview-action": "editor_preview", "data-wc-preview-action-field": "action",
+               "data-wc-preview-fields": "guild login message ping_role"},
     )
     return form
 
@@ -672,6 +731,10 @@ async def _handle_post(cog, request):
     gid = guild.id
 
     if action in ("add", "save"):
+        draft = {key: (data.get(key) or "")[:LIMIT_TEMPLATE] for key in ("login", "channel", "ping_role", "message")}
+        draft["enabled"] = bool(data.get("enabled"))
+        entity = "streamer:" + (data.get("login") or "").strip().lower() if action == "save" else "streamer:new"
+        webcore.drafts.remember(cog, request, guild.id, entity, draft)
         login = normalize_login(data.get("login"))
         if not valid_login(login):
             raise _redirect(gid, err="Ungültiger Twitch-Login (3–25 Zeichen: Buchstaben, Ziffern, _)")

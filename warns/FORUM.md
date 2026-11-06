@@ -43,3 +43,7 @@ Moderator = Mitglieder kicken, Mod-Rolle, Admin, Server-Owner oder Bot-Owner.
 ## Dashboard
 Seite **Verwarnungen**: Kennzahlen, **Verlauf** (Suche, Filter aktiv/alle, Aufheben), **Mitglied verwarnen**
 (du bist der Moderator, gleiche Prüfungen wie der Befehl), **Automatische Maßnahmen** und **Einstellungen**.
+
+## Auswirkung vor dem Verwarnen
+
+Beim Auswählen eines Mitglieds und der Punkte zeigt das Dashboard den aktuellen Punktestand, den voraussichtlichen neuen Stand und die dadurch ausgelöste automatische Maßnahme. Die Vorschau verändert nichts. Ändern andere Moderatoren den Verlauf währenddessen, rechnet die Ausführung mit dem dann aktuellen Stand neu und prüft die Hierarchie und Bot-Rechte erneut. Eine angezeigte Vorschau ist keine Reservierung einer Maßnahme.

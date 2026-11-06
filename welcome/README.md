@@ -103,3 +103,7 @@ Seite **Willkommen** (Icon Tür) im WebCore-Dashboard, Server über den Wechsler
 
 Es werden keine personenbezogenen Daten gespeichert. Avatare werden nur kurz im Arbeitsspeicher
 zwischengespeichert, um das Bild zu erzeugen.
+
+## Live-Vorschau und Entwürfe
+
+Text, Embed-Titel, Farbe und Bild werden während der Eingabe als Vorschau aktualisiert. Die Vorschau sendet keine Discord-Nachricht und ändert keine Einstellungen. Ungespeicherte Werte sind nur mit **Bearbeiten** nutzbar; **Ansehen/Bedienen** verwendet gespeicherte Werte. Bei ungültigen Eingaben bleibt der Formularentwurf für diese Sitzung und diesen Server erhalten.

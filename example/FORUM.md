@@ -23,3 +23,7 @@ und Notiz des gewählten Servers (direkt im Browser änderbar).
 ## Hinweise
 - Slash-Befehle ggf. mit `[p]slash sync` aktivieren.
 - Voraussetzung für das Dashboard: der Cog `webcore` ist geladen und eingerichtet.
+
+## Einheitliche Eingabegrenze
+
+Server-Notizen dürfen über Dashboard und `[p]example setnote` höchstens **500 Zeichen** enthalten. Längere Eingaben werden mit einer verständlichen Meldung abgelehnt; die vorhandene Notiz bleibt erhalten. Die Vorlage zeigt damit dieselbe Validierung in beiden Bedienwegen.

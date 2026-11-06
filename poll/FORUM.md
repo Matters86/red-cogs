@@ -52,3 +52,12 @@ Voraussetzung: der Cog `webcore` ist installiert und eingerichtet.
 Verwaltung ist außerdem komplett über das **WebCore-Dashboard** möglich (Seite „Umfragen" unter `/cogs/poll`): Einstellungen, Umfragen anlegen, Tabelle mit Aktionen und Ergebnis-Ansicht.
 
 **Neu – Mein Bereich → Umfragen:** Ist der Mitglieder-Bereich eingeschaltet, stimmen Mitglieder auch im Web ab (`/me/umfragen`) – mit denselben Regeln wie die Buttons (Einzel-/Mehrfachauswahl, Stimme ändern/zurückziehen, geschlossen = gesperrt), nur für Umfragen in Kanälen, die sie sehen. Dazu beendete Umfragen der letzten 14 Tage mit Ergebnis. Abschaltbar pro Server: *Einstellungen → „Im Mitglieder-Bereich anzeigen“*.
+
+## Entwürfe und fehlende Nachrichten
+
+Bei Eingabefehlern bleiben Frage, Optionen, Kanal, Laufzeit und Schalter in derselben Sitzung und auf
+demselben Server für 30 Minuten erhalten. Nach erfolgreichem Posten wird der Entwurf entfernt.
+In der Übersicht prüft **Neu posten / prüfen** die vorhandene Nachricht und ersetzt sie nur, wenn sie
+fehlt. Stimmen, Laufzeit und Status bleiben erhalten. Auch parallele Reparatur-Klicks erstellen keine
+doppelten Nachrichten. Bei fehlenden Leserechten wird zuerst ein verständlicher Hinweis angezeigt.
+Ergebnis-Aktualisierungen lesen den aktuellen gespeicherten Stand und laufen je Umfrage nacheinander.

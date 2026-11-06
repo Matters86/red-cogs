@@ -27,6 +27,11 @@ CID_LOCK = "tickets:lock"
 CID_UNLOCK = "tickets:unlock"
 CID_AUTOCLOSE = "tickets:autoclose"
 CID_KEEP_OPEN = "tickets:keep_open"
+CID_ASSIGN = "tickets:assign"
+CID_WAIT_USER = "tickets:wait_user"
+CID_WAIT_TEAM = "tickets:wait_team"
+CID_PRIORITY = "tickets:priority"
+CID_REPLY = "tickets:reply"
 
 ANSWER_MAX = 1000  # max. Zeichen je Antwort (Discord-Modal und Website)
 
@@ -88,7 +93,7 @@ def build_panel_view(panel: dict, *, open_label: str | None = None, emojis: bool
 
 
 def build_controls_view(lang: str, *, claimed: bool = False, locked: bool = False,
-                        auto_close: bool = False) -> discord.ui.View:
+                        auto_close: bool = False, waiting_for: str = "team", priority: str = "normal") -> discord.ui.View:
     """Steuerleiste innerhalb eines Tickets (statische custom_ids → persistent)."""
     view = discord.ui.View(timeout=None)
     view.add_item(
@@ -97,6 +102,7 @@ def build_controls_view(lang: str, *, claimed: bool = False, locked: bool = Fals
             label=t(lang, "btn_close"),
             emoji="🔒",
             custom_id=CID_CLOSE,
+            row=0,
         )
     )
     if claimed:
@@ -105,6 +111,7 @@ def build_controls_view(lang: str, *, claimed: bool = False, locked: bool = Fals
                 style=discord.ButtonStyle.secondary,
                 label=t(lang, "btn_unclaim"),
                 custom_id=CID_UNCLAIM,
+                row=0,
             )
         )
     else:
@@ -114,6 +121,7 @@ def build_controls_view(lang: str, *, claimed: bool = False, locked: bool = Fals
                 label=t(lang, "btn_claim"),
                 emoji="🙋",
                 custom_id=CID_CLAIM,
+                row=0,
             )
         )
     if locked:
@@ -122,6 +130,7 @@ def build_controls_view(lang: str, *, claimed: bool = False, locked: bool = Fals
                 style=discord.ButtonStyle.secondary,
                 label=t(lang, "btn_unlock"),
                 custom_id=CID_UNLOCK,
+                row=1,
             )
         )
     else:
@@ -130,6 +139,7 @@ def build_controls_view(lang: str, *, claimed: bool = False, locked: bool = Fals
                 style=discord.ButtonStyle.secondary,
                 label=t(lang, "btn_lock"),
                 custom_id=CID_LOCK,
+                row=1,
             )
         )
     view.add_item(discord.ui.Button(
@@ -137,7 +147,32 @@ def build_controls_view(lang: str, *, claimed: bool = False, locked: bool = Fals
         label=t(lang, "btn_keep_open" if auto_close else "btn_autoclose"),
         emoji="⏱️",
         custom_id=CID_KEEP_OPEN if auto_close else CID_AUTOCLOSE,
+        row=1,
     ))
+    view.add_item(discord.ui.Button(
+        style=discord.ButtonStyle.secondary,
+        label=t(lang, "btn_assign"),
+        custom_id=CID_ASSIGN,
+        row=0,
+    ))
+    view.add_item(discord.ui.Button(
+        style=discord.ButtonStyle.secondary,
+        label=t(lang, "btn_wait_team" if waiting_for == "user" else "btn_wait_user"),
+        custom_id=CID_WAIT_TEAM if waiting_for == "user" else CID_WAIT_USER, row=1,
+    ))
+    view.add_item(discord.ui.Button(label="Schnellantwort", custom_id=CID_REPLY,
+                                   style=discord.ButtonStyle.secondary, row=1))
+    view.add_item(discord.ui.Button(label="Dringend" if priority == "urgent" else "Priorität: Normal",
+                                   custom_id=CID_PRIORITY, style=discord.ButtonStyle.secondary, row=1))
+    return view
+
+
+def build_reminder_view(lang):
+    view = discord.ui.View(timeout=None)
+    view.add_item(discord.ui.Button(label=t(lang, "btn_keep_open"), custom_id=CID_KEEP_OPEN,
+                                   style=discord.ButtonStyle.primary))
+    view.add_item(discord.ui.Button(label=t(lang, "btn_close"), custom_id=CID_CLOSE,
+                                   style=discord.ButtonStyle.secondary))
     return view
 
 
@@ -184,6 +219,28 @@ class TicketModal(discord.ui.Modal):
         await self._cog.create_ticket_from_interaction(
             interaction, self._panel_id, self._reason_id, answers
         )
+
+
+class AssignmentView(discord.ui.View):
+    """Kurzlebige Mitgliedersuche, geöffnet über den persistenten Zuweisen-Button."""
+
+    def __init__(self, cog, requester_id: int, lang: str):
+        super().__init__(timeout=180)
+        self.cog = cog
+        self.requester_id = requester_id
+        self.lang = lang
+        self.select = discord.ui.UserSelect(
+            placeholder=t(lang, "assign_placeholder"), min_values=1, max_values=1,
+        )
+        self.select.callback = self._selected
+        self.add_item(self.select)
+
+    async def _selected(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester_id:
+            return await interaction.response.send_message(t(self.lang, "no_permission"), ephemeral=True)
+        if await self.cog._assign_from_interaction(interaction, self.select.values[0].id):
+            self.stop()
+            await interaction.edit_original_response(content=t(self.lang, "assignment_done"), view=None)
 
 
 class ConfirmView(discord.ui.View):

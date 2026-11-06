@@ -72,7 +72,10 @@ class Example(commands.Cog):
             guild = by_id.get(int(raw)) if raw.isdigit() else None
             if guild is None:  # kein Bearbeiten-Recht auf diesem Server (oder unbekannt)
                 return {"redirect": "/cogs/example?ok=Server+nicht+gefunden"}
-            await self.config.guild(guild).note.set((form.get("note") or "").strip()[:500])
+            note = (form.get("note") or "").strip()
+            if len(note) > 500:
+                return {"redirect": f"/cogs/example?guild={guild.id}&err=Die+Notiz+darf+h%C3%B6chstens+500+Zeichen+lang+sein"}
+            await self.config.guild(guild).note.set(note)
             return {"redirect": f"/cogs/example?guild={guild.id}&ok=Notiz+gespeichert"}
 
         # --- Anzeigen (GET) ---
@@ -135,5 +138,8 @@ class Example(commands.Cog):
     @commands.admin_or_permissions(manage_guild=True)
     async def example_setnote(self, ctx: commands.Context, *, text: str):
         """Setzt eine Notiz für diesen Server."""
+        text = text.strip()
+        if len(text) > 500:
+            return await ctx.send("Die Notiz darf höchstens 500 Zeichen lang sein.")
         await self.config.guild(ctx.guild).note.set(text)
         await ctx.send("Notiz gespeichert.")

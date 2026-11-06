@@ -17,6 +17,10 @@
   </div>
 </div>
 
+<div class="wc-actions" style="margin-top:18px">
+  <a class="btn-accent" href="/tasks"><i class="bi bi-check2-square"></i> Meine Aufgaben öffnen</a>
+  {% if can_setup %}<a class="btn-ghost" href="/setup"><i class="bi bi-magic"></i> Schrittweise einrichten</a>{% endif %}
+</div>
 <div class="grid-stats" style="margin-top:18px">
   <div class="s-card"><i class="bi bi-hdd-stack si"></i><div class="sl">Server</div><div class="sv" id="m-guilds">{{ guild_count }}</div></div>
   <div class="s-card"><i class="bi bi-people si"></i><div class="sl">Mitglieder</div><div class="sv" id="m-members">{{ member_total }}</div></div>
@@ -37,7 +41,7 @@
       {% if nav_pages %}
       <div class="tiles">
         {% for p in nav_pages %}
-        <a class="tile" href="/cogs/{{ p.slug }}">
+        <a class="tile" data-module="{{ p.slug }}" href="/cogs/{{ p.slug }}">
           <span class="ti"><i class="bi {{ p.icon }}"></i></span>
           <span><div class="tn">{{ p.name }}</div><div class="td">/cogs/{{ p.slug }}</div></span>
         </a>

@@ -96,3 +96,9 @@ Diese Seite hat **kein Tagesgeschäft**: Sie konfiguriert nur Quell-Kanäle und 
   betrifft Admin-/Mod-Rollen **ohne** dieses Recht.
 - Slash-Befehle ggf. mit `[p]slash sync` aktivieren.
 - Voraussetzung für das Dashboard: der Cog `webcore` ist geladen und eingerichtet.
+
+## Raumsteuerung ohne Befehle
+
+Jeder neue Raum erhält im zugehörigen Textkanal, sonst im Sprachraumchat, eine **persistente Steuerung**: Öffentlich, Gesperrt, Privat, Personenlimit (0–99), Übergeben und Übernehmen. Sie funktioniert nach Bot-Neustarts weiter. Der aktuelle Besitzer muss im Raum sein; ein neuer Besitzer ebenfalls. Übernehmen geht erst, wenn der alte Besitzer weg ist. Die Rechte werden nach Modal-/Mitgliederauswahl erneut geprüft. Bots werden keine Besitzer. Der Bot-Owner kann Räume verwalten.
+
+`[p]autoroom controls` postet die Steuerung erneut. Der Bot braucht im Zielchat Nachrichten senden; sonst bleiben die bestehenden Befehle verfügbar. Fehlgeschlagene Löschungen bleiben mit Fehlerhinweis in der Übersicht und werden alle 60 Sekunden erneut versucht. Sobald die Rechte wieder stimmen, werden verwaiste Sprach- und Textkanäle aufgeräumt.

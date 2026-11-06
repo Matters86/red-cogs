@@ -60,6 +60,8 @@ red-cogs/
 | levels | 427610958372 |
 | giveaways | 739164825013 |
 | scheduler | 862057319448 |
+| ideas | 417305926681 |
+| serverlayout | 639281740517 |
 | _neue hier ergänzen_ | |
 
 `tests/realred.py` prüft, dass jede Zahl im Code nur einmal vorkommt und hier eingetragen ist.

@@ -48,3 +48,12 @@ Voraussetzung: der Cog `webcore` ist installiert und eingerichtet. Falls nötig 
 **Dashboard:** Seite **Changelog** unter `/cogs/changelog` – Einstellungen, Historie-Tabelle (mit „Zur Nachricht" und Löschen) und Detailansicht je Changelog. Reiter **Launcher & Website**: öffentliche JSON-/RSS-Adresse freigeben und kopieren.
 
 **Hinweis zum Formular:** Das Modal hat genau fünf Felder (Discord-Limit). Mindestens eines von *Neu/Geändert/Fixes* muss ausgefüllt sein; mehrzeilige Eingaben werden automatisch zu Bullet-Listen.
+
+## Direkt im Dashboard veröffentlichen
+
+Unter **Neuer Changelog** Titel, Neu, Geändert, Fixes und Hinweis erfassen; für Neu lässt sich eine
+Kategorie wählen. **Vorschau** zeigt denselben Embed-Aufbau wie Discord, ohne zu speichern, zu posten
+oder zu pingen. **Veröffentlichen** nutzt die gemeinsame Posting-Logik und speichert die tatsächliche
+Person als Autor. **Bedienen** genügt für Vorschau, Veröffentlichen und Löschen; Einstellungen bleiben
+Bearbeiten vorbehalten. Entwürfe bleiben je Sitzung und Server 30 Minuten erhalten, auch nach Fehlern.
+Titel: 230 Zeichen; Neu/Geändert/Fixes: je 500; Hinweis: 200. Mindestens ein Änderungsabschnitt ist nötig.

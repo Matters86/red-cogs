@@ -19,7 +19,7 @@ from redbot.core.utils.chat_formatting import pagify
 
 from .strings import (CLOSED_STATUSES, DEFAULT_LANGUAGE, LANGUAGES, OPEN_STATUSES, STATUS_COLOR, STATUS_EMOJI,
                       STATUSES, normalize_status, status_label, t)
-from .views import MAX_DESC, MAX_TITLE, CategoryView, IdeaModal, PanelView
+from .views import MAX_DESC, MAX_TITLE, CategoryView, IdeaModal, PanelView, SimilarIdeasView
 
 log = logging.getLogger("red.red-cogs.ideas")
 
@@ -451,7 +451,7 @@ class Ideas(commands.Cog):
             return self._err("err_no_forum")
         return await self._check_member(guild, member, data, await self.bot.is_owner(member))
 
-    async def submit(self, guild, member, *, title, description="", category=None, source="form") -> dict:
+    async def submit(self, guild, member, *, title, description="", category=None, source="form", confirm_similar=False) -> dict:
         """Idee prüfen, Forum-Beitrag anlegen, speichern. Rückgabe: {"ok", "key", "kw", "idea", "similar"}.
 
         Nummern werden unter einem Server-Lock vergeben; der Zähler steigt erst nach erfolgreichem
@@ -497,6 +497,8 @@ class Ideas(commands.Cog):
                 "merged_into": None, "merged_from": [], "polls": [], "deleted": False,
             }
             similar = self.similar_ideas(data.get("ideas"), title)
+            if similar and not confirm_similar:
+                return {"ok": False, "key": "similar_before_submit", "kw": {}, "similar": similar}
             if self._needs_tags(forum, data, idea):
                 await self.ensure_tags(guild, forum)
                 data = await gconf.all()
@@ -592,6 +594,10 @@ class Ideas(commands.Cog):
             pass
         res = await self.submit(guild, member, title=title, description=description, category=category,
                                 source="form")
+        if res.get("key") == "similar_before_submit":
+            view = SimilarIdeasView(self, member.id, lang, title, description, category)
+            text = t(lang, "similar_before_submit") + "\n" + self._links_md(guild, res["similar"])
+            return await self._reply(interaction, text, view=view)
         await self._reply(interaction, self.result_text(guild, lang, res))
 
     # ----------------------------------------------------------------- #

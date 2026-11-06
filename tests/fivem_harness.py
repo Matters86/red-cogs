@@ -18,6 +18,9 @@ async def make_app():
     wc, bot, app = await H.make_app()
     bot.loop = asyncio.get_running_loop()
     bot.sent = []  # (channel_id, text) – alles, was der Cog in Discord-Kanäle schreibt
+    async def ready():
+        return None
+    bot.wait_until_ready = ready
 
     def _mk_send(ch):
         async def send(content=None, **kw):
@@ -25,6 +28,7 @@ async def make_app():
         return send
     for g in bot.guilds:
         for ch in g.text_channels:
+            ch.guild = g
             ch.send = _mk_send(ch)
     bot.get_channel = lambda cid: next((c for g in bot.guilds for c in g.text_channels if c.id == cid), None)
 
@@ -40,7 +44,13 @@ async def make_app():
     bot._cogs["AdminPanel"] = cog
     await cog.cog_load()                       # registriert die Seite bei WebCore
     cog.runner = types.SimpleNamespace()       # „Webserver läuft“ simulieren
-    await seed(cog, bot)
+    await cog.config.server_profiles.set({"legacy": {"guild_id": "1000", "label": "Testbestand"},
+                                          "dev": {"guild_id": "2000", "label": "Testserver 2000"}})
+    await cog._resolve_settings()
+    # Explizite Testbindung für direkte DB-Aufrufe; HTTP-Tests müssen zusätzlich das Profil senden.
+    from rc.fivemadmin import db
+    with db.profile_scope("legacy"), db.author_scope("1", "1000"):
+        await seed(cog, bot)
     await cog._resolve_settings()
     # WebCore-Rollen-Rechte: Support (Lena) = Bearbeiten, Moderator (Tom) = Ansehen
     await wc.config.role_perms.set({"1000": {"1101": {"fivemadmin": "edit"}, "1102": {"fivemadmin": "view"}},

@@ -16,6 +16,7 @@ eigenes CSS. Nutzereingaben werden mit ``html.escape`` abgesichert.
 from __future__ import annotations
 
 import html
+import time
 from datetime import datetime, timezone
 from urllib.parse import quote
 
@@ -26,6 +27,18 @@ from .embed import vote_counts
 from .strings import LANGUAGES, OVERRIDABLE_KEYS, STRINGS
 
 HARD_OPTION_LIMIT = 25
+
+
+def _draft(cog, request, guild, data=None):
+    drafts = cog.__dict__.setdefault("_form_drafts", {})
+    key = (request.get("webcore_csrf", ""), guild.id)
+    now = time.monotonic()
+    for old in list(drafts):
+        if drafts[old][0] < now - 1800:
+            drafts.pop(old, None)
+    if data is not None:
+        drafts[key] = (now, {k: data[k] for k in ("question", "options", "channel", "duration", "multiple", "anonymous") if k in data})
+    return drafts.get(key, (0, {}))[1]
 
 # Beschriftung + Hilfe der überschreibbaren Texte (Schlüssel aus strings.OVERRIDABLE_KEYS)
 _OVERRIDE_LABELS = {
@@ -135,7 +148,7 @@ async def _render(cog, request):
 
     body = (
         ui.tab("umfragen", "Umfragen", "bi-list-check", _render_polls_table(ui, guild, polls, csrf), count=len(polls))
-        + ui.tab("neu", "Neue Umfrage", "bi-plus-square", _render_create_form(ui, guild, conf, csrf))
+        + ui.tab("neu", "Neue Umfrage", "bi-plus-square", _render_create_form(ui, guild, conf, csrf, _draft(cog, request, guild)))
         + _render_settings(ui, guild, conf, csrf)
     )
     return {"title": "Umfragen", "content": bar + head + body}
@@ -195,25 +208,26 @@ def _render_settings(ui, guild, conf, csrf) -> str:
     )
 
 
-def _render_create_form(ui, guild, conf, csrf) -> str:
+def _render_create_form(ui, guild, conf, csrf, draft=None) -> str:
+    draft = draft or {}
     max_opts = int(conf.get("max_options", 10))
     text_items = [(c.id, f"#{c.name}") for c in guild.text_channels]
     form = ui.form(
         "/cogs/poll",
         ui.grid(
-            ui.field("Frage", ui.text_input("question", "", placeholder="Beste Pizza?", attrs={"maxlength": 256}),
+            ui.field("Frage", ui.text_input("question", draft.get("question", ""), placeholder="Beste Pizza?", attrs={"maxlength": 256}),
                      wide=True),
             ui.field(f"Optionen (eine pro Zeile, 2–{max_opts})",
-                     ui.textarea("options", "", rows=5, placeholder="Margherita\nSalami\nHawaii"),
+                     ui.textarea("options", draft.get("options", ""), rows=5, placeholder="Margherita\nSalami\nHawaii"),
                      help="Jede Zeile wird ein Button. Die Obergrenze stellst du unter „Einstellungen“ ein.", wide=True),
-            ui.field("Kanal", ui.select("channel", text_items), help="Hier wird die Umfrage gepostet."),
-            ui.field("Laufzeit (optional)", ui.text_input("duration", "", placeholder="z. B. 2h, 30m, 1d"),
+            ui.field("Kanal", ui.select("channel", text_items, draft.get("channel")), help="Hier wird die Umfrage gepostet."),
+            ui.field("Laufzeit (optional)", ui.text_input("duration", draft.get("duration", ""), placeholder="z. B. 2h, 30m, 1d"),
                      help="Leer = läuft, bis sie geschlossen wird."),
         )
         + "<div class='wc-switches'>"
-        + ui.switch("multiple", "Mehrfachauswahl erlauben", conf.get("default_multiple"),
+        + ui.switch("multiple", "Mehrfachauswahl erlauben", "multiple" in draft if draft else conf.get("default_multiple"),
                     desc="Mitglieder dürfen mehrere Optionen wählen.")
-        + ui.switch("anonymous", "Anonym abstimmen", conf.get("default_anonymous"),
+        + ui.switch("anonymous", "Anonym abstimmen", "anonymous" in draft if draft else conf.get("default_anonymous"),
                     desc="Nur Zähler sichtbar, keine Namen.")
         + "</div>"
         + ui.actions(ui.button("Umfrage posten", icon="bi-send")),
@@ -252,6 +266,10 @@ def _render_polls_table(ui, guild, polls, csrf) -> str:
             csrf=csrf, hidden={**hidden, "action": "delete"},
             confirm="Die Umfrage, alle Stimmen und ihre Discord-Nachricht werden gelöscht.",
         )
+        repost = ui.form("/cogs/poll", ui.button("Neu posten / prüfen", icon="bi-send", small=True),
+                         csrf=csrf, hidden={**hidden, "action": "repost"}, operate=True)
+        if not p.get("message_id"):
+            status += " · Nachricht fehlt"
         tags = ["Mehrfachauswahl" if p.get("multiple") else "eine Stimme", "anonym" if p.get("anonymous") else "öffentlich"]
         rows.append(ui.row(
             f"<div class='wc-cell-title'>{_esc((p.get('question') or '')[:70])}</div>"
@@ -260,7 +278,7 @@ def _render_polls_table(ui, guild, polls, csrf) -> str:
             f"<span class='mono'>{total}</span>"
             f"<div class='wc-cell-sub'>{voters} Teilnehmer</div>",
             ui.badge(status, _STATUS_TONE.get(status, "muted")),
-            f"><div class='wc-row-actions'>{results}{toggle}{delete}</div>",
+            f"><div class='wc-row-actions'>{results}{repost}{toggle}{delete}</div>",
         ))
     return ui.card(
         "Umfragen", ui.table(["Frage", "Kanal", "Stimmen", "Status", ">"], rows,
@@ -370,6 +388,7 @@ async def _handle_post(cog, request):
         raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&ok=Gespeichert")
 
     if form == "create":
+        _draft(cog, request, guild, data)
         from .poll import parse_duration  # zur Laufzeit (vermeidet Import-Zyklus)
 
         question = (data.get("question") or "").strip()
@@ -398,11 +417,18 @@ async def _handle_post(cog, request):
         if not poll.get("message_id"):
             raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&err=" + quote(
                 "Umfrage gespeichert, aber das Posten ist fehlgeschlagen (Rechte im Kanal prüfen)"))
+        cog.__dict__.get("_form_drafts", {}).pop((request.get("webcore_csrf", ""), guild.id), None)
         raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&ok=" + quote("Umfrage erstellt"))
 
     if form == "action":
         poll_id = data.get("poll_id")
         action = data.get("action")
+        if action == "repost":
+            try:
+                await cog.repost_poll(guild, poll_id)
+            except ValueError as exc:
+                raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&err=" + quote(str(exc)))
+            raise web.HTTPFound(f"/cogs/poll?guild={guild.id}&ok=Nachricht+vorhanden+oder+neu+gepostet")
         async with gconf.polls() as polls:
             poll = polls.get(poll_id)
             if poll is None:

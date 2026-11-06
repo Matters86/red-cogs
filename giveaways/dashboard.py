@@ -307,7 +307,11 @@ def _render_create(ui, guild, conf, csrf, tz, draft) -> str:
     bonus = ui.card("Bonus-Lose (optional)", ui.grid(*bonus_rows), icon="bi-stars",
                     desc="Mitglieder mit diesen Rollen bekommen zusätzliche Lose (werden addiert, max. 25 Lose "
                          "pro Person). Jeder hat mindestens 1 Los.")
-    return ui.form(f"/cogs/{SLUG}", main + when + rules + bonus + ui.actions(
+    has_rules = bool(v("required_roles") or v("excluded_roles")) or v("min_days") not in (None, "", "0", 0)
+    has_bonus = any(v(f"bonus_role_{i}") for i in range(5))
+    advanced = ui.disclosure("Erweitert: Teilnahme-Regeln und Bonus-Lose", rules + bonus,
+                             expanded=has_rules or has_bonus)
+    return ui.form(f"/cogs/{SLUG}", main + when + advanced + ui.actions(
         ui.button("Gewinnspiel starten", icon="bi-send"),
         "<span class='wc-help'>Der Bot postet das Gewinnspiel sofort im gewählten Kanal.</span>"),
         csrf=csrf, hidden={"form": "create", "guild": guild.id})

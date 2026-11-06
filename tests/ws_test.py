@@ -76,9 +76,13 @@ async def main():
     wcmod.psutil, wc._process = None, None
     try:
         info = wc._process_info()
-        assert info["source"] == "resource" and info["rss_mb"] > 0 and info["threads"] >= 1, info
         r = await client.get("/status", headers=OWNER); t = await r.text()
-        assert "Spitze" in t and "resource" in t
+        if wcmod.resource is not None:
+            assert info["source"] == "resource" and info["rss_mb"] > 0 and info["threads"] >= 1, info
+            assert "Spitze" in t and "resource" in t
+        else:
+            assert info["source"] is None, info
+            assert "nicht verfügbar auf diesem System" in t
     finally:
         wcmod.psutil, wc._process = orig_psutil, orig_proc
     print("Bot-Status: Laufzeit, Latenz, Server, Cogs + Registrierungen, RAM/CPU (psutil + resource), Versionen – OK")

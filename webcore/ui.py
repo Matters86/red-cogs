@@ -139,7 +139,7 @@ def columns(*blocks: str, cols: int = 2) -> str:
 # --------------------------------------------------------------------------- #
 def form(action: str, body: str, *, csrf: str, hidden: dict | None = None, savebar: bool = False,
          confirm: str | None = None, id: str | None = None, cls: str = "", method: str = "post",
-         enctype: str | None = None, operate: bool = False) -> str:
+         enctype: str | None = None, operate: bool = False, attrs: dict | None = None) -> str:
     """POST-Formular inkl. CSRF-Token. ``savebar=True`` zeigt bei Änderungen die Speicherleiste.
     Für Datei-Uploads ``enctype="multipart/form-data"`` setzen.
     ``operate=True`` markiert das Formular als Tagesgeschäft (``data-wc-operate``): bei der Stufe
@@ -147,7 +147,7 @@ def form(action: str, body: str, *, csrf: str, hidden: dict | None = None, saveb
     ``register_page(..., operate_forms=…)``."""
     fields = [f"<input type='hidden' name='csrf_token' value='{esc(csrf)}'>"] if method == "post" else []
     fields += [f"<input type='hidden' name='{esc(k)}' value='{esc(v)}'>" for k, v in (hidden or {}).items() if v is not None]
-    attrs = {"id": id, "enctype": enctype, "data-wc-savebar": "1" if savebar else None, "data-confirm": confirm,
+    attrs = {**(attrs or {}), "id": id, "enctype": enctype, "data-wc-savebar": "1" if savebar else None, "data-confirm": confirm,
              "data-wc-operate": "1" if operate else None}
     return (
         f"<form class='wc-form{(' ' + cls) if cls else ''}' method='{method}' action='{esc(action)}'{_attrs(attrs)}>"
@@ -164,6 +164,32 @@ def field(label: str, control: str, *, help: str | None = None, wide: bool = Fal
         f"<div class='wc-field{' wide' if wide else ''}'><label class='wc-label'>{esc(label)}</label>"
         f"{control}" + (f"<div class='wc-help'>{help}</div>" if help else "") + "</div>"
     )
+
+
+def disclosure(title: str, body: str, *, expanded: bool = False) -> str:
+    """Optionale Einstellungen, auch ohne JavaScript bedienbar."""
+    return (f"<details class='wc-disclosure'{' open' if expanded else ''}>"
+            f"<summary>{esc(title)}</summary><div>{body}</div></details>")
+
+
+def conditional(name: str, values, body: str, *, wide: bool = False) -> str:
+    """Formularfelder abhängig von einer Auswahl anzeigen (ohne JS bleiben alle sichtbar)."""
+    return (f"<div class='wc-conditional{' wide' if wide else ''}' data-wc-when='{esc(name)}' "
+            f"data-wc-values='{esc(' '.join(values))}'>{body}</div>")
+
+
+def member_picker(name: str, members, value="", *, picker_id: str = "members") -> str:
+    """Native Namenssuche mit eindeutiger ID und Avatar-Vorschau, serverseitig weiter prüfen."""
+    ident = _SLUG_RE.sub("-", picker_id)
+    options = []
+    for member in sorted(members, key=lambda m: (m.display_name.casefold(), m.id)):
+        avatar = str(getattr(getattr(member, "display_avatar", None), "url", ""))
+        label = f"{member.display_name} (@{member.name}) · {member.id}"
+        options.append(f"<option value='{int(member.id)}' label='{esc(label)}' data-avatar='{esc(avatar)}'></option>")
+    return (f"<div data-wc-member-picker><input class='wc-input' name='{esc(name)}' value='{esc(value)}' "
+            f"list='{ident}' placeholder='Name suchen oder Mitglied wählen …' autocomplete='off'>"
+            f"<datalist id='{ident}'>{''.join(options)}</datalist>"
+            "<div class='wc-member-selection wc-help' aria-live='polite'></div></div>")
 
 
 def switch(name: str, label: str, checked, *, desc: str | None = None, value: str | None = None) -> str:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import logging
@@ -65,6 +66,7 @@ class Poll(commands.Cog):
 
     def __init__(self, bot: Red):
         self.bot = bot
+        self._message_locks = {}
         self.config = Config.get_conf(self, identifier=529184637025, force_registration=True)
         self.config.register_guild(
             language="de",
@@ -199,7 +201,7 @@ class Poll(commands.Cog):
     #  Umfrage posten / aktualisieren / anlegen
     # ----------------------------------------------------------------- #
     async def post_poll(self, guild, poll: dict) -> int | None:
-        channel = guild.get_channel(poll.get("channel_id")) if poll.get("channel_id") else None
+        channel = guild.get_channel_or_thread(poll.get("channel_id")) if poll.get("channel_id") else None
         if not isinstance(channel, (discord.TextChannel, discord.Thread)):
             return None
         lang = await self._lang(guild)
@@ -215,9 +217,15 @@ class Poll(commands.Cog):
             return None
 
     async def refresh_poll_message(self, guild, poll: dict):
+        async with self._message_locks.setdefault((guild.id, poll["id"]), asyncio.Lock()):
+            current = await self._get_poll(guild, poll["id"])
+            if current is not None:
+                await self._refresh_poll_message(guild, current)
+
+    async def _refresh_poll_message(self, guild, poll):
         if not poll.get("channel_id") or not poll.get("message_id"):
             return
-        channel = guild.get_channel(poll["channel_id"])
+        channel = guild.get_channel_or_thread(poll["channel_id"])
         if channel is None:
             return
         lang = await self._lang(guild)
@@ -228,8 +236,57 @@ class Poll(commands.Cog):
                 embed=build_poll_embed(poll, lang, overrides=overrides),
                 view=build_poll_view(poll),
             )
+        except discord.NotFound:
+            async with self.config.guild(guild).polls() as polls:
+                current = polls.get(poll["id"])
+                if current and current.get("message_id") == poll["message_id"]:
+                    current["message_id"] = None
         except discord.HTTPException:
             log.debug("Umfrage-Nachricht nicht aktualisierbar (Umfrage %s)", poll.get("id"))
+
+    async def repost_poll(self, guild, poll_id):
+        """Fehlende Nachricht ersetzen, Stimmen behalten; parallele Wiederholungen zusammenfassen."""
+        async with self._message_locks.setdefault((guild.id, poll_id), asyncio.Lock()):
+            poll = await self._get_poll(guild, poll_id)
+            if poll is None:
+                raise ValueError("Umfrage nicht gefunden")
+            channel = guild.get_channel_or_thread(poll.get("channel_id") or 0)
+            if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+                raise ValueError("Zielkanal fehlt – bitte einen gültigen Kanal wählen")
+            if poll.get("message_id"):
+                try:
+                    await channel.fetch_message(poll["message_id"])
+                    return poll
+                except discord.NotFound:
+                    pass
+                except discord.HTTPException as exc:
+                    raise ValueError("Nachrichtenverlauf nicht lesbar – Bot-Rechte prüfen") from exc
+            mid = await self.post_poll(guild, poll)
+            if mid is None:
+                raise ValueError("Posten fehlgeschlagen – Bot-Rechte im Zielkanal prüfen")
+            async with self.config.guild(guild).polls() as polls:
+                if poll_id in polls:
+                    polls[poll_id]["message_id"] = mid
+                    current = dict(polls[poll_id])
+                else:
+                    current = None
+            if current is None:
+                try:
+                    await channel.get_partial_message(mid).delete()
+                except discord.HTTPException:
+                    pass
+                raise ValueError("Umfrage wurde inzwischen gelöscht")
+            await self._refresh_poll_message(guild, current)
+            return current
+
+    @commands.Cog.listener()
+    async def on_raw_message_delete(self, payload):
+        if payload.guild_id is None:
+            return
+        async with self.config.guild_from_id(payload.guild_id).polls() as polls:
+            for poll in polls.values():
+                if poll.get("message_id") == payload.message_id:
+                    poll["message_id"] = None
 
     async def create_poll(self, guild, *, question, options, channel_id, author_id,
                           end_ts=None, multiple=False, anonymous=False) -> dict:

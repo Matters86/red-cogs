@@ -88,7 +88,7 @@ Die Server-Auswahl im Dashboard ist auf die Server beschränkt, die der eingelog
 | WebCore-Stufe | Darf |
 |---|---|
 | Ansehen | Einstellungen, Historie und Details ansehen |
-| **Bedienen** | zusätzlich **einzelne Changelogs löschen** (inkl. Discord-Nachricht) – Tagesgeschäft |
+| **Bedienen** | zusätzlich **Changelogs verfassen, als Vorschau prüfen, veröffentlichen und einzeln löschen** (inkl. Discord-Nachricht) – Tagesgeschäft |
 | Bearbeiten | zusätzlich alle Einstellungen, Poster-/Ping-Rollen, Kategorien, Texte und die Freigabe der öffentlichen API |
 
 ## Öffentliche API für Launcher & Website
@@ -178,3 +178,12 @@ Team-Mitgliedern und werden in JSON bewusst nicht HTML-escaped.
 ## Datenspeicherung
 
 Pro Server werden die geposteten Changelogs gespeichert: Titel und Inhalte (Neu/Geändert/Fixes/Hinweis), die gewählte Kategorie, Kanal- und Nachrichten-ID sowie Anzeigename und Discord-ID der postenden Person (für die Historie). Einträge lassen sich im Dashboard löschen; beim Löschen wird auf Wunsch auch die Discord-Nachricht entfernt. Daten werden beim Entfernen des Cogs oder beim Verlassen des Servers gelöscht.
+
+## Direkt im Dashboard veröffentlichen
+
+Unter **Neuer Changelog** Titel, Neu, Geändert, Fixes und Hinweis erfassen; für Neu lässt sich eine
+Kategorie wählen. **Vorschau** zeigt denselben Embed-Aufbau wie Discord, ohne zu speichern, zu posten
+oder zu pingen. **Veröffentlichen** nutzt die gemeinsame Posting-Logik und speichert die tatsächliche
+Person als Autor. **Bedienen** genügt für Vorschau, Veröffentlichen und Löschen; Einstellungen bleiben
+Bearbeiten vorbehalten. Entwürfe bleiben je Sitzung und Server 30 Minuten erhalten, auch nach Fehlern.
+Titel: 230 Zeichen; Neu/Geändert/Fixes: je 500; Hinweis: 200. Mindestens ein Änderungsabschnitt ist nötig.

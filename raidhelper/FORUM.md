@@ -73,3 +73,11 @@ Mitglieder melden sich auch im Browser an: WebCore → **Mein Bereich → Raids*
 - Zu sehen: kommende Events aus Kanälen, die das Mitglied in Discord lesen darf – Termin (Server-Zeitzone + „in 3 Tagen“), Belegung gesamt/je Rolle, Status offen/voll/geschlossen/Anmeldeschluss, eigener Status, Link „In Discord öffnen“, Detailansicht mit Roster.
 - Aktionen: anmelden (Klasse & Spec), Spec wechseln, Bank/Spät/Vielleicht/Abwesend, abmelden.
 - Gleiche Regeln und Meldungen wie die Buttons (Limits, Anmeldeschluss, geschlossen); die Discord-Nachricht wird sofort aktualisiert.
+
+## Teilnehmer im Dashboard verwalten
+
+Im Roster eines Events unter **Teilnehmer verwalten** ein Mitglied und eine Aktion wählen:
+**Eintragen / zurück ins Roster**, **Auf die Bank setzen** oder **Anmeldung entfernen**. Beim Eintragen
+Klasse und Spezialisierung auswählen. Diese Team-Aktion darf Anmeldelimits bewusst übergehen; sie verwendet
+dieselbe Teilnehmerlogik wie die Discord-Befehle. WebCore-Recht **Bedienen** genügt; Ansehen verändert nichts.
+Die Discord-Anzeige wird mit dem aktuellen Stand aktualisiert, auch bei gleichzeitigen Änderungen.

@@ -19,8 +19,8 @@ Einreichen per **Formular**, **Status-Workflow** fürs Team, **Umfragen aus Idee
   discord.py-Versionen, die Red 3.5 mitbringt, keine Auswahlliste enthalten; ein Textfeld für die Kategorie führt zu
   Tippfehlern. Die Auswahlliste liefert immer eine gültige Kategorie.
 - **Schutz:** Wartezeit je Mitglied (Standard 10 Min.), max. offene Ideen je Mitglied (Standard 5; offen = Neu, In
-  Prüfung, Geplant), **Sperrliste**, **Duplikat-Hinweis** bei sehr ähnlichem Titel (nur Hinweis mit Link, die Idee
-  wird trotzdem eingereicht; im neuen Beitrag steht „Ähnliche Ideen: …“ fürs Team). Nummern werden unter einem
+  Prüfung, Geplant), **Sperrliste**, **Duplikat-Prüfung** bei sehr ähnlichem Titel: vorhandene Ideen zuerst ansehen oder bewusst
+  trotzdem neu einreichen; vorher wird kein Beitrag angelegt. Nummern werden unter einem
   Server-Lock vergeben – keine doppelten Nummern, keine Lücken (der Zähler steigt erst nach erfolgreichem Posten);
   Limits und Wartezeit werden unter dem Lock erneut geprüft. Der Bot-Owner ist von Wartezeit/Limit/Sperre ausgenommen.
 - **Manuelle Beiträge** (falls Mitglieder im Forum selbst posten dürfen): Schalter „manuelle Beiträge als Ideen
@@ -151,3 +151,12 @@ Einreichung, pro Server die Sperrliste.
 Verlauf und bei Umfrage-Verknüpfungen werden entfernt, der Sperrlisten-Eintrag und der Wartezeit-Zeitstempel
 gelöscht. Titel und Beschreibung bleiben, weil die Idee ein Beitrag im Community-Forum ist (die Discord-Nachrichten
 gehören nicht dem Cog) und Nummern, Zusammenführungen und Umfragen für alle nachvollziehbar bleiben sollen.
+
+## Ähnliche Ideen vor dem Einreichen
+
+Bei einem sehr ähnlichen Titel werden zunächst vorhandene Beiträge verlinkt. Zu diesem Zeitpunkt
+wird **kein neuer Beitrag angelegt**, keine Nummer vergeben und keine Wartezeit gestartet. Öffne eine
+vorhandene Idee oder wähle ausdrücklich **Trotzdem neue Idee einreichen**. Diese Wahl gibt es sowohl
+im Discord-Formular als auch unter Mein Bereich → Ideen. Die Web-Bestätigung ist an die eigene Sitzung,
+den Server und die geprüften Angaben gebunden und nur einmal verwendbar. Entwürfe bleiben dort
+30 Minuten erhalten; bei erneutem Einreichen gelten aktuelle Sperren, Limits und Wartezeiten weiter.

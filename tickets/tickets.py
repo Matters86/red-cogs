@@ -3,6 +3,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 import discord
 from discord.ext import tasks
@@ -14,7 +15,10 @@ from .dashboard import dashboard_handler
 from .member import member_handler
 from .strings import LANGUAGES, OVERRIDABLE_KEYS, t
 from .transcript import build_transcript, redact_user
+from .support import DEFAULT_REPLIES, MAX_REPLY, human_reply, render_reply, reset_response, set_waiting, support_due
+from .replies import PriorityView, ReplyPicker
 from .views import (
+    CID_ASSIGN,
     CID_AUTOCLOSE,
     CID_CLAIM,
     CID_CLOSE,
@@ -24,10 +28,16 @@ from .views import (
     CID_SELECT,
     CID_UNCLAIM,
     CID_UNLOCK,
+    CID_WAIT_TEAM,
+    CID_PRIORITY,
+    CID_REPLY,
+    CID_WAIT_USER,
     ConfirmView,
+    AssignmentView,
     TicketModal,
     build_controls_view,
     build_panel_view,
+    build_reminder_view,
 )
 
 log = logging.getLogger("red.red-cogs.tickets")
@@ -70,6 +80,8 @@ def _fill(template, **values) -> str:
 class Tickets(commands.Cog):
     """Mehrsprachiges Ticketsystem mit Panels, Transcripts und Dashboard-Verwaltung."""
 
+    support_due = staticmethod(support_due)
+
     def __init__(self, bot: Red):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=846215097433, force_registration=True)
@@ -99,6 +111,11 @@ class Tickets(commands.Cog):
             stats={"opened": 0, "closed": 0, "claims": {}, "duration_sum": 0},
             portal_enabled=True,   # „Meine Tickets“ im Mitglieder-Bereich (WebCore /me/tickets)
             portal_create=True,    # Tickets über die Website öffnen erlauben
+            response_targets_enabled=False,
+            response_target_hours=24,
+            response_urgent_hours=4,
+            quick_replies=DEFAULT_REPLIES,
+            quick_reply_signature="",
         )
         self.transcripts_dir = cog_data_path(self) / "transcripts"
         self.transcripts_dir.mkdir(parents=True, exist_ok=True)
@@ -108,11 +125,13 @@ class Tickets(commands.Cog):
         # Gateway-Aktivität sofort merken, auch wenn die Ablaufprüfung gerade auf Discord wartet.
         self._latest_activity: dict[int, datetime] = {}
         self._controls_restored = False
+        self._pending_control_refresh: set[tuple[int, int]] = set()
 
     # ----------------------------------------------------------------- #
     #  Dashboard-Anbindung (1:1-Muster aus example)
     # ----------------------------------------------------------------- #
     async def cog_load(self):
+        await self._mark_support_history_pending()
         webcore = self.bot.get_cog("WebCore")
         if webcore is not None:
             self._register_dashboard(webcore)
@@ -149,6 +168,9 @@ class Tickets(commands.Cog):
           bei ``discord_deleted_user`` (Konto gelöscht, ID ungültig) wird auch die ID entfernt.
         """
         uid = int(user_id)
+        for key, draft in list(getattr(self, "_quick_reply_drafts", {}).items()):
+            if key[-1] == uid or draft.get("owner_id") == uid:
+                self._quick_reply_drafts.pop(key, None)
         drop_open_ids = requester == "discord_deleted_user"
         keep_open_answers = requester == "user"
         langs: dict[int, str] = {}
@@ -229,7 +251,7 @@ class Tickets(commands.Cog):
         page = dict(owner=self, slug="tickets", name="Tickets", icon="bi-life-preserver", handler=self.dashboard_page)
         try:
             # Tagesgeschäft für die Stufe „Bedienen“: einzelne Tickets schließen.
-            webcore.register_page(**page, operate_forms={"ticket_close", "ticket_autoclose", "ticket_keepopen"})
+            webcore.register_page(**page, operate_forms={"ticket_close", "ticket_autoclose", "ticket_keepopen", "ticket_assign", "ticket_waiting", "ticket_priority", "ticket_reply_preview", "ticket_reply_send"})
         except TypeError:  # ältere WebCore-Versionen ohne Stufe „Bedienen“
             webcore.register_page(**page)
         if hasattr(webcore, "register_member_page"):  # ältere WebCore-Versionen ohne „Mein Bereich“
@@ -504,6 +526,17 @@ class Tickets(commands.Cog):
                 await self._control_autoclose(interaction, enabled=True)
             elif cid == CID_KEEP_OPEN:
                 await self._control_autoclose(interaction, enabled=False)
+            elif cid == CID_ASSIGN:
+                await self._control_assign(interaction)
+            elif cid in (CID_PRIORITY, CID_REPLY):
+                await self._control_support(interaction, priority=cid == CID_PRIORITY)
+            elif cid in (CID_WAIT_USER, CID_WAIT_TEAM):
+                await interaction.response.defer(ephemeral=True)
+                error = await self._set_waiting(
+                    interaction.guild, interaction.channel, "user" if cid == CID_WAIT_USER else "team", interaction.user,
+                )
+                await interaction.followup.send(error or t(await self._lang(interaction.guild), "waiting_changed"),
+                                                ephemeral=True)
             elif cid == CID_CLAIM:
                 await self._control_claim(interaction, claim=True)
             elif cid == CID_UNCLAIM:
@@ -607,6 +640,7 @@ class Tickets(commands.Cog):
         title = self._text(conf, lang, "opened_title", num=num, user=member.display_name)
         body = self._text(conf, lang, "opened_body", num=num, user=member.mention)
         embed = discord.Embed(title=title[:256], description=body[:4096], color=EMBED_COLOR)
+        embed.set_footer(text=t(lang, "waiting_footer", user=t(lang, "unassigned"), status=t(lang, "waiting_team")))
         if reason_label:
             embed.add_field(name="​", value=t(lang, "opened_reason", reason=reason_label), inline=False)
         for q, a in (answers or {}).items():
@@ -703,6 +737,8 @@ class Tickets(commands.Cog):
             "category_id": eff_category,       # Kategorie dieses Typs (offen)
             "status": "open",
             "claimed_by": None,
+            "waiting_for": "team",
+            "priority": "normal",
             "locked": False,
             "type": ttype,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -711,6 +747,8 @@ class Tickets(commands.Cog):
             "message_id": opening_msg.id if opening_msg else None,
             "answers": answers or {},
         }
+        reset_response(record, self._timer_time(record["created_at"]))
+        record["support_synced_at"] = record["created_at"]
         async with self.config.guild(guild).tickets() as tickets:
             tickets[str(target.id)] = record
         async with self.config.guild(guild).stats() as stats:
@@ -727,19 +765,40 @@ class Tickets(commands.Cog):
         return tickets.get(str(channel_id))
 
     async def _refresh_controls(self, guild, channel, record, lang):
-        record = await self._get_record(guild, channel.id)
-        if not record:
-            return
-        if not record.get("message_id"):
-            return
-        try:
-            msg = await channel.fetch_message(record["message_id"])
-            await msg.edit(view=build_controls_view(
-                lang, claimed=bool(record.get("claimed_by")), locked=bool(record.get("locked")),
-                auto_close=bool(record.get("auto_close_at")),
-            ) if record.get("status") == "open" else None)
-        except discord.HTTPException:
-            pass
+        # Auch Refreshes außerhalb der Aktionssperre müssen in fester Reihenfolge schreiben.
+        async with self._lock("controls", channel.id):
+            record = await self._get_record(guild, channel.id)
+            if not record or not record.get("message_id"):
+                return
+            try:
+                msg = await channel.fetch_message(record["message_id"])
+                record = await self._get_record(guild, channel.id)
+                if not record:
+                    return
+                payload = {}
+                if msg.embeds:
+                    embed = discord.Embed.from_dict(msg.embeds[0].to_dict())
+                    assignee = guild.get_member(record.get("claimed_by")) if record.get("claimed_by") else None
+                    name = (assignee.display_name if assignee is not None else (
+                        f"ID {record['claimed_by']}" if record.get("claimed_by") else t(lang, "unassigned")))
+                    embed.set_footer(text=t(lang, "waiting_footer", user=name,
+                                            status=t(lang, "waiting_user" if record.get("waiting_for") == "user"
+                                                     else "waiting_team")))
+                    conf = await self.config.guild(guild).all()
+                    due = support_due(record, conf)
+                    extra = " · Dringend" if record.get("priority") == "urgent" else ""
+                    if due is not None:
+                        extra += " · " + ("Antwort fällig" if due <= datetime.now(timezone.utc) else "Antwort bis " + due.strftime("%d.%m. %H:%M UTC"))
+                    embed.set_footer(text=embed.footer.text + extra)
+                    payload["embed"] = embed
+                await msg.edit(**payload, view=build_controls_view(
+                    lang, claimed=bool(record.get("claimed_by")), locked=bool(record.get("locked")),
+                    auto_close=bool(record.get("auto_close_at")),
+                    waiting_for=record.get("waiting_for", "team"),
+                    priority=record.get("priority", "normal"),
+                ) if record.get("status") == "open" else None)
+            except discord.HTTPException:
+                pass
 
     @staticmethod
     def _timer_time(value) -> datetime | None:
@@ -789,6 +848,7 @@ class Tickets(commands.Cog):
                     return False
                 record["auto_close_at"] = (now + INACTIVITY_TIMEOUT).isoformat() if enabled else None
                 record["auto_close_started_at"] = now.isoformat() if enabled else None
+                record["auto_close_reminded_for"] = None
                 record = dict(record)
             self._latest_activity.pop(channel.id, None)
             if enabled:
@@ -815,17 +875,179 @@ class Tickets(commands.Cog):
         if cid in self._active_timer_channels:
             self._latest_activity[cid] = max(stamp, self._latest_activity.get(cid, stamp))
         record = await self._get_record(message.guild, cid)
-        if not record or record.get("status") != "open" or not record.get("auto_close_at"):
+        if not record or record.get("status") != "open":
             return
-        self._latest_activity[cid] = max(stamp, self._latest_activity.get(cid, stamp))
+        if record.get("auto_close_at"):
+            self._latest_activity[cid] = max(stamp, self._latest_activity.get(cid, stamp))
+        conf = await self.config.guild(message.guild).all()
+        if record.get("support_history_unconfirmed"):
+            await self._sync_support_history(message.guild, message.channel, conf)
+        is_staff = self._is_staff(message.author, conf, record) and message.author.id != record.get("owner_id")
         async with self._lock("close", cid):
             async with self.config.guild(message.guild).tickets() as tickets:
                 current = tickets.get(str(cid))
                 if not current or current.get("status") != "open":
                     return
+                if human_reply(current, is_staff, stamp):
+                    self._pending_control_refresh.add((message.guild.id, cid))
                 deadline = self._timer_time(current.get("auto_close_at"))
                 if deadline is not None:
                     current["auto_close_at"] = max(deadline, stamp + INACTIVITY_TIMEOUT).isoformat()
+                    if current["auto_close_at"] != deadline.isoformat():
+                        current["auto_close_reminded_for"] = None
+
+    async def _set_waiting(self, guild, channel, status, actor, *, check_actor=True):
+        async with self._lock("close", channel.id):
+            conf = await self.config.guild(guild).all()
+            lang = conf["language"]
+            record = conf["tickets"].get(str(channel.id))
+            if not record:
+                return t(lang, "not_a_ticket")
+            if check_actor and not self._is_staff(actor, conf, record):
+                return t(lang, "no_permission")
+            if record.get("status") != "open":
+                return t(lang, "already_closed")
+            if status not in ("user", "team"):
+                return t(lang, "no_permission")
+            async with self.config.guild(guild).tickets() as tickets:
+                set_waiting(tickets[str(channel.id)], status)
+            await self._refresh_controls(guild, channel, record, lang)
+            return None
+
+    async def _reply_access(self, guild, channel, actor):
+        if await self.bot.cog_disabled_in_guild(self, guild):
+            return "Das Ticketsystem ist auf diesem Server deaktiviert."
+        conf = await self.config.guild(guild).all()
+        record = conf["tickets"].get(str(channel.id))
+        if not record:
+            return "Das ist kein Ticket."
+        if record.get("status") != "open":
+            return "Dieses Ticket ist bereits geschlossen."
+        if actor is None or not self._is_staff(actor, conf, record):
+            return "Dafür brauchst du die Support-Rechte dieses Tickets."
+        if not self._is_bot_owner(actor):
+            permissions = channel.permissions_for(actor)
+            if not (permissions.view_channel and permissions.read_message_history
+                    and (permissions.send_messages_in_threads if isinstance(channel, discord.Thread) else permissions.send_messages)):
+                return "Du musst dieses Ticket lesen und darin schreiben dürfen."
+        return None
+
+    async def _prepare_reply(self, guild, channel, actor, reply_id):
+        error = await self._reply_access(guild, channel, actor)
+        if error:
+            return error, None
+        conf = await self.config.guild(guild).all()
+        record = conf["tickets"].get(str(channel.id))
+        if not record or record.get("status") != "open":
+            return "Dieses Ticket ist bereits geschlossen.", None
+        template = next((item for item in conf["quick_replies"] if item["id"] == reply_id), None)
+        if template is None:
+            return "Diese Schnellantwort existiert nicht mehr.", None
+        try:
+            return None, render_reply(template["text"], record, actor, guild.get_member(record["owner_id"]), conf["quick_reply_signature"])
+        except ValueError as exc:
+            return str(exc), None
+
+    async def _send_support_reply(self, guild, channel, actor, text):
+        text = str(text or "").strip()
+        if not text or len(text) > MAX_REPLY or "\x00" in text:
+            return "Die Antwort muss 1 bis 2000 Zeichen lang sein."
+        async with self._lock("close", channel.id):
+            error = await self._reply_access(guild, channel, actor)
+            if error:
+                return error
+            permissions = channel.permissions_for(guild.me)
+            if not permissions.view_channel or not (permissions.send_messages_in_threads if isinstance(channel, discord.Thread) else permissions.send_messages):
+                return "Dem Bot fehlen Leserechte oder Schreibrechte im Ticket."
+            try:
+                if isinstance(channel, discord.Thread) and channel.archived:
+                    await channel.edit(archived=False)
+                await channel.send(text, allowed_mentions=discord.AllowedMentions.none())
+            except discord.HTTPException:
+                return "Antwort nicht gesendet – Discord-Kanalrechte prüfen und erneut versuchen."
+            now = datetime.now(timezone.utc)
+            async with self.config.guild(guild).tickets() as tickets:
+                record = tickets[str(channel.id)]
+                human_reply(record, actor.id != record.get("owner_id"), now)
+                if record.get("auto_close_at"):
+                    record["auto_close_at"] = (now + INACTIVITY_TIMEOUT).isoformat()
+                    record["auto_close_reminded_for"] = None
+            self._pending_control_refresh.add((guild.id, channel.id))
+            return None
+
+    async def _set_priority(self, guild, channel, priority, actor, *, check_actor=True):
+        async with self._lock("close", channel.id):
+            conf = await self.config.guild(guild).all()
+            record = conf["tickets"].get(str(channel.id))
+            if not record or record.get("status") != "open":
+                return "Offenes Ticket nicht gefunden."
+            if check_actor:
+                error = await self._reply_access(guild, channel, actor)
+                if error:
+                    return error
+            if priority not in ("normal", "urgent"):
+                return "Priorität: normal oder urgent."
+            async with self.config.guild(guild).tickets() as tickets:
+                tickets[str(channel.id)]["priority"] = priority
+            await self._refresh_controls(guild, channel, record, conf["language"])
+            return None
+
+    async def _control_support(self, interaction, *, priority):
+        error = await self._reply_access(interaction.guild, interaction.channel, interaction.user)
+        if error:
+            return await interaction.response.send_message(error, ephemeral=True)
+        conf = await self.config.guild(interaction.guild).all()
+        record = conf["tickets"].get(str(interaction.channel.id))
+        if not priority and not conf["quick_replies"]:
+            return await interaction.response.send_message("Noch keine Schnellantworten eingerichtet.", ephemeral=True)
+        view = PriorityView(self, interaction.user.id, record.get("priority", "normal")) if priority else ReplyPicker(self, interaction.user.id, conf["quick_replies"])
+        await interaction.response.send_message("Priorität wählen:" if priority else "Antwort wählen – vor dem Senden kannst du sie bearbeiten:", view=view, ephemeral=True)
+
+    async def _mark_support_history_pending(self):
+        for gid, conf in (await self.config.all_guilds()).items():
+            if not conf.get("response_targets_enabled"):
+                continue
+            async with self.config.guild_from_id(int(gid)).tickets() as records:
+                for record in records.values():
+                    if record.get("status") == "open":
+                        record["support_history_unconfirmed"] = True
+
+    @commands.Cog.listener()
+    async def on_resumed(self):
+        await self._mark_support_history_pending()
+        self._controls_restored = False
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        # Auch ein vollständiger Gateway-Neuaufbau (nicht nur RESUMED) kann Antworten verpasst haben.
+        await self.on_resumed()
+
+    async def _sync_support_history(self, guild, channel, conf):
+        if not conf.get("response_targets_enabled"):
+            return
+        async with self._lock("close", channel.id):
+            record = await self._get_record(guild, channel.id)
+            if not record or record.get("status") != "open":
+                return
+            after = self._timer_time(record.get("support_synced_at") or record.get("created_at"))
+            now = datetime.now(timezone.utc)
+            try:
+                events = [message async for message in channel.history(limit=None, after=after, oldest_first=True)
+                          if self._human_message(message)]
+            except discord.HTTPException:
+                async with self.config.guild(guild).tickets() as tickets:
+                    tickets[str(channel.id)]["support_history_unconfirmed"] = True
+                return
+            async with self.config.guild(guild).tickets() as tickets:
+                current = tickets.get(str(channel.id))
+                if current is None or current.get("status") != "open":
+                    return
+                for message in events:
+                    member = guild.get_member(message.author.id)
+                    staff = member is not None and member.id != current.get("owner_id") and self._is_staff(member, conf, current)
+                    human_reply(current, staff, message.created_at)
+                current["support_synced_at"] = now.isoformat()
+                current["support_history_unconfirmed"] = False
 
     @tasks.loop(seconds=60)
     async def _autoclose_loop(self):
@@ -836,13 +1058,35 @@ class Tickets(commands.Cog):
             except Exception:  # noqa: BLE001 – beim nächsten Durchlauf erneut versuchen
                 log.exception("Ticket-Steuerleisten konnten nicht wiederhergestellt werden")
         try:
+            await self._retry_support_history()
             await self._check_autoclose()
+            for gid, cid in list(self._pending_control_refresh):
+                self._pending_control_refresh.discard((gid, cid))
+                guild = self.bot.get_guild(gid)
+                if guild is not None:
+                    channel = guild.get_channel_or_thread(cid)
+                    if channel is not None:
+                        await self._refresh_controls(guild, channel, None, await self._lang(guild))
         except Exception:  # noqa: BLE001 – temporäre Config-Fehler dürfen den Timer nicht beenden
             log.exception("Ticket-Timer-Prüfung fehlgeschlagen")
 
     @_autoclose_loop.before_loop
     async def _before_autoclose_loop(self):
         await self.bot.wait_until_red_ready()
+
+    async def _retry_support_history(self):
+        for gid, conf in (await self.config.all_guilds()).items():
+            guild = self.bot.get_guild(int(gid))
+            if guild is None or not conf.get("response_targets_enabled") or await self.bot.cog_disabled_in_guild(self, guild):
+                continue
+            for cid, record in conf["tickets"].items():
+                if record.get("status") != "open" or not record.get("support_history_unconfirmed"):
+                    continue
+                try:
+                    channel = guild.get_channel_or_thread(int(cid)) or await guild.fetch_channel(int(cid))
+                    await self._sync_support_history(guild, channel, conf)
+                except discord.HTTPException:
+                    pass
 
     async def _restore_ticket_controls(self):
         for gid, conf in (await self.config.all_guilds()).items():
@@ -859,6 +1103,7 @@ class Tickets(commands.Cog):
                     channel = guild.get_channel_or_thread(int(cid))
                     if channel is None:
                         channel = await guild.fetch_channel(int(cid))
+                    await self._sync_support_history(guild, channel, conf)
                     await self._refresh_controls(guild, channel, record, conf["language"])
                 except discord.HTTPException:
                     log.warning("Steuerleiste für Ticket %s (Guild %s) nicht erreichbar", cid, gid)
@@ -871,7 +1116,7 @@ class Tickets(commands.Cog):
                 continue
             for cid, record in conf.get("tickets", {}).items():
                 deadline = self._timer_time(record.get("auto_close_at"))
-                if record.get("status") != "open" or deadline is None or deadline > now:
+                if record.get("status") != "open" or deadline is None or deadline > now + timedelta(hours=1):
                     continue
                 try:
                     channel = guild.get_channel_or_thread(int(cid))
@@ -879,9 +1124,35 @@ class Tickets(commands.Cog):
                         channel = await guild.fetch_channel(int(cid))
                     if not isinstance(channel, (discord.TextChannel, discord.Thread)):
                         continue
-                    await self._close_ticket(guild, channel, record, guild.me, conf, inactivity=True)
+                    if deadline > now:
+                        await self._remind_autoclose(guild, channel, conf)
+                    else:
+                        await self._close_ticket(guild, channel, record, guild.me, conf, inactivity=True)
                 except Exception:  # noqa: BLE001 – ein Ticket darf andere Timer nicht blockieren
                     log.exception("Auto-Close für Ticket %s (Guild %s) fehlgeschlagen", cid, gid)
+
+    async def _remind_autoclose(self, guild, channel, conf):
+        async with self._lock("close", channel.id):
+            record = await self._get_record(guild, channel.id)
+            now = datetime.now(timezone.utc)
+            deadline = self._timer_time((record or {}).get("auto_close_at"))
+            if not record or record.get("status") != "open" or deadline is None:
+                return
+            if not now < deadline <= now + timedelta(hours=1) or record.get("auto_close_reminded_for") == deadline.isoformat():
+                return
+            deadline, _deferred = await self._deadline_after_history(guild, channel, record, deadline, now)
+            pending = self._latest_activity.get(channel.id)
+            if pending is not None:
+                deadline = max(deadline, pending + INACTIVITY_TIMEOUT)
+            if not now < deadline <= now + timedelta(hours=1):
+                return
+            owner_id = record.get("owner_id")
+            await channel.send(t(conf["language"], "close_reminder", user=f"<@{owner_id}>" if owner_id else "",
+                                 deadline=int(deadline.timestamp())), view=build_reminder_view(conf["language"]),
+                               allowed_mentions=discord.AllowedMentions(everyone=False, roles=False,
+                                                                         users=[discord.Object(owner_id)] if owner_id else False))
+            async with self.config.guild(guild).tickets() as tickets:
+                tickets[str(channel.id)]["auto_close_reminded_for"] = deadline.isoformat()
 
     async def _control_close(self, interaction):
         guild = interaction.guild
@@ -912,43 +1183,107 @@ class Tickets(commands.Cog):
             await interaction.response.defer()
             await self._close_ticket(guild, channel, record, member, conf)
 
-    async def _control_claim(self, interaction, claim: bool):
-        guild = interaction.guild
-        channel = interaction.channel
-        conf = await self.config.guild(guild).all()
+    def _can_assign_to(self, guild, channel, record, conf, member) -> bool:
+        if (member is None or getattr(member, "guild", None) != guild
+                or getattr(member, "bot", False) or member.id == record.get("owner_id")
+                or not self._is_staff(member, conf, record)):
+            return False
+        perms = channel.permissions_for(member)
+        return (perms.view_channel and perms.read_message_history
+                and (perms.send_messages_in_threads if isinstance(channel, discord.Thread) else perms.send_messages))
+
+    async def _assign_ticket(self, guild, channel, member, actor, *, replace=True, check_actor=True):
+        """Gemeinsame Zuständigkeit für Buttons, Befehle und das autorisierte Dashboard.
+
+        ``None`` = erfolgreich; sonst eine übersetzte, sichtbare Fehlermeldung.
+        Derselbe Kanal-Lock verhindert Rennen mit Übernehmen, Freigeben und Schließen.
+        """
+        async with self._lock("close", channel.id):
+            conf = await self.config.guild(guild).all()
+            lang = conf["language"]
+            record = conf["tickets"].get(str(channel.id))
+            if not record:
+                return t(lang, "not_a_ticket")
+            if check_actor and not self._is_staff(actor, conf, record):
+                return t(lang, "no_permission")
+            if record.get("status") != "open":
+                return t(lang, "already_closed")
+            if member is not None and not self._can_assign_to(guild, channel, record, conf, member):
+                return t(lang, "assignment_invalid")
+            previous = record.get("claimed_by")
+            target_id = member.id if member is not None else None
+            if not replace and previous and previous != target_id:
+                return t(lang, "already_claimed", user=f"<@{previous}>")
+            if previous == target_id:
+                return t(lang, "assignment_unchanged")
+            if member is not None and isinstance(channel, discord.Thread):
+                try:
+                    if channel.archived:
+                        await channel.edit(archived=False)
+                    await channel.add_user(member)
+                except discord.HTTPException:
+                    return t(lang, "assignment_access_failed")
+            async with self.config.guild(guild).tickets() as tickets:
+                tickets[str(channel.id)]["claimed_by"] = target_id
+            record["claimed_by"] = target_id
+            if member is not None:
+                async with self.config.guild(guild).stats() as stats:
+                    claims = stats.setdefault("claims", {})
+                    claims[str(target_id)] = claims.get(str(target_id), 0) + 1
+                notice = (t(lang, "claimed_by", user=member.mention) if member.id == actor.id
+                          else t(lang, "assigned_by", user=member.mention, actor=actor.mention))
+            else:
+                notice = t(lang, "unclaimed_by", user=actor.mention)
+            try:
+                await channel.send(notice, allowed_mentions=discord.AllowedMentions(
+                    everyone=False, roles=False, users=[member] if member is not None else False,
+                ))
+            except discord.HTTPException:
+                log.warning("Zuweisungshinweis für Ticket %s nicht sendbar", channel.id)
+            await self._log(guild, conf, t(lang, "log_assigned", num=record["num"],
+                                          actor=str(actor), user=str(member) if member else t(lang, "unassigned")))
+            await self._refresh_controls(guild, channel, record, lang)
+            return None
+
+    async def _control_assign(self, interaction):
+        conf = await self.config.guild(interaction.guild).all()
         lang = conf["language"]
-        record = conf["tickets"].get(str(channel.id))
+        record = conf["tickets"].get(str(interaction.channel.id))
         if not record:
-            await interaction.response.send_message(t(lang, "not_a_ticket"), ephemeral=True)
-            return
-        member = interaction.user
-        if not self._is_staff(member, conf, record):
-            await interaction.response.send_message(t(lang, "no_permission"), ephemeral=True)
-            return
-        if claim and record.get("owner_id") == member.id:
-            await interaction.response.send_message(t(lang, "claim_own_denied"), ephemeral=True)
-            return
-
-        await interaction.response.defer()
-        if claim:
-            if record.get("claimed_by") and record["claimed_by"] != member.id:
-                other = guild.get_member(record["claimed_by"])
-                await channel.send(t(lang, "already_claimed", user=other.mention if other else "?"))
-                return
-            record["claimed_by"] = member.id
-            async with self.config.guild(guild).stats() as stats:
-                claims = stats.setdefault("claims", {})
-                claims[str(member.id)] = claims.get(str(member.id), 0) + 1
-            await channel.send(t(lang, "claimed_by", user=member.mention))
-            await self._log(guild, conf, t(lang, "log_claimed", num=record["num"], user=str(member)))
+            error = "not_a_ticket"
+        elif not self._is_staff(interaction.user, conf, record):
+            error = "no_permission"
+        elif record.get("status") != "open":
+            error = "already_closed"
         else:
-            record["claimed_by"] = None
-            await channel.send(t(lang, "unclaimed_by", user=member.mention))
+            return await interaction.response.send_message(
+                t(lang, "assign_prompt"), view=AssignmentView(self, interaction.user.id, lang), ephemeral=True,
+            )
+        await interaction.response.send_message(t(lang, error), ephemeral=True)
 
-        async with self.config.guild(guild).tickets() as tickets:
-            if str(channel.id) in tickets:
-                tickets[str(channel.id)]["claimed_by"] = record["claimed_by"]
-        await self._refresh_controls(guild, channel, record, lang)
+    async def _assign_from_interaction(self, interaction, member_id):
+        await interaction.response.defer(ephemeral=True)
+        lang = await self._lang(interaction.guild)
+        member = interaction.guild.get_member(member_id)
+        if member is None:
+            try:
+                member = await interaction.guild.fetch_member(member_id)
+            except discord.HTTPException:
+                await interaction.followup.send(t(lang, "assignment_invalid"), ephemeral=True)
+                return False
+        error = await self._assign_ticket(interaction.guild, interaction.channel, member, interaction.user)
+        if error:
+            await interaction.followup.send(error, ephemeral=True)
+        return error is None
+
+    async def _control_claim(self, interaction, claim: bool):
+        await interaction.response.defer(ephemeral=True)
+        error = await self._assign_ticket(
+            interaction.guild, interaction.channel, interaction.user if claim else None,
+            interaction.user, replace=not claim,
+        )
+        lang = await self._lang(interaction.guild)
+        await interaction.followup.send(error or t(lang, "assignment_done"), ephemeral=True)
 
     async def _control_lock(self, interaction, lock: bool):
         guild = interaction.guild
@@ -985,6 +1320,28 @@ class Tickets(commands.Cog):
         except discord.HTTPException:
             pass
 
+    async def _deadline_after_history(self, guild, channel, record, deadline, now):
+        """Unter der Kanalsperre: Offline-Antworten und laufende Gateway-Nachrichten prüfen."""
+        started = self._timer_time(record.get("auto_close_started_at"))
+        after = max(started or now - INACTIVITY_TIMEOUT, now - INACTIVITY_TIMEOUT)
+        latest = self._latest_activity.get(channel.id)
+        async for message in channel.history(limit=None, after=after, oldest_first=False):
+            if self._human_message(message):
+                stamp = message.created_at.astimezone(timezone.utc)
+                latest = max(latest, stamp) if latest is not None else stamp
+                break
+        pending = self._latest_activity.get(channel.id)
+        if pending is not None:
+            latest = max(latest, pending) if latest is not None else pending
+        if latest is not None:
+            deadline = max(deadline, latest + INACTIVITY_TIMEOUT)
+        deferred = deadline > datetime.now(timezone.utc)
+        if deferred:
+            async with self.config.guild(guild).tickets() as tickets:
+                tickets[str(channel.id)]["auto_close_at"] = deadline.isoformat()
+        # Ein überfälliger Pfad hat ab der letzten Aktivitätsprüfung kein weiteres await.
+        return deadline, deferred
+
     async def _close_ticket(self, guild, channel, record, closer, conf, *, inactivity=False) -> bool:
         """Schließt (bzw. löscht) ein Ticket. Pro Kanal serialisiert; ein bereits
         geschlossenes Ticket wird nicht erneut gezählt/transkribiert."""
@@ -997,24 +1354,8 @@ class Tickets(commands.Cog):
                 deadline = self._timer_time(current.get("auto_close_at"))
                 if current.get("status") != "open" or deadline is None or deadline > now:
                     return False
-                # Der Bot kann während eines Ausfalls Nachrichten verpasst haben.
-                # Bei fehlenden Leserechten wird hier abgebrochen und später erneut geprüft.
-                started = self._timer_time(current.get("auto_close_started_at"))
-                after = max(started or now - INACTIVITY_TIMEOUT, now - INACTIVITY_TIMEOUT)
-                latest = self._latest_activity.get(channel.id)
-                async for message in channel.history(limit=None, after=after, oldest_first=False):
-                    if self._human_message(message):
-                        stamp = message.created_at.astimezone(timezone.utc)
-                        latest = max(latest, stamp) if latest is not None else stamp
-                        break
-                pending = self._latest_activity.get(channel.id)
-                if pending is not None:
-                    latest = max(latest, pending) if latest is not None else pending
-                if latest is not None:
-                    deadline = max(deadline, latest + INACTIVITY_TIMEOUT)
-                if deadline > datetime.now(timezone.utc):
-                    async with self.config.guild(guild).tickets() as tickets:
-                        tickets[str(channel.id)]["auto_close_at"] = deadline.isoformat()
+                deadline, deferred = await self._deadline_after_history(guild, channel, current, deadline, now)
+                if deferred:
                     return False
                 current["auto_closed"] = True
             if current.get("status") == "closed":
@@ -1129,6 +1470,7 @@ class Tickets(commands.Cog):
         async with self.config.guild(guild).tickets() as tickets:
             if str(channel.id) in tickets:
                 tickets[str(channel.id)]["status"] = "closed"
+                set_waiting(tickets[str(channel.id)], "user")
                 tickets[str(channel.id)]["closed_at"] = record["closed_at"]
                 tickets[str(channel.id)]["auto_close_at"] = None
                 tickets[str(channel.id)]["auto_close_started_at"] = None
@@ -1156,6 +1498,9 @@ class Tickets(commands.Cog):
         async with self.config.guild(guild).tickets() as tickets:
             if str(channel.id) in tickets:
                 tickets[str(channel.id)]["status"] = "open"
+                reset_response(tickets[str(channel.id)])
+                tickets[str(channel.id)]["waiting_for"] = "team"
+                tickets[str(channel.id)]["support_synced_at"] = datetime.now(timezone.utc).isoformat()
                 tickets[str(channel.id)]["auto_close_at"] = None
                 tickets[str(channel.id)]["auto_close_started_at"] = None
         self._active_timer_channels.discard(channel.id)
@@ -1249,47 +1594,40 @@ class Tickets(commands.Cog):
         await self._reopen_ticket(ctx.guild, ctx.channel, record, conf)
         await ctx.send(t(lang, "reopened_by", user=ctx.author.mention))
 
+    @ticket.command(name="waiting")
+    async def ticket_waiting(self, ctx, status: Literal["user", "team"]):
+        """Setzt Wartet auf Nutzer (user) oder Team (team)."""
+        await ctx.defer(ephemeral=True)
+        error = await self._set_waiting(ctx.guild, ctx.channel, status, ctx.author)
+        await ctx.send(error or t(await self._lang(ctx.guild), "waiting_changed"), ephemeral=True)
+
+    @ticket.command(name="priority")
+    async def ticket_priority(self, ctx, priority: Literal["normal", "urgent"]):
+        """Setzt die Priorität, ohne die bereits gewartete Teamzeit zurückzusetzen."""
+        await ctx.defer(ephemeral=True)
+        error = await self._set_priority(ctx.guild, ctx.channel, priority, ctx.author)
+        await ctx.send(error or "Priorität aktualisiert.", ephemeral=True)
+
     @ticket.command(name="claim")
     async def ticket_claim(self, ctx):
         """Übernimmt das aktuelle Ticket."""
-        conf, record = await self._ctx_record(ctx)
-        lang = conf["language"]
-        if not record:
-            return await ctx.send(t(lang, "not_a_ticket"))
-        if not self._is_staff(ctx.author, conf, record):
-            return await ctx.send(t(lang, "no_permission"))
-        if record.get("owner_id") == ctx.author.id:
-            return await ctx.send(t(lang, "claim_own_denied"))
-        if record.get("claimed_by") and record["claimed_by"] != ctx.author.id:
-            other = ctx.guild.get_member(record["claimed_by"])
-            return await ctx.send(t(lang, "already_claimed", user=other.mention if other else "?"))
-        async with self.config.guild(ctx.guild).tickets() as tickets:
-            rec = tickets.get(str(ctx.channel.id))
-            if rec:
-                rec["claimed_by"] = ctx.author.id
-        async with self.config.guild(ctx.guild).stats() as stats:
-            claims = stats.setdefault("claims", {})
-            claims[str(ctx.author.id)] = claims.get(str(ctx.author.id), 0) + 1
-        record["claimed_by"] = ctx.author.id
-        await self._refresh_controls(ctx.guild, ctx.channel, record, lang)
-        await ctx.send(t(lang, "claimed_by", user=ctx.author.mention))
+        await self._ctx_assign(ctx, ctx.author, replace=False)
+
+    @ticket.command(name="assign")
+    async def ticket_assign(self, ctx, member: discord.Member):
+        """Weist das aktuelle Ticket einem Teammitglied zu (auch Übergabe)."""
+        await self._ctx_assign(ctx, member)
 
     @ticket.command(name="unclaim")
     async def ticket_unclaim(self, ctx):
         """Gibt das aktuelle Ticket wieder frei."""
-        conf, record = await self._ctx_record(ctx)
-        lang = conf["language"]
-        if not record:
-            return await ctx.send(t(lang, "not_a_ticket"))
-        if not self._is_staff(ctx.author, conf, record):
-            return await ctx.send(t(lang, "no_permission"))
-        async with self.config.guild(ctx.guild).tickets() as tickets:
-            rec = tickets.get(str(ctx.channel.id))
-            if rec:
-                rec["claimed_by"] = None
-        record["claimed_by"] = None
-        await self._refresh_controls(ctx.guild, ctx.channel, record, lang)
-        await ctx.send(t(lang, "unclaimed_by", user=ctx.author.mention))
+        await self._ctx_assign(ctx, None)
+
+    async def _ctx_assign(self, ctx, member, *, replace=True):
+        await ctx.defer(ephemeral=True)
+        error = await self._assign_ticket(ctx.guild, ctx.channel, member, ctx.author, replace=replace)
+        lang = await self._lang(ctx.guild)
+        await ctx.send(error or t(lang, "assignment_done"), ephemeral=True)
 
     @ticket.command(name="add")
     async def ticket_add(self, ctx, member: discord.Member):

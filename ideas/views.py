@@ -85,3 +85,38 @@ class IdeaModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         await self.cog.submit_from_modal(interaction, str(self.idea_title.value), str(self.idea_desc.value),
                                          self.category)
+
+
+class SimilarIdeasView(discord.ui.View):
+    """Vor dem Anlegen bewusst zwischen vorhandener und neuer Idee entscheiden."""
+
+    def __init__(self, cog, requester_id, lang, title, description, category):
+        super().__init__(timeout=300)
+        self.cog, self.requester_id, self.lang = cog, requester_id, lang
+        self.values = dict(title=title, description=description, category=category)
+        self.submitted = False
+        button = discord.ui.Button(label=t(lang, "similar_continue"), style=discord.ButtonStyle.primary)
+        button.callback = self._continue
+        self.add_item(button)
+
+    async def _continue(self, interaction):
+        if interaction.user.id != self.requester_id:
+            return await interaction.response.send_message(t(self.lang, "no_permission"), ephemeral=True)
+        if self.submitted:
+            return await interaction.response.send_message(t(self.lang, "similar_expired"), ephemeral=True)
+        self.submitted = True
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        res = await self.cog.submit(interaction.guild, interaction.user, **self.values, confirm_similar=True)
+        if not res.get("ok"):
+            self.submitted = False
+        else:
+            for child in self.children:
+                child.disabled = True
+            message = getattr(interaction, "message", None)
+            if message is not None:
+                try:
+                    await message.edit(view=self)
+                except discord.HTTPException:
+                    pass
+            self.stop()
+        await self.cog._reply(interaction, self.cog.result_text(interaction.guild, self.lang, res))

@@ -43,3 +43,7 @@ Manager = „Server verwalten“ oder eine Manager-Rolle (Bot-Owner immer).
 
 Im Dashboard (Seite „Gewinnspiele“ unter `/cogs/giveaways`): laufende und beendete Gewinnspiele mit Suche,
 Detailansicht mit Teilnehmerliste, „Neues Gewinnspiel“ mit Rollen-Regeln und Bonus-Losen, Einstellungen.
+
+## Schnell anlegen
+
+Preis, Kanal, Gewinnerzahl und Laufzeit stehen im Hauptformular. Optionale Teilnahme-Regeln und Bonus-Lose findest du unter **Erweitert**. Enthält ein wiederhergestellter Entwurf solche Werte, ist der Bereich bereits geöffnet. Zugeklappte Regeln bleiben beim Absenden vollständig erhalten.

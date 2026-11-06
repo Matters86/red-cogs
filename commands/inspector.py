@@ -245,7 +245,7 @@ def evaluate_member(info: CmdInfo, member, member_priv):
     if not info.enabled:
         return False, "deaktiviert"
     if PrivilegeLevel is not None and member_priv == _pl("BOT_OWNER"):
-        return True, ""
+        return (None, "zzgl. Befehlsprüfung") if info.custom_checks else (True, "")
 
     gates = []
     req = info.req_priv
@@ -257,4 +257,4 @@ def evaluate_member(info: CmdInfo, member, member_priv):
 
     base = True if not gates else any(gates)
     note = "zzgl. Befehlsprüfung" if (base and info.custom_checks) else ""
-    return base, note
+    return (None if base and info.custom_checks else base), note

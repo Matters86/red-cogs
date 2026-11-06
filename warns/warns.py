@@ -275,13 +275,13 @@ class Warns(commands.Cog):
         ``action`` (Label oder None), ``action_ok``, ``action_why``, ``dm_ok``.
         """
         gconf = self.config.guild(guild)
-        conf = await gconf.all()
-        lang = conf["language"]
-        points = int(points if points is not None else conf["default_points"])
-        points = max(1, min(MAX_POINTS, points))
         reason = str(reason or "").strip()[:MAX_REASON]
-        now = time.time()
         async with self.lock(guild.id):
+            # Vorschau und Warteschlange dürfen keine veralteten Schwellen/Standardwerte festhalten.
+            conf = await gconf.all()
+            lang = conf["language"]
+            points = max(1, min(MAX_POINTS, int(points if points is not None else conf["default_points"])))
+            now = time.time()
             wid = int(await gconf.next_id())
             await gconf.next_id.set(wid + 1)
             entry = {

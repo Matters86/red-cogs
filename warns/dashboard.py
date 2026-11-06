@@ -14,6 +14,7 @@ dem Moderator) – das Recht dazu kommt aus WebCore: ``warn``/``revoke`` sind Ta
 from __future__ import annotations
 
 import html
+from aiohttp import web
 import re
 import time
 from datetime import datetime
@@ -106,6 +107,22 @@ async def find_member(guild, query: str):
 async def dashboard_handler(cog, request):
     if request.method == "POST":
         return await _handle_post(cog, request)
+    if request.query.get("preview") == "warn":
+        from .warns import action_label
+        guild = _pick(await _visible(request), request.query.get("guild"))
+        if guild is None:
+            return web.json_response({"text": "Server nicht verfügbar."}, status=403)
+        target, error = await find_member(guild, request.query.get("member") or "")
+        points = _int(request.query.get("points"), 1, 100)
+        if target is None or points is None:
+            return web.json_response({"text": error or "Punkte: 1 bis 100."})
+        conf = await cog.config.guild(guild).all()
+        before = await cog.active_points(guild, target.id)
+        after = before + points
+        action = cog.crossed_action(conf, before, after)
+        label = action_label(action, conf, conf["language"]) if action else "keine automatische Maßnahme"
+        return web.json_response({"text": f"{target.display_name}: {before} → {after} aktive Punkte. "
+                                  f"Voraussichtlich: {label}. Rechte und Punktestand werden beim Ausführen erneut geprüft."})
     return await _render(cog, request)
 
 
@@ -237,8 +254,15 @@ def _warn_form(ui, guild, conf, csrf, readonly) -> str:
         ui.field("Punkte", ui.number("points", conf["default_points"], min=1, max=MAX_POINTS, unit="Pkt."),
                  help=f"Standard: {conf['default_points']}. Verfall: {expiry}."),
     ) + datalist + ui.actions(ui.button("Verwarnen", icon="bi-exclamation-octagon"))
-    form = ui.form(f"/cogs/{SLUG}", body, csrf=csrf, hidden={"form": "warn", "guild": guild.id},
+    body += "<div id='warn-impact' class='wc-callout' role='status'>Mitglied und Punkte wählen – hier erscheint die Auswirkung.</div>"
+    form = ui.form(f"/cogs/{SLUG}", body, csrf=csrf, hidden={"form": "warn", "guild": guild.id}, id="warn-create",
                    confirm="Mitglied jetzt verwarnen? DM, Log und ggf. automatische Maßnahmen werden ausgelöst.")
+    form += ("<script>(function(){var f=document.getElementById('warn-create'),o=document.getElementById('warn-impact'),timer,seq=0;"
+             "if(!f||!o)return;function load(){var n=++seq;var q=new URLSearchParams({guild:f.elements.guild.value,preview:'warn',"
+             "member:f.elements.member.value,points:f.elements.points.value});fetch('/cogs/warnings?'+q,{credentials:'same-origin'})"
+             ".then(function(r){return r.json();}).then(function(v){if(n===seq)o.textContent=v.text;})"
+             ".catch(function(){if(n===seq)o.textContent='Vorschau nicht verfügbar. Punktestand wird beim Ausführen geprüft.';});}"
+             "f.addEventListener('input',function(){clearTimeout(timer);timer=setTimeout(load,250);});})();</script>")
     return note + ui.card(
         "Mitglied verwarnen", form, icon="bi-person-exclamation",
         desc="Du bist der Moderator. Es gelten dieselben Regeln wie bei <code>[p]warn</code>: keine Bots, "

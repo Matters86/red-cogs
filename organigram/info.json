@@ -1,12 +1,21 @@
 {
     "name": "Organigram",
     "short": "Postet Server-Organigramme als Bild, Embed oder Text.",
-    "description": "Erstellt beliebig viele benannte Organigramme pro Server und postet sie nach Discord. Personen stammen hybrid aus Discord-Rollen und manuellen Einträgen. Ausgabe als Bild (fünf Muster: Baum, Abteilungen, Pyramide, Kompaktliste, Karten – mit Avataren und Rollenfarben), als strukturiertes Embed oder als Text-Baum – pro Post wählbar. Gepostete Beiträge aktualisieren sich automatisch bei Rollen- und Mitgliederänderungen. Vollständig über das WebCore-Dashboard konfigurierbar inkl. Live-Vorschau und PNG-Export.",
-    "tags": ["organigram", "organigramm", "orgchart", "roles", "dashboard", "image"],
-    "requirements": ["Pillow"],
+    "description": "Organigramme aus Discord-Rollen und manuellen Namen mit Rollen-Schnellstart, Baumeditor, Live-Vorschau und acht Bildlayouts. Mitglieder mehrfach oder nur in höchster Position anzeigen. Optional vollständige Bildseiten mit Hierarchieübersicht, Abteilungs-/Personenseiten, einstellbarer Seitengröße und PNG-/ZIP-Export ohne Mitgliederkürzung. Alle veröffentlichten Seiten-IDs werden verfolgt; Wiederholen verwendet bestehende Nachrichten und entfernt alte Seiten erst nach erfolgreichem Ersatz. Veröffentlichungsstatus mit Discord-Links, Erfolgszeit und Fehlermeldung. Automatische Aktualisierung bei Rollen-/Namens-/Avataränderungen und Neustarts; unveränderte Seiten werden übersprungen. Alternativ Embed oder Text mit Discord-Limits.",
+    "tags": [
+        "organigram",
+        "organigramm",
+        "orgchart",
+        "roles",
+        "dashboard",
+        "image"
+    ],
+    "requirements": [
+        "Pillow"
+    ],
     "min_bot_version": "3.5.0",
     "hidden": false,
     "disabled": false,
     "type": "COG",
-    "end_user_data_statement": "Dieser Cog speichert keine personenbezogenen Profildaten von Endnutzern. Pro Server werden die vom Team angelegten Organigramme gespeichert: Bezeichnungen, verknüpfte Rollen-IDs, optionale manuell eingegebene Namen (Freitext durch das Team), Farben sowie Kanal- und Nachrichten-IDs der geposteten Beiträge. Mitgliedernamen und Avatare werden ausschließlich zur Anzeige live abgerufen und nicht dauerhaft gespeichert."
+    "end_user_data_statement": "Dieser Cog speichert keine personenbezogenen Profildaten von Endnutzern. Pro Server werden Organigramm-Definitionen gespeichert: Bezeichnungen, Rollen-IDs, optionale manuelle Namen, Farben, Mitgliederanzeige, Seitenmodus und Seitengröße sowie Kanal- und sämtliche Nachrichten-IDs veröffentlichter Seiten mit Inhaltsprüfsummen, Aktualisierungszeitpunkten und letzter Fehlermeldung. Mitgliedernamen und Avatare werden ausschließlich zur Anzeige live abgerufen und nicht dauerhaft gespeichert."
 }

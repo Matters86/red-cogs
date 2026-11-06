@@ -393,9 +393,17 @@ class ServerStats(commands.Cog):
         """Die letzten ``n`` Kalendertage in der Zeitzone des Servers (inkl. heute) – gespeicherte Werte
         + noch nicht geschriebener Puffer. Fehlende Tage werden mit 0 aufgefüllt; ``members`` wird
         vorwärts fortgeschrieben (``None`` vor dem ersten bekannten Wert), heute = aktuelle Mitgliederzahl."""
+        today = local_date(self._clock(), await self.guild_tz(guild))
+        return await self.get_period(guild, today - timedelta(days=n - 1), today)
+
+    async def get_period(self, guild, start: date, end: date) -> list[tuple[str, dict]]:
+        """Inklusiver Datumsbereich; dieselbe Puffer-/Mitgliederlogik wie die Schnellbereiche."""
+        n = (end - start).days + 1
+        if not 1 <= n <= MAX_RETENTION:
+            raise ValueError("Der Zeitraum muss zwischen 1 und 730 Tagen liegen.")
         stored = await self.config.guild(guild).days()
         today = local_date(self._clock(), await self.guild_tz(guild))
-        keys = [(today - timedelta(days=n - 1 - i)).isoformat() for i in range(n)]
+        keys = [(start + timedelta(days=i)).isoformat() for i in range(n)]
         out = []
         last_members = None
         for d in sorted(stored):
@@ -411,8 +419,8 @@ class ServerStats(commands.Cog):
             rec["members"] = last_members
             out.append((d, rec))
         count = getattr(guild, "member_count", None)
-        if count is not None and out:
-            out[-1][1]["members"] = int(count)
+        if count is not None and start <= today <= end:
+            out[(today - start).days][1]["members"] = int(count)
         return out
 
     @staticmethod

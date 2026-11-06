@@ -220,6 +220,12 @@ def _render_lockdown(ui, guild, conf, csrf) -> str:
     if active:
         text = ui.callout(f"<b>Der Notmodus ist aktiv</b> – {_esc(_lockdown_text(conf))}", tone="bad", icon="bi-lock-fill")
         btn = ui.button("Notmodus beenden", icon="bi-unlock", name="state", value="off")
+        if conf.get("lockdown_recovering"):
+            pending = len(conf.get("lockdown_prev") or {})
+            text = ui.callout(f"<b>Teilweise beendet</b>: {pending} Kanal/Kanäle und "
+                              f"{'die Einladungspause' if conf.get('lockdown_invites_paused') else 'keine Einladungspause'} "
+                              "warten auf Wiederherstellung. Prüfe meine Rechte; ich versuche es automatisch erneut.", tone="warn")
+            btn = ui.button("Wiederherstellung erneut versuchen", icon="bi-arrow-repeat", name="state", value="off")
     else:
         text = ("<p class='wc-help'>Setzt Slowmode in allen Textkanälen, pausiert (falls möglich) Einladungen "
                 "und behandelt neue Beitritte gemäß Reiter „Raid &amp; Notmodus“.</p>")
@@ -466,6 +472,8 @@ async def _handle_post(cog, request):
             raise web.HTTPFound(f"/cogs/guard?guild={guild.id}&ok=" + quote("Notmodus aktiviert"))
         if state == "off":
             await cog._end_lockdown(guild)
+            if await gconf.lockdown_recovering():
+                raise web.HTTPFound(f"/cogs/guard?guild={guild.id}&err=" + quote("Teilweise beendet – Wiederherstellung ausstehend; bitte Bot-Rechte prüfen"))
             raise web.HTTPFound(f"/cogs/guard?guild={guild.id}&ok=" + quote("Notmodus beendet"))
         raise web.HTTPFound(f"/cogs/guard?guild={guild.id}")
 

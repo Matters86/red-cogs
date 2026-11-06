@@ -16,13 +16,16 @@ WebCore-Stufe „Bedienen“; alle anderen Formulare (Einstellungen, Panels, Tea
 from __future__ import annotations
 
 import html
+import secrets
+import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import quote_plus
 
 from aiohttp import web
 
-from .strings import LANGUAGES, OVERRIDABLE_KEYS, STRINGS
+from .strings import LANGUAGES, OVERRIDABLE_KEYS, STRINGS, t
+from .support import MAX_REPLY, support_due
 
 
 def _esc(value) -> str:
@@ -86,6 +89,7 @@ def _role_items(guild):
 #  Rendern (GET)
 # --------------------------------------------------------------------------- #
 async def _render(cog, request):
+    webcore = request.app["webcore"]
     ui = request.app["webcore"].ui
     guilds = await _visible_guilds(cog, request)
     guild = _selected_guild(guilds, request)
@@ -129,10 +133,15 @@ async def _render(cog, request):
         ("Panels", len(panels), "bi-window-stack", None, None),
     ])
 
+    getter = getattr(webcore, "current_user", None) or webcore._get_user
+    viewer = await getter(request) or {}
+    reply_preview = await _reply_preview_card(cog, request, ui, guild, int(viewer.get("id") or 0), csrf)
     body = (
-        ui.tab("uebersicht", "Übersicht", "bi-speedometer2", await _render_overview(ui, cog, guild, conf, csrf))
+        ui.tab("uebersicht", "Übersicht", "bi-speedometer2", reply_preview + await _render_overview(
+            ui, cog, guild, conf, csrf, viewer_id=int(viewer.get("id") or 0), view=request.query.get("view", "all")))
         + ui.tab("panels", "Panels", "bi-window-stack", _render_panels(ui, guild, conf, text_items, csrf), count=len(panels))
         + _render_settings(ui, guild, conf, role_items, text_items, cat_items, forum_items, csrf)
+        + ui.tab("schnellantworten", "Schnellantworten", "bi-chat-left-text", _reply_settings(ui, guild, conf, csrf))
         + ui.tab("transcripts", "Transcripts", "bi-journal-text", _render_transcripts(ui, guild, conf), count=len(transcripts))
     )
     return {"title": "Tickets", "content": head + body}
@@ -157,7 +166,7 @@ def _setup_checks(guild, conf) -> list[tuple[str, str]]:
     return out
 
 
-async def _render_overview(ui, cog, guild, conf, csrf) -> str:
+async def _render_overview(ui, cog, guild, conf, csrf, *, viewer_id=0, view="all") -> str:
     checks = _setup_checks(guild, conf)
     if checks:
         check_html = "".join(ui.callout(text, tone=tone) for tone, text in checks)
@@ -186,7 +195,11 @@ async def _render_overview(ui, cog, guild, conf, csrf) -> str:
                             _esc(tr.get("closed") or "—"), ">" + btn))
     recent_card = ui.card("Zuletzt geschlossen", ui.table(["#", "Inhaber", "Geschlossen", ">"], rrows,
                           empty_text="Noch keine geschlossenen Tickets."), icon="bi-clock-history")
-    return setup + _render_open_tickets(ui, guild, conf, csrf) + ui.columns(claim_card, recent_card)
+    filters = ui.form("/cogs/tickets", ui.field("Tickets anzeigen", ui.select("view", [
+        ("all", "Alle offenen Tickets"), ("mine", "Meine Tickets"), ("unassigned", "Nicht zugewiesen"),
+        ("user", "Wartet auf Nutzer"), ("team", "Wartet auf Team"),
+    ], view, autosubmit=True)), method="get", csrf="", hidden={"guild": guild.id})
+    return setup + filters + _render_open_tickets(ui, cog, guild, conf, csrf, viewer_id=viewer_id, view=view) + ui.columns(claim_card, recent_card)
 
 
 def _fmt_iso(value) -> str:
@@ -197,10 +210,16 @@ def _fmt_iso(value) -> str:
         return "—"
 
 
-def _render_open_tickets(ui, guild, conf, csrf) -> str:
+def _render_open_tickets(ui, cog, guild, conf, csrf, *, viewer_id=0, view="all") -> str:
     """Offene Tickets mit Schließen und Timer-Steuerung (Tagesgeschäft)."""
     open_items = sorted(((cid, r) for cid, r in (conf.get("tickets") or {}).items() if r.get("status") == "open"),
                         key=lambda kv: kv[1].get("num") or 0)
+    if view == "mine":
+        open_items = [(cid, r) for cid, r in open_items if r.get("claimed_by") == viewer_id]
+    elif view == "unassigned":
+        open_items = [(cid, r) for cid, r in open_items if not r.get("claimed_by")]
+    elif view in ("user", "team"):
+        open_items = [(cid, r) for cid, r in open_items if r.get("waiting_for", "team") == view]
     rows = []
     for cid, rec in open_items[:100]:
         num = rec.get("num")
@@ -225,7 +244,42 @@ def _render_open_tickets(ui, guild, conf, csrf) -> str:
         timer_status = (f"<span class='mono'>{_esc(_fmt_iso(rec['auto_close_at']))}</span>"
                         if timer_active else ui.badge("Aus", "muted"))
         timer_action = ""
+        assignment = ""
+        priority = ui.badge("Dringend", "bad") if rec.get("priority") == "urgent" else ui.badge("Normal")
+        due = support_due(rec, conf)
+        due_status = (ui.badge("Antwort fällig", "bad") if due is not None and due <= datetime.now(timezone.utc) else
+                      ("Antwort bis " + _esc(due.strftime("%d.%m. %H:%M UTC")) if due is not None else
+                       (("Antwort erledigt" if not rec.get("response_cycle_open") else "Antwortzeit pausiert")
+                        if conf.get("response_targets_enabled") and rec.get("waiting_for") == "user" else "")))
+        if conf.get("response_targets_enabled") and rec.get("support_history_unconfirmed"):
+            due_status = ui.badge("Verlauf noch nicht bestätigt", "warn")
+        elif conf.get("response_targets_enabled") and rec.get("waiting_for", "team") == "team" and not rec.get("response_cycle_open"):
+            due_status = "Antwortzeit startet mit dem nächsten bestätigten Anliegen"
+        waiting = ui.badge("Wartet auf Nutzer" if rec.get("waiting_for") == "user" else "Wartet auf Team", "info")
+        reply = ""
         if ch is not None:
+            priority += ui.form("/cogs/tickets", ui.select("priority", [("normal", "Normal"), ("urgent", "Dringend")], rec.get("priority", "normal"))
+                + ui.button("Priorität setzen", small=True), csrf=csrf, hidden={"form": "ticket_priority", "guild": guild.id, "channel_id": cid}, operate=True)
+            if conf.get("quick_replies"):
+                reply = ui.form("/cogs/tickets", ui.select("reply_id", [(item["id"], item["label"]) for item in conf["quick_replies"]])
+                    + ui.button("Entwurf öffnen", icon="bi-chat-left-text", small=True), csrf=csrf,
+                    hidden={"form": "ticket_reply_preview", "guild": guild.id, "channel_id": cid}, operate=True)
+            waiting += ui.form("/cogs/tickets", ui.select("waiting", [("team", "Team"), ("user", "Nutzer")],
+                                                        rec.get("waiting_for", "team"))
+                               + ui.button("Wartestatus setzen", small=True), csrf=csrf,
+                               hidden={"form": "ticket_waiting", "guild": guild.id, "channel_id": cid}, operate=True)
+            eligible = sorted(
+                (member for member in guild.members if cog._can_assign_to(guild, ch, rec, conf, member)),
+                key=lambda member: (member.display_name.casefold(), member.id),
+            )
+            items = [(member.id, f"{member.display_name} (@{member.name})") for member in eligible]
+            assignment = ui.form(
+                "/cogs/tickets",
+                ui.select("member_id", items, rec.get("claimed_by"), none_label="Nicht zugewiesen")
+                + ui.button("Zuweisen", icon="bi-person-check", small=True),
+                csrf=csrf, hidden={"form": "ticket_assign", "guild": guild.id, "channel_id": cid},
+                operate=True,
+            )
             timer_action = ui.form(
                 "/cogs/tickets",
                 ui.button("Offen halten" if timer_active else "24h-Timer starten",
@@ -240,16 +294,17 @@ def _render_open_tickets(ui, guild, conf, csrf) -> str:
             f"<div class='wc-cell-title'>{_esc(owner_name)}</div><div class='wc-cell-sub'>{_esc(where)}</div>",
             _esc(rec.get("reason_label") or "—"),
             f"<span class='mono'>{_esc(_fmt_iso(rec.get('created_at')))}</span>",
-            claimed,
+            claimed + assignment,
+            waiting + f"<div class='wc-cell-sub'>{due_status}</div>" + priority,
             timer_status,
-            f"><div class='wc-row-actions'>{timer_action}{close}</div>",
+            f"><div class='wc-row-actions'>{reply}{timer_action}{close}</div>",
         ))
     more = ""
     if len(open_items) > 100:
         more = ui.callout(f"Es werden 100 von {len(open_items)} offenen Tickets gezeigt.", tone="info")
     return ui.card(
         "Offene Tickets",
-        ui.table(["#", "Inhaber", "Grund", "Geöffnet (UTC)", "Übernommen", "Auto-Close (UTC)", ">"], rows,
+        ui.table(["#", "Inhaber", "Grund", "Geöffnet (UTC)", "Zuständig", "Wartet auf", "Auto-Close (UTC)", ">"], rows,
                  empty_text="Keine offenen Tickets.", search=len(rows) > 8,
                  search_placeholder="Nummer, Inhaber, Grund …", id="tk-open") + more,
         icon="bi-envelope-open",
@@ -399,13 +454,67 @@ def _render_settings(ui, guild, conf, role_items, text_items, cat_items, forum_i
                     desc="Leer lassen = Standardtext der gewählten Sprache (als grauer Platzhalter sichtbar).")
 
     save = ui.save_row("Einstellungen speichern")
+    advanced = ui.disclosure("Erweitert: Priorität und Antwortzeiten", ui.switches(ui.switch(
+        "response_targets_enabled", "Antwortzeiten anzeigen", conf.get("response_targets_enabled", False),
+        desc="Standard aus. Zählt nur, während das Team antworten muss; Nutzer-Wartezeit pausiert dieselbe Uhr."))
+        + ui.grid(ui.field("Normal", ui.number("response_target_hours", conf.get("response_target_hours", 24), min=1, max=720, unit="Stunden")),
+                  ui.field("Dringend", ui.number("response_urgent_hours", conf.get("response_urgent_hours", 4), min=1, max=720, unit="Stunden"))),
+        expanded=conf.get("response_targets_enabled", False))
     # Ein Formular über zwei Reiter (Einstellungen + Texte) – beide speichern alles.
     return ui.form(
         "/cogs/tickets",
-        ui.tab("einstellungen", "Einstellungen", "bi-sliders", general + team + place + behaviour + portal + save)
+        ui.tab("einstellungen", "Einstellungen", "bi-sliders", general + team + place + behaviour + portal + advanced + save)
         + ui.tab("texte", "Texte", "bi-chat-left-text", texts + save),
         csrf=csrf, hidden={"form": "settings", "guild": guild.id}, savebar=True,
     )
+
+
+def _reply_settings(ui, guild, conf, csrf):
+    cards = []
+    for item in conf.get("quick_replies", []):
+        save = ui.form("/cogs/tickets", ui.field("Name", ui.text_input("label", item["label"], attrs={"maxlength": 80, "required": True}))
+            + ui.field("Text", ui.textarea("text", item["text"], rows=4), help="{user}, {ticket}, {staff}, {signature}; unbekannte Platzhalter bleiben wörtlich.")
+            + ui.button("Vorlage speichern"), csrf=csrf,
+            hidden={"form": "quick_reply_save", "guild": guild.id, "reply_id": item["id"]})
+        delete = ui.form("/cogs/tickets", ui.button("Entfernen", kind="danger", small=True), csrf=csrf,
+            hidden={"form": "quick_reply_delete", "guild": guild.id, "reply_id": item["id"]}, confirm="Diese Schnellantwort entfernen?")
+        cards.append(ui.card(item["label"], save, actions=delete))
+    create = ui.form("/cogs/tickets", ui.field("Name", ui.text_input("label", attrs={"maxlength": 80, "required": True}))
+        + ui.field("Text", ui.textarea("text", rows=4)) + ui.button("Schnellantwort hinzufügen"), csrf=csrf,
+        hidden={"form": "quick_reply_save", "guild": guild.id})
+    signature = ui.form("/cogs/tickets", ui.field("Signatur", ui.textarea("signature", conf.get("quick_reply_signature", ""), rows=2),
+        help="Optional, höchstens 200 Zeichen. Nur über {signature} eingefügt; keine automatischen Erwähnungen.")
+        + ui.button("Signatur speichern"), csrf=csrf, hidden={"form": "quick_reply_signature", "guild": guild.id})
+    return ui.callout("Vorlagen bearbeiten braucht Bearbeiten. Teammitglieder wählen einen Entwurf, bearbeiten ihn und senden erst nach ausdrücklicher Bestätigung. Kein automatisches Posten.") + ui.disclosure(
+        "Erweitert: Vorlagen und Signatur verwalten", "".join(cards) + ui.card("Neue Vorlage (max. 25)", create) + ui.card("Signatur", signature))
+
+
+def _reply_draft(cog, request, guild, cid, uid):
+    drafts = cog.__dict__.setdefault("_quick_reply_drafts", {})
+    now = time.monotonic()
+    for key, draft in list(drafts.items()):
+        if draft["expires"] < now:
+            drafts.pop(key, None)
+    return drafts, (request.get("webcore_csrf", ""), guild.id, str(cid), uid)
+
+
+async def _reply_preview_card(cog, request, ui, guild, uid, csrf):
+    cid = str(request.query.get("reply") or "")
+    drafts, key = _reply_draft(cog, request, guild, cid, uid)
+    draft = drafts.get(key)
+    if not draft:
+        return ""
+    channel = _ticket_channel(guild, cid)
+    actor = guild.get_member(uid) or _DashboardCloser(uid, "Dashboard")
+    error = await cog._reply_access(guild, channel, actor) if channel is not None else "Ticket nicht gefunden."
+    if error:
+        return ui.callout(_esc(error), tone="warn")
+    form = ui.form("/cogs/tickets", ui.field("Antwort bearbeiten", ui.textarea("text", draft["text"], rows=5),
+            help="Noch nicht gesendet. Keine Erwähnung löst einen Ping aus; höchstens 2000 Zeichen.")
+        + ui.button("Antwort jetzt senden", icon="bi-send"), csrf=csrf, operate=True,
+        hidden={"form": "ticket_reply_send", "guild": guild.id, "channel_id": cid, "token": draft["token"]},
+        confirm="Diese Antwort jetzt im Ticket veröffentlichen?")
+    return ui.card("Schnellantwort – Vorschau, noch nicht gesendet", form, icon="bi-eye")
 
 
 def _reasons_to_text(reasons) -> str:
@@ -555,12 +664,99 @@ async def _handle_post(cog, request):
     if form == "ticket_close":
         return await _close_from_dashboard(cog, request, guild, data.get("channel_id"))
 
+    if form == "ticket_assign":
+        return await _assign_from_dashboard(cog, request, guild, data.get("channel_id"), data.get("member_id"))
+
+    if form == "ticket_waiting":
+        back = f"/cogs/tickets?guild={guild.id}"
+        channel = _ticket_channel(guild, data.get("channel_id"))
+        if channel is None:
+            raise web.HTTPFound(back + "&err=Ticket+nicht+gefunden")
+        error = await cog._set_waiting(guild, channel, data.get("waiting"), None, check_actor=False)
+        raise web.HTTPFound(back + ("&err=" + quote_plus(error) if error else "&ok=Wartestatus+aktualisiert"))
+
+    if form in {"ticket_priority", "ticket_reply_preview", "ticket_reply_send"}:
+        back = f"/cogs/tickets?guild={guild.id}"
+        cid = str(data.get("channel_id") or "")
+        channel = _ticket_channel(guild, cid)
+        if channel is None:
+            raise web.HTTPFound(back + "&err=Ticket+nicht+gefunden")
+        getter = getattr(request.app["webcore"], "current_user", None) or request.app["webcore"]._get_user
+        user = await getter(request) or {}
+        uid = int(user.get("id") or 0)
+        actor = guild.get_member(uid) or _DashboardCloser(uid, user.get("name") or "Dashboard")
+        if form == "ticket_priority":
+            error = await cog._set_priority(guild, channel, data.get("priority"), actor)
+            raise web.HTTPFound(back + ("&err=" + quote_plus(error) if error else "&ok=Priorität+aktualisiert"))
+        drafts, key = _reply_draft(cog, request, guild, cid, uid)
+        if form == "ticket_reply_preview":
+            error, text = await cog._prepare_reply(guild, channel, actor, data.get("reply_id"))
+            if error:
+                raise web.HTTPFound(back + "&err=" + quote_plus(error))
+            while len(drafts) >= 200:
+                drafts.pop(next(iter(drafts)))
+            record = await cog._get_record(guild, channel.id)
+            drafts[key] = {"token": secrets.token_urlsafe(24), "expires": time.monotonic() + 600,
+                           "text": text, "owner_id": (record or {}).get("owner_id")}
+            raise web.HTTPFound(back + "&reply=" + cid + "#uebersicht")
+        draft = drafts.get(key)
+        if not draft or not secrets.compare_digest(str(data.get("token") or ""), draft["token"]):
+            raise web.HTTPFound(back + "&err=Vorschau+abgelaufen+oder+bereits+gesendet")
+        drafts.pop(key, None)
+        edited = str(data.get("text") or "").strip()
+        if 0 < len(edited) <= MAX_REPLY:
+            draft["text"] = edited
+        error = await cog._send_support_reply(guild, channel, actor, data.get("text"))
+        if error:
+            drafts.setdefault(key, draft)
+            raise web.HTTPFound(back + "&reply=" + cid + "&err=" + quote_plus(error))
+        raise web.HTTPFound(back + "&ok=Antwort+gesendet")
+
+    if form in {"quick_reply_save", "quick_reply_delete", "quick_reply_signature"}:
+        back = f"/cogs/tickets?guild={guild.id}"
+        if form == "quick_reply_signature":
+            signature = str(data.get("signature") or "").strip()
+            if len(signature) > 200 or "\x00" in signature:
+                raise web.HTTPFound(back + "&err=Signatur+höchstens+200+Zeichen")
+            await gconf.quick_reply_signature.set(signature)
+        else:
+            reply_id = str(data.get("reply_id") or "")
+            if form == "quick_reply_save":
+                label, text = str(data.get("label") or "").strip(), str(data.get("text") or "").strip()
+                if not 1 <= len(label) <= 80 or not 1 <= len(text) <= MAX_REPLY or "\x00" in text or "\x00" in label:
+                    raise web.HTTPFound(back + "&err=Name+1–80+und+Text+1–2000+Zeichen+angeben")
+            async with gconf.quick_replies() as replies:
+                if form == "quick_reply_delete":
+                    replies[:] = [item for item in replies if item["id"] != reply_id]
+                else:
+                    entry = next((item for item in replies if item["id"] == reply_id), None)
+                    if entry is None:
+                        if len(replies) >= 25:
+                            raise web.HTTPFound(back + "&err=Höchstens+25+Schnellantworten")
+                        entry = {"id": uuid.uuid4().hex[:8]}
+                        replies.append(entry)
+                    entry.update(label=label, text=text)
+        raise web.HTTPFound(back + "&ok=Schnellantworten+gespeichert#schnellantworten")
+
     if form in {"ticket_autoclose", "ticket_keepopen"}:
         return await _autoclose_from_dashboard(
             cog, request, guild, data.get("channel_id"), enabled=form == "ticket_autoclose"
         )
 
     if form == "settings":
+        try:
+            normal = int(data.get("response_target_hours", 24))
+            urgent = int(data.get("response_urgent_hours", 4))
+            if not 1 <= normal <= 720 or not 1 <= urgent <= 720 or urgent > normal:
+                raise ValueError()
+        except (TypeError, ValueError):
+            raise web.HTTPFound(f"/cogs/tickets?guild={guild.id}&err=" + quote_plus("Antwortzeiten: 1–720 Stunden; Dringend darf nicht länger als Normal sein"))
+        was_enabled = await gconf.response_targets_enabled()
+        await gconf.response_target_hours.set(normal)
+        await gconf.response_urgent_hours.set(urgent)
+        await gconf.response_targets_enabled.set("response_targets_enabled" in data)
+        if not was_enabled and "response_targets_enabled" in data:
+            await cog._mark_support_history_pending()
         lang = data.get("language") or "de"
         await gconf.language.set(lang if lang in LANGUAGES else "de")
         ttype = data.get("ticket_type") or "category"
@@ -736,6 +932,30 @@ async def _close_from_dashboard(cog, request, guild, raw_cid):
     if not closed:
         raise web.HTTPFound(back + "&err=" + quote_plus(f"Ticket #{num} ist bereits geschlossen"))
     raise web.HTTPFound(back + "&ok=" + quote_plus(f"Ticket #{num} geschlossen"))
+
+
+async def _assign_from_dashboard(cog, request, guild, raw_cid, raw_member_id):
+    """WebCore prüft Bedienen und Serverzugriff; das Ziel prüft die gemeinsame Ticketlogik."""
+    back = f"/cogs/tickets?guild={guild.id}"
+    cid, member_id = str(raw_cid or "").strip(), str(raw_member_id or "").strip()
+    conf = await cog.config.guild(guild).all()
+    lang = conf["language"]
+    if not cid.isdigit() or (member_id and not member_id.isdigit()):
+        raise web.HTTPFound(back + "&err=" + quote_plus(t(lang, "assignment_invalid")))
+    channel = _ticket_channel(guild, cid)
+    if channel is None or cid not in conf["tickets"]:
+        raise web.HTTPFound(back + "&err=" + quote_plus(t(lang, "not_a_ticket")))
+    member = guild.get_member(int(member_id)) if member_id else None
+    if member_id and member is None:
+        raise web.HTTPFound(back + "&err=" + quote_plus(t(lang, "assignment_invalid")))
+    webcore = request.app["webcore"]
+    getter = getattr(webcore, "current_user", None) or webcore._get_user
+    user = await getter(request) or {}
+    uid = int(user.get("id") or 0)
+    actor = guild.get_member(uid) or _DashboardCloser(uid, user.get("name") or "Dashboard")
+    error = await cog._assign_ticket(guild, channel, member, actor, check_actor=False)
+    raise web.HTTPFound(back + ("&err=" + quote_plus(error) if error
+                               else "&ok=" + quote_plus(t(lang, "assignment_done"))))
 
 
 async def _autoclose_from_dashboard(cog, request, guild, raw_cid, *, enabled):

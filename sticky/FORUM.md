@@ -54,3 +54,7 @@ Name/Avatar sowie Sprache, Cooldown und „andere Bots ignorieren" – alles per
 - Nach einem Neustart wird die Sticky bei der nächsten Nachricht sauber neu verankert.
 - Slash-Befehle ggf. mit `[p]slash sync` aktivieren.
 - Voraussetzung für das Dashboard: `webcore` ist geladen und eingerichtet.
+
+## Zustellung prüfen und erneut versuchen
+
+Eine neue Sticky wird **zuerst erfolgreich gesendet**, anschließend wird die alte Nachricht entfernt. Scheitert das Senden, bleibt die alte Nachricht sichtbar. Die Übersicht unterscheidet gepostete Nachrichten und Zustellfehler. **Erneut posten** versucht die Zustellung direkt noch einmal (Dashboard-Recht Bedienen). Kann nur die alte Nachricht nicht entfernt werden, weist die Übersicht auf das mögliche Duplikat hin.

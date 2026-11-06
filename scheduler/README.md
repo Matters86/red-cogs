@@ -91,3 +91,7 @@ Die Stufen vergibt der Bot-Owner unter *Verwaltung → Zugriff & Rollen* (je Ser
 
 Pro Eintrag: Inhalt, Kanal, Zeitplan, Status und die Discord-ID der Person, die ihn angelegt/zuletzt bearbeitet
 hat. `red_delete_data_for_user` setzt diese IDs auf 0.
+
+## Passende Zeitplan-Felder
+
+Das Formular zeigt abhängig von der Zeitplan-Art nur das passende Datum, den Monatstag, die Wochentage oder Intervall und Einheit. Beim Wechsel bleiben eingegebene Werte im Browser erhalten; ausgeblendete Felder werden nicht als andere Zeitplan-Art interpretiert. Ohne JavaScript sind alle Felder weiterhin zugänglich.

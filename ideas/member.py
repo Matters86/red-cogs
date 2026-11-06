@@ -11,6 +11,8 @@ Keine Team-Interna: keine Einreicher-Namen fremder Ideen, kein Verlauf außer ei
 from __future__ import annotations
 
 import html
+import secrets
+import time
 from datetime import datetime, timezone
 from urllib.parse import quote
 
@@ -18,6 +20,18 @@ from .strings import OPEN_STATUSES, STATUS_EMOJI, status_label, t
 
 SLUG = "ideen"
 TONE = {"new": "info", "review": "warn", "planned": "info", "done": "ok", "rejected": "bad", "merged": "muted"}
+
+
+def _pending(cog, request, values=None):
+    store = cog.__dict__.setdefault("_submit_drafts", {})
+    key = (request["wc_member_guild"].id, request["wc_member"].id, request.get("webcore_csrf", ""))
+    now = time.monotonic()
+    for old in list(store):
+        if store[old]["expires"] < now:
+            store.pop(old, None)
+    if values is not None:
+        store[key] = {"expires": now + 1800, "values": values, "token": secrets.token_urlsafe(24), "similar": []}
+    return store, key, store.get(key)
 
 
 def _esc(value) -> str:
@@ -54,16 +68,32 @@ async def member_page_handler(cog, request):
         form = await request.post()
         if not data.get("member_page", True):
             return {"redirect": base + "&err=" + quote("Ideen sind im Mitglieder-Bereich ausgeschaltet")}
-        if form.get("form") != "submit":
+        if form.get("form") not in ("submit", "confirm_similar"):
             return {"redirect": base + "&err=" + quote("Unbekannte Aktion")}
         if forum is None:
             return {"redirect": base + "&err=" + quote(_plain(t(lang, "err_no_forum")))}
         if not visible:
             return {"redirect": base + "&err=" + quote(_plain(t(lang, "err_no_view")))}
-        res = await cog.submit(guild, member, title=form.get("title", ""), description=form.get("description", ""),
-                               category=form.get("category", ""), source="web")
+        confirm = form.get("form") == "confirm_similar"
+        if confirm:
+            store, key, pending = _pending(cog, request)
+            if not pending or not secrets.compare_digest(str(form.get("token") or ""), pending["token"]):
+                return {"redirect": base + "&err=" + quote(t(lang, "similar_expired"))}
+            values = pending["values"]
+            store.pop(key, None)  # Bestätigung genau einmal verbrauchen, bevor submit auf Discord wartet.
+        else:
+            values = {k: str(form.get(k) or "") for k in ("title", "description", "category")}
+            store, key, pending = _pending(cog, request, values)
+        res = await cog.submit(guild, member, **values, source="web", confirm_similar=confirm)
+        if confirm and not res.get("ok"):
+            store.setdefault(key, pending)
+        if res.get("key") == "similar_before_submit":
+            pending["similar"] = res["similar"]
+            return {"redirect": base + "&similar=1#einreichen"}
         text = _plain(cog.result_text(guild, lang, res, web=True))
         if res.get("ok"):
+            if store.get(key) is pending:
+                store.pop(key, None)
             return {"redirect": base + "&ok=" + quote(text) + "#meine"}
         return {"redirect": base + "&err=" + quote(text)}
 
@@ -95,16 +125,27 @@ async def _render_submit(cog, ui, request, guild, member, data, forum, visible):
     pre = await cog.precheck(guild, member)
     note = ui.callout(_esc(_plain(t(lang, pre["key"], **pre["kw"]))), tone="warn") if pre else ""
     cats = data.get("categories") or []
+    _store, _key, pending = _pending(cog, request)
+    values = pending["values"] if pending else {}
+    similar = ""
+    if pending and pending.get("similar"):
+        links = "".join(ui.button(f"#{idea['nr']} · {idea.get('title', '')[:70]}", kind="ghost",
+                                   href=cog.idea_link(guild, idea)) for idea in pending["similar"]
+                        if cog.idea_link(guild, idea))
+        confirm = ui.form(f"/me/{SLUG}?guild={guild.id}", ui.actions(ui.button(t(lang, "similar_continue"), icon="bi-send")),
+                          csrf=request["webcore_csrf"], hidden={"form": "confirm_similar", "token": pending["token"], "guild": guild.id})
+        similar = ui.card("Ähnliche Ideen", ui.callout(_esc(t(lang, "similar_before_submit")), tone="info") + links + confirm,
+                          icon="bi-search")
     fields = [
-        ui.field("Titel", ui.text_input("title", "", placeholder="Kurz und knackig, z. B. „Wöchentlicher Spieleabend“",
+        ui.field("Titel", ui.text_input("title", values.get("title", ""), placeholder="Kurz und knackig, z. B. „Wöchentlicher Spieleabend“",
                                         attrs={"maxlength": 100, "required": True}), help="Höchstens 100 Zeichen.",
                  wide=True),
-        ui.field("Beschreibung", ui.textarea("description", "", rows=6,
+        ui.field("Beschreibung", ui.textarea("description", values.get("description", ""), rows=6,
                                              placeholder="Was genau schlägst du vor und warum? (optional)"),
                  help="Höchstens 1000 Zeichen.", wide=True),
     ]
     if cats:
-        fields.append(ui.field("Kategorie", ui.select("category", [(c, c) for c in cats], None,
+        fields.append(ui.field("Kategorie", ui.select("category", [(c, c) for c in cats], values.get("category"),
                                                       none_label="Ohne Kategorie")))
     limits = []
     if data.get("max_open"):
@@ -115,7 +156,7 @@ async def _render_submit(cog, ui, request, guild, member, data, forum, visible):
     form = ui.form(f"/me/{SLUG}?guild={guild.id}", ui.grid(*fields)
                    + ui.actions(ui.button("Idee einreichen", icon="bi-send")),
                    csrf=request["webcore_csrf"], hidden={"form": "submit", "guild": guild.id})
-    return ui.card("Neue Idee", note + form, icon="bi-send", desc=desc)
+    return similar + ui.card("Neue Idee", note + form, icon="bi-send", desc=desc)
 
 
 def _link_btn(ui, link):

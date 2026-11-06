@@ -178,3 +178,7 @@ alle **geposteten** Rollen-Panels aus Kanälen, die sie in Discord sehen können
   Nachricht und postet das Panel im neuen Kanal.
 - Slash-Befehle ggf. mit `[p]slash sync` aktivieren.
 - Voraussetzung für das Dashboard: der Cog `webcore` ist geladen und eingerichtet.
+
+## Vorschau vor der Massenvergabe
+
+Vor **Jetzt anwenden** zeigt die Übersicht jedes betroffene Mitglied und seine noch fehlenden Rollen, die Gesamtzahl der Vergaben sowie übersprungene Bots, bereits vollständig versorgte Mitglieder und das Sicherheitslimit. Nicht vergebbare oder gelöschte Rollen werden gesondert genannt. Eine veraltete Dashboard-Vorschau muss neu bestätigt werden. Die Vorschau selbst vergibt keine Rollen; die Ausführung prüft fehlende Rollen erneut. Auch `[p]autorole applyall` zeigt zuerst eine Vorschau mit einem Bestätigungsknopf (nur die anfragende Person darf bestätigen). Die vollständige Mitgliederliste steht im Dashboard.

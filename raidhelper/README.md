@@ -263,3 +263,11 @@ Ein Spiel ist in `games.py` ein reiner Datenblock (Rollen, Klassen, Specs, Farbe
 Pro Event werden Anmeldungen (Discord-ID, Anzeigename, Klasse/Spec, Rolle, Status, Zeitpunkt) gespeichert, pro Nutzer die zuletzt gewählte Spec je Spiel/Klasse sowie eine Teilnahme-Statistik. Daten werden beim Löschen eines Events (auch durch das automatische Aufräumen), beim Entfernen des Cogs oder beim Verlassen des Servers entfernt.
 
 Die öffentliche API (falls eingeschaltet) gibt keine personenbezogenen Daten aus – nur Event-Daten und Belegungszahlen.
+
+## Teilnehmer im Dashboard verwalten
+
+Im Roster eines Events unter **Teilnehmer verwalten** ein Mitglied und eine Aktion wählen:
+**Eintragen / zurück ins Roster**, **Auf die Bank setzen** oder **Anmeldung entfernen**. Beim Eintragen
+Klasse und Spezialisierung auswählen. Diese Team-Aktion darf Anmeldelimits bewusst übergehen; sie verwendet
+dieselbe Teilnehmerlogik wie die Discord-Befehle. WebCore-Recht **Bedienen** genügt; Ansehen verändert nichts.
+Die Discord-Anzeige wird mit dem aktuellen Stand aktualisiert, auch bei gleichzeitigen Änderungen.

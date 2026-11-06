@@ -38,6 +38,7 @@ Voraussetzung für die Verwaltung im Browser ist ein geladenes **WebCore** (sieh
 | `[p]ticket keepopen` | Stoppt den Timer; das Ticket bleibt offen. | Ersteller / Support |
 | `[p]ticket open` | Öffnet ein archiviertes Ticket wieder. | Support |
 | `[p]ticket claim` | Übernimmt das aktuelle Ticket. | Support |
+| `[p]ticket assign <mitglied>` | Weist das Ticket einem Teammitglied zu oder übergibt es. | Support |
 | `[p]ticket unclaim` | Gibt das Ticket wieder frei. | Support |
 | `[p]ticket add <mitglied>` | Fügt ein Mitglied hinzu. | Support |
 | `[p]ticket remove <mitglied>` | Entfernt ein Mitglied. | Support |
@@ -60,6 +61,20 @@ Voraussetzung für die Verwaltung im Browser ist ein geladenes **WebCore** (sieh
 | `[p]ticketset panel <kanal> [titel]` | Schnell ein einfaches Panel posten. | Admin / Manage Server |
 | `[p]ticketset settings` | Aktuelle Einstellungen anzeigen. | Admin / Manage Server |
 | `[p]ticketset dashboard` | Hinweis auf das Dashboard. | Admin / Manage Server |
+
+## Zuständigkeit und Übergabe
+
+**Übernehmen** weist das Ticket dir selbst zu. Über **Zuweisen** suchst du ein anderes
+Teammitglied direkt in Discord; `[p]ticket assign @Mitglied` erledigt dasselbe per Text- oder
+Slash-Befehl. Eine bestehende Zuständigkeit wird dabei ersetzt. **Freigeben** bzw.
+`[p]ticket unclaim` entfernt sie wieder. Im Dashboard wählst du das Mitglied in der Spalte
+**Zuständig** aus; „Nicht zugewiesen“ gibt das Ticket frei.
+
+Zuweisen dürfen Support und Admins. Das Ziel muss zum Support gehören und im Ticket lesen
+und schreiben dürfen; Bots und der Ticket-Ersteller sind ausgeschlossen. Bei privaten Threads
+wird das zuständige Mitglied hinzugefügt. Die Zuständigkeit steht im Ticket-Fußtext und im
+Dashboard; das Teammitglied erhält bei einer neuen Zuweisung einen Ping. Änderungen werden
+protokolliert. Wiederholtes Zuweisen derselben Person erhöht die Übernahme-Statistik nicht.
 
 ## Schließen nach Inaktivität
 
@@ -95,8 +110,9 @@ Ist `webcore` geladen, erscheint der Tab **Tickets**. Dort lassen sich pro Serve
   plus die Admin-Rollen; das Team darf sie auch übernehmen, sperren und schließen. Leer = globale
   Einstellungen. Tickets mit Grund heißen automatisch `<grund>-<nummer>` (Umlaute werden zu
   ae/oe/ue/ss).
-- **Offene Tickets** (Übersicht) – Nummer, Inhaber, Grund, Öffnungszeit, Übernahme und aktuelle
-  Auto-Close-Frist (UTC). **24h-Timer starten** und **Offen halten** steuern den Timer;
+- **Offene Tickets** (Übersicht) – Nummer, Inhaber, Grund, Öffnungszeit, Zuständigkeit und aktuelle
+  Auto-Close-Frist (UTC). Die Mitgliederauswahl mit **Zuweisen** ändert die Zuständigkeit;
+  **24h-Timer starten** und **Offen halten** steuern den Timer;
   **Schließen** mit
   Bestätigung wirkt wie der Button im Ticket (Transcript, Log, Inhaber-Rolle entfernen, archivieren bzw.
   löschen). Existiert der Kanal nicht mehr, entfernt „Schließen“ nur den verwaisten Eintrag.
@@ -108,7 +124,7 @@ Ist `webcore` geladen, erscheint der Tab **Tickets**. Dort lassen sich pro Serve
 | WebCore-Stufe | Darf |
 |---|---|
 | Ansehen | alles ansehen, Transcripts öffnen |
-| **Bedienen** | zusätzlich **einzelne Tickets schließen und deren Timer starten/stoppen** (Tagesgeschäft) |
+| **Bedienen** | zusätzlich **Tickets zuweisen/freigeben/schließen und deren Timer starten/stoppen** (Tagesgeschäft) |
 | Bearbeiten | zusätzlich Einstellungen, Rollen (Support/Admin/Inhaber …), Texte, Panels anlegen/bearbeiten/löschen und die Team-Zuordnung je Grund |
 
 Panels und Team-Zuordnung gelten als Einrichtung des Ticketsystems (Rollen, Fragen, Eingangskanäle) und
@@ -170,3 +186,31 @@ Hinweis: Transcripts aus Versionen vor dieser Änderung enthalten keine Nutzer-I
 werden nur Erwähnungen ersetzt (Anzeigenamen sind nicht eindeutig). Transcripts, deren Ersteller der Nutzer
 ist, werden auch dort über die Metadaten gefunden und gelöscht. Nachrichten im Log-Kanal (Discord selbst)
 sind nicht Teil der Cog-Daten.
+
+## Wartestatus, eigene Tickets und Erinnerungen
+
+Tickets zeigen **Wartet auf Nutzer** oder **Wartet auf Team**. Eine neue menschliche Nachricht setzt den Status passend: Team-Antwort → Nutzer, Nutzer-Antwort → Team. Das Team kann ihn auch per Button, Dashboard oder `[p]ticket waiting <user|team>` setzen.
+
+Die Übersicht filtert **Meine Tickets**, **Nicht zugewiesen** und beide Wartestatus. „Meine Tickets“ meint die dir zugewiesenen Tickets. Bei aktivem 24h-Timer erinnert der Bot ungefähr eine Stunde vor Ablauf einmal pro Frist an die Schließung. Der Hinweis bietet **Offen halten** und **Schließen**; eine neue Nachricht startet die 24 Stunden erneut. Vor Erinnern und Schließen werden auch Offline-Antworten geprüft.
+
+## Schnellantworten und Priorität
+
+Das Team öffnet **Schnellantwort**, wählt einen Textbaustein und bearbeitet ihn im Dialog. Danach erscheint eine Vorschau. Erst **Antwort jetzt senden** veröffentlicht den Text im Ticket. Auswahl, Bearbeiten und Vorschau senden nichts. Im Dashboard funktioniert derselbe Ablauf über **Entwurf öffnen** und die editierbare Vorschau; die Bestätigung gilt einmalig und läuft nach zehn Minuten ab. Fehlgeschlagene Sendungen erhalten die bearbeitete Vorschau.
+
+Unter **Schnellantworten → Erweitert** verwalten Administratoren mit WebCore-Recht **Bearbeiten** bis zu 25 Vorlagen und eine optionale Signatur (höchstens 200 Zeichen). Drei deutsche Beispiele sind vorbelegt. Platzhalter: `{user}` = Anzeigename des Inhabers, `{ticket}` = Ticketnummer, `{staff}` = Teammitglied, `{signature}` = gespeicherte Signatur. Nur diese Platzhalter werden einmal ersetzt; unbekannte bleiben wörtlich. Der vollständige Antworttext muss nach Ersetzung 1–2000 Zeichen enthalten. Vorlagenwahl veröffentlicht niemals automatisch und alle Erwähnungen sind beim Versand ohne Ping.
+
+Vorschau/Versand und Priorität brauchen im Dashboard **Bedienen** sowie die aktuellen Supportrechte des jeweiligen Tickets; Lesen und Schreiben im Kanal müssen weiterhin erlaubt sein. Der Bot prüft diese Rechte und den offenen Ticketstatus vor dem Senden erneut. Ein zwischenzeitlich geschlossenes Ticket erhält keine vorbereitete Antwort.
+
+**Normal** oder **Dringend** setzt das Team per Button, Dashboard oder `[p]ticket priority <normal|urgent>`. Prioritätswechsel verändern keine bereits gewartete Zeit.
+
+## Antwortzeiten (optional, Standard aus)
+
+Unter **Einstellungen → Erweitert: Priorität und Antwortzeiten** einschalten; Vorgaben sind 24 Stunden für Normal und 4 Stunden für Dringend (je 1–720 Stunden, Dringend höchstens so lang wie Normal). Dann zeigen Ticket-Steuerleiste und Übersicht **Antwort bis …** bzw. **Antwort fällig**.
+
+- Die Uhr zählt ausschließlich, während das Ticket auf das **Team** wartet. Weitere Nutzernachrichten verlängern eine laufende Frist nicht.
+- Manuelles Wechseln auf **Wartet auf Nutzer** pausiert den vorhandenen Zyklus. Beim Zurückschalten läuft nur die verbleibende Zeit weiter; wiederholtes Umschalten setzt die Frist nicht zurück.
+- Eine tatsächliche Teamantwort – auch eine bestätigte Schnellantwort – erledigt den bisherigen Antwortzyklus. Das nächste Nutzeranliegen startet einen neuen. Priorität verwendet jeweils dieselbe bereits angesammelte Teamwartezeit.
+- Zeiten und angesammelte Wartezeit bleiben bei Bot-Neustarts erhalten. Bei aktivierten Antwortzeiten gleicht der Bot seitdem verpasste menschliche Antworten aus dem Ticket-Verlauf ab. Fehlen Leserechte, wird keine ungesicherte Fälligkeit behauptet; die Übersicht meldet **Verlauf noch nicht bestätigt** und versucht es erneut.
+- Altbestand ohne bestätigten Antwortzyklus erhält keine aus dem Ticketalter geratene Frist. Ein bestätigtes Nutzeranliegen oder manuelles Setzen auf Team startet die Uhr. Wiederöffnen beginnt einen neuen Zyklus; geschlossen ist keine Antwort fällig.
+
+Antwortzeiten schließen kein Ticket und senden keine zusätzlichen Erinnerungs-Pings. Der vorhandene 24-Stunden-Inaktivitätstimer samt Erinnerung bleibt davon unabhängig.

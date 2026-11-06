@@ -44,3 +44,7 @@ Voraussetzung: der Cog `webcore` ist installiert und eingerichtet.
 
 Im Dashboard (Seite „Geplante Nachrichten“ unter `/cogs/scheduler`): Liste mit nächster Ausführung, Anlegen und
 Bearbeiten mit Vorschau, „Jetzt testen“, Pausieren, Löschen, Zeitzone.
+
+## Passende Zeitplan-Felder
+
+Das Formular zeigt abhängig von der Zeitplan-Art nur das passende Datum, den Monatstag, die Wochentage oder Intervall und Einheit. Beim Wechsel bleiben eingegebene Werte im Browser erhalten; ausgeblendete Felder werden nicht als andere Zeitplan-Art interpretiert. Ohne JavaScript sind alle Felder weiterhin zugänglich.

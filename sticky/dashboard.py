@@ -173,13 +173,19 @@ def _render_table(ui, guild, stickies, csrf) -> str:
             csrf=csrf, hidden={"form": "delete", **hidden},
             confirm=f"Die Sticky in {ch_name} wird gelöscht und ihre Nachricht entfernt.",
         )
+        retry = ui.form("/cogs/sticky", ui.button("Erneut posten", icon="bi-arrow-repeat", kind="ghost", small=True),
+                        csrf=csrf, hidden={"form": "refresh", **hidden}, operate=True) if enabled and ch else ""
+        delivery = (_esc(s["delivery_error"]) if s.get("delivery_error") else
+                    ("Gepostet" if s.get("message_id") else "Noch nicht gepostet"))
         tags = (ui.badge("Embed", "info") if s.get("mode") == "embed" else ui.badge("Text")) + (
             " " + ui.badge("Webhook") if s.get("webhook") else "")
         rows.append(ui.row(
             f"<div class='wc-cell-title'>{_esc(ch_name)} {tags}</div>"
             f"<div class='wc-cell-sub'>{_esc(preview) or '—'}</div>",
-            ui.badge("aktiv", "ok") if enabled else ui.badge("pausiert", "warn"),
-            f"><div class='wc-row-actions'>{edit}{toggle}{delete}</div>",
+            (ui.badge("Fehler beim Posten", "bad") if s.get("delivery_error") else
+             (ui.badge("aktiv", "ok") if enabled else ui.badge("pausiert", "warn")))
+            + f"<div class='wc-cell-sub'>{delivery}</div>",
+            f"><div class='wc-row-actions'>{edit}{toggle}{retry}{delete}</div>",
         ))
     if not rows:
         return ui.card(body=ui.empty(
@@ -280,6 +286,13 @@ async def _handle_post(cog, request):
         raise web.HTTPFound("/cogs/sticky?ok=Server+nicht+gefunden")
 
     gconf = cog.config.guild(guild)
+
+    if form == "refresh":
+        cid = data.get("channel") or ""
+        channel = guild.get_channel(int(cid)) if cid.isdigit() else None
+        if channel is None or not await cog.post_now(channel):
+            raise web.HTTPFound(f"/cogs/sticky?guild={guild.id}&err=" + quote_plus("Erneutes Posten fehlgeschlagen – Kanal und Bot-Rechte prüfen"))
+        raise web.HTTPFound(f"/cogs/sticky?guild={guild.id}&ok=" + quote_plus("Sticky erneut gepostet"))
 
     if form == "settings":
         lang = data.get("language") or "de"

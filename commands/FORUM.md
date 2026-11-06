@@ -40,3 +40,7 @@ sowie ein Markdown-Export.
 - Slash-Befehle ggf. mit `[p]slash sync` aktivieren.
 - Voraussetzung: `webcore` ist geladen und eingerichtet. Das Aus-/Einblenden braucht die
   aktuelle WebCore-Version (POST/CSRF); die Anzeige selbst funktioniert auch ohne.
+
+## Bedingte Freigaben
+
+Bei der Prüfung anderer Mitglieder bedeutet **Bedingt nutzbar**: Die allgemeinen Rechte passen, aber eigene Zusatzbedingungen des Befehls sind noch offen. Eine solche Prüfung erhält kein grünes „darf“. Beim tatsächlichen Ausführen gelten weiterhin alle Bedingungen. Die Eigenprüfung mit `[p]meinebefehle` nutzt Reds vollständige Prüfung. Der Markdown-Export kennzeichnet offene Zusatzprüfungen ebenfalls.

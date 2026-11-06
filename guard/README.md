@@ -105,3 +105,7 @@ Im WebCore-Dashboard unter **Guard** (`/cogs/guard`):
 - **`modlog`-Spiegelung ist standardmäßig an**, greift aber nur, wenn `modlog` auf dem Server eingerichtet ist; Fehler dort beeinträchtigen die Moderation nie. Im Dashboard abschaltbar.
 - Es werden **keine Nachrichteninhalte** dauerhaft gespeichert – nur Metadaten der Aktion (siehe `info.json`).
 - Datenschutz/Hosting: Das Dashboard nur hinter HTTPS-Reverse-Proxy betreiben; Zugriff haben ausschließlich Bot-Owner.
+
+## Wiederherstellung nach dem Notmodus
+
+Kann Discord einzelne Kanäle oder Einladungen noch nicht zurücksetzen, zeigt das Dashboard **Teilweise beendet** mit den ausstehenden Änderungen. Die alten Werte bleiben gespeichert; der Bot versucht die Wiederherstellung automatisch erneut. **Wiederherstellung erneut versuchen** löst den nächsten Versuch direkt aus. Fehlende Kanalrechte zuerst korrigieren. Während der Wiederherstellung werden neue Beitritte nicht weiter wegen des alten Notmodus bestraft. Bereits vor dem Notmodus pausierte Einladungen bleiben pausiert.

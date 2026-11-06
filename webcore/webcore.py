@@ -35,6 +35,7 @@ import discord
 from . import access as acl
 from . import backup as bk
 from . import errorlog
+from . import drafts as form_drafts
 from . import ui as _ui
 from .admin_pages import (
     render_access, render_audit, render_audit_channel, render_backup, render_backup_preview, render_errors,
@@ -60,7 +61,7 @@ DISCORD_TOKEN = f"{DISCORD_API}/oauth2/token"
 # das verschlüsselte Cookie unbegrenzt – ein einmal abgegriffenes Cookie für immer.
 SESSION_MAX_AGE = 7 * 86400
 # Cache-Buster für /static/webcore.css (bei Theme-Änderungen erhöhen).
-ASSET_VERSION = "10"
+ASSET_VERSION = "11"
 # Rollen mit diesen Rechten darf nur vergeben (per Autorole/Ticket-Inhaberrolle …),
 # wer Owner/Allowlist oder Discord-Administrator ist – sonst könnte sich ein
 # Team-Mitglied mit Dashboard-Rechten selbst hochstufen.
@@ -297,6 +298,7 @@ class WebCore(commands.Cog):
         self._bg_tasks: set = set()
         # UI-Baukasten für Cog-Seiten: ``request.app["webcore"].ui`` (siehe ui.py)
         self.ui = _ui
+        self.drafts = form_drafts
         self.app: web.Application | None = None
         self.runner: web.AppRunner | None = None
         self.site: web.TCPSite | None = None
@@ -405,6 +407,8 @@ class WebCore(commands.Cog):
 
     async def red_delete_data_for_user(self, *, requester, user_id: int):
         """Anonymisiert den Nutzer im Audit-Log und entfernt ihn aus der Allowlist."""
+        from .setup_wizard import discard_user
+        discard_user(self, user_id)
         async with self.config.audit() as entries:
             for e in entries:
                 if str(e.get("user_id")) == str(user_id):
@@ -543,6 +547,9 @@ class WebCore(commands.Cog):
         app.add_routes(
             [
                 web.get("/", self.handle_index),
+                web.get("/tasks", self.handle_tasks),
+                web.get("/setup", self.handle_setup),
+                web.post("/setup", self.handle_setup),
                 web.get("/login", self.handle_login),
                 web.get("/callback", self.handle_callback),
                 web.get("/logout", self.handle_logout),
@@ -937,6 +944,7 @@ class WebCore(commands.Cog):
             "home_label": "Zu „Mein Bereich“" if member_only else "Zurück zur Übersicht",
             "current_user": user,
             "authorized": authorized,
+            "can_setup": full or any(not page["readonly"] and not page["operate"] for page in nav),
             "is_full": bool(user) and full,
             "role_label": label,
             "role_class": cls,
@@ -1145,6 +1153,22 @@ class WebCore(commands.Cog):
         if not await self._is_authorized(user, request):
             return web.json_response({"error": "unauthorized"}, status=403)
         return web.json_response(await self._collect_overview(user, request))
+
+    async def handle_tasks(self, request):
+        from .my_tasks import handle_tasks
+        return await handle_tasks(self, request)
+
+    async def handle_setup(self, request):
+        from .setup_wizard import handle_setup
+        result = await handle_setup(self, request)
+        if isinstance(result, web.StreamResponse):
+            return result
+        if result.get("redirect"):
+            raise web.HTTPFound(result["redirect"])
+        response = aiohttp_jinja2.render_template("page.html", request, self._page_ctx(
+            request, title=result.get("title", "Einrichtung"), content=result.get("content", ""), active_page="setup"))
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     # ----------------------------------------------------------------- #
     #  Übersicht: Datensammlung

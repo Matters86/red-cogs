@@ -109,7 +109,19 @@ def _render_overview(ui, guild, conf) -> str:
             checks.append(("warn", f"{len(missing)} gewählte(r) Kanal/Kanäle existieren nicht mehr – bitte in den Einstellungen prüfen."))
     if not conf.get("notify"):
         checks.append(("info", "Der <b>Hinweis beim Löschen</b> ist aus – Mitglieder erfahren nicht, warum ihre Nachricht verschwindet."))
-    checks.append(("info", "Der Bot braucht in den Kanälen das Recht <code>Nachrichten verwalten</code>, sonst kann er nicht löschen."))
+    for cid in conf.get("channels") or []:
+        channel = guild.get_channel(int(cid))
+        if channel is None:
+            continue
+        permissions = channel.permissions_for(guild.me) if guild.me else None
+        missing = [label for attr, label in (("view_channel", "Kanal ansehen"),
+                    ("manage_messages", "Nachrichten verwalten")) if permissions is None or not getattr(permissions, attr, False)]
+        if conf.get("notify") and (permissions is None or not getattr(permissions, "send_messages", False)):
+            missing.append("Nachrichten senden (Löschhinweis)")
+        if missing:
+            checks.append(("bad", f"In <b>#{_esc(channel.name)}</b> fehlt: {_esc(', '.join(missing))}. "
+                           "Discord → Kanal bearbeiten → Berechtigungen → Bot-Rolle: diese Rechte erlauben."))
+    checks.append(("info", "Die Prüfung gilt je ausgewähltem Kanal; eigene Thread-Berechtigungen ebenfalls prüfen."))
     setup = ui.card("Einrichtung", "".join(ui.callout(text, tone=tone) for tone, text in checks),
                     icon="bi-clipboard-check")
     return ui.columns(setup, _render_info(ui, conf))

@@ -144,7 +144,8 @@ def _status_badges(ui, info) -> str:
 
 def _verdict_cell(ui, info) -> str:
     if info.verdict is None:
-        return "<span class='wc-muted'>—</span>"
+        return (ui.badge("Bedingt nutzbar", "warn") + "<div class='wc-cell-sub'>Zusatzbedingungen werden beim Ausführen geprüft.</div>"
+                if info.verdict_note else "<span class='wc-muted'>—</span>")
     note = f"<div class='wc-cell-sub'>{_esc(info.verdict_note)}</div>" if info.verdict_note else ""
     if info.verdict:
         return ui.badge("✓ darf", "ok") + note
@@ -251,6 +252,8 @@ def _build_markdown(infos, guild, member) -> str:
                     verdict = "✓"
                 elif info.verdict is False:
                     verdict = "✗"
+                elif info.verdict_note:
+                    verdict = "Bedingt nutzbar – Zusatzprüfung offen"
                 lines.append(f"| {_md(cmd)} | {tier} | {_md(perms)} | {verdict} | {desc} |")
             else:
                 lines.append(f"| {_md(cmd)} | {tier} | {_md(perms)} | {desc} |")
@@ -291,7 +294,7 @@ def _member_check_card(ui, guilds, gid, member_query, member, member_error, show
             f"<b>{_esc(member.display_name)}</b> darf <b>{usable}</b> von {n_shown} Befehlen ausführen – "
             "siehe Spalte „Prüfung“ in der Liste.", tone="ok")
     return ui.card("Mitglied prüfen", result + form, icon="bi-person-check",
-                   desc="Exakte Antwort für eine bestimmte Person auf einem Server.")
+                   desc="Rechte-Einschätzung für eine Person. Zusatzbedingungen bleiben bis zur Ausführung offen.")
 
 
 def _legend_card(ui) -> str:

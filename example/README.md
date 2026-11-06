@@ -58,3 +58,7 @@ POST-Feldes `form`, sonst `action`), im Markup `ui.form(..., hidden={"form": "ev
 `ui.form(..., operate=True)`. Einstellungen, Texte, Rollen-Zuordnung und Massenaktionen nie. Der Hinweis
 steht kommentiert in `example.py` (`_register_dashboard`); Details: `webcore/README.md` →
 „Für Cog-Entwickler: Tagesgeschäft (`operate_forms`)“.
+
+## Einheitliche Eingabegrenze
+
+Server-Notizen dürfen über Dashboard und `[p]example setnote` höchstens **500 Zeichen** enthalten. Längere Eingaben werden mit einer verständlichen Meldung abgelehnt; die vorhandene Notiz bleibt erhalten. Die Vorlage zeigt damit dieselbe Validierung in beiden Bedienwegen.

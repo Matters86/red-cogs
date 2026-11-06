@@ -1,7 +1,7 @@
 {
     "name": "WebCore",
     "short": "Zentrales Web-Dashboard, in das sich andere Cogs einklinken.",
-    "description": "Startet im Bot-Prozess einen aiohttp-Webserver mit Discord-OAuth2-Login. Der Bot-Owner vergibt pro Server Rollen-Rechte (Ansehen/Bearbeiten je Seite), jede Änderung landet im Audit-Log (optional auch als Embed in einem Discord-Kanal). Pro Server zuschaltbar: „Mein Bereich“ für normale Mitglieder. Andere Cogs registrieren eigene Dashboard-Seiten (register_page), Mitglieder-Seiten (register_member_page) und öffentliche API-Endpunkte (register_public_api); jeder neue Cog erscheint automatisch in der Navigation.",
+    "description": "Startet im Bot-Prozess einen aiohttp-Webserver mit Discord-OAuth2-Login. Der Bot-Owner vergibt pro Server Rollen-Rechte (Ansehen/Bearbeiten je Seite), jede Änderung landet im Audit-Log (optional auch als Embed in einem Discord-Kanal). Pro Server zuschaltbar: „Mein Bereich“ für normale Mitglieder. Andere Cogs registrieren eigene Dashboard-Seiten (register_page), Mitglieder-Seiten (register_member_page) und öffentliche API-Endpunkte (register_public_api); jeder neue Cog erscheint automatisch in der Navigation. Mit Modulsuche, persönlichen Favoriten und gemeinsamen Hilfen für einfache Formulare. Meine Aufgaben bündelt persönliche Tickets, Termine und berechtigte Störungsmeldungen. Ein geführter Einrichtungsassistent zeigt Änderungen vor dem Übernehmen und bietet danach separate Vorschau- und Test-Schritte.",
     "tags": [
         "dashboard",
         "web",
@@ -17,5 +17,5 @@
     "hidden": false,
     "disabled": false,
     "type": "COG",
-    "end_user_data_statement": "Dieser Cog speichert beim Dashboard-Login Discord-User-ID, Anzeigenamen und Avatar-Kennung verschlüsselt in einem Session-Cookie. Speichernde Aktionen im Dashboard sowie abgelehnte Zugriffe werden mit User-ID und Anzeigenamen im Audit-Log festgehalten (die letzten 300 Einträge) und – falls eingerichtet – in einen Log-Kanal gepostet. Zähler für Rate-Limits (User-ID bzw. IP-Adresse) liegen nur kurzzeitig im Arbeitsspeicher. Es werden keine Nachrichteninhalte gespeichert."
+    "end_user_data_statement": "Dieser Cog speichert beim Dashboard-Login Discord-User-ID, Anzeigenamen und Avatar-Kennung verschlüsselt in einem Session-Cookie. Speichernde Aktionen im Dashboard sowie abgelehnte Zugriffe werden mit User-ID und Anzeigenamen im Audit-Log festgehalten (die letzten 300 Einträge) und – falls eingerichtet – in einen Log-Kanal gepostet. Zähler für Rate-Limits (User-ID bzw. IP-Adresse) liegen nur kurzzeitig im Arbeitsspeicher. Es werden keine Nachrichteninhalte gespeichert. Entwürfe des Einrichtungsassistenten enthalten User-ID, Server-ID, Sitzungskennung und ausgewählte Einstellungen; sie liegen höchstens 30 Minuten im Arbeitsspeicher und werden bei einer Datenschutz-Löschanfrage entfernt. Meine Aufgaben liest bestehende Cog-Daten und legt keine zusätzliche Aufgaben-Datenbank an."
 }

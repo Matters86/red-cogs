@@ -33,6 +33,7 @@ umschaltbar und alle Texte sind überschreibbar.
 | `[p]ticket keepopen` | Stoppt den Timer; das Ticket bleibt offen. | Ersteller / Support |
 | `[p]ticket open` | Öffnet ein archiviertes Ticket wieder. | Support |
 | `[p]ticket claim` | Übernimmt das aktuelle Ticket. | Support |
+| `[p]ticket assign <mitglied>` | Weist das Ticket einem Teammitglied zu oder übergibt es. | Support |
 | `[p]ticket unclaim` | Gibt das Ticket wieder frei. | Support |
 | `[p]ticket add <mitglied>` | Fügt ein Mitglied hinzu. | Support |
 | `[p]ticket remove <mitglied>` | Entfernt ein Mitglied. | Support |
@@ -56,6 +57,12 @@ umschaltbar und alle Texte sind überschreibbar.
 | `[p]ticketset settings` | Aktuelle Einstellungen anzeigen. | Admin / Manage Server |
 | `[p]ticketset dashboard` | Hinweis auf das Dashboard. | Admin / Manage Server |
 
+**Zuständigkeit:** Mit **Übernehmen** übernimmst du selbst; mit **Zuweisen** suchst du ein anderes
+Teammitglied. Eine bestehende Zuweisung wird ersetzt. **Freigeben** entfernt sie. Der zuständige
+Name steht direkt im Ticket und im Dashboard. Nur Teammitglieder mit Lese- und Schreibzugriff
+können zugewiesen werden; Bots und Ticket-Ersteller sind ausgeschlossen. Im Dashboard lässt
+sich die Zuständigkeit ab Stufe **Bedienen** über die Mitgliederauswahl ändern.
+
 **24-Stunden-Timer:** Tickets haben zunächst keinen Timer. **24h-Timer starten** aktiviert ihn ab jetzt;
 jede neue Nachricht vom Nutzer oder Team setzt die Frist auf weitere 24 Stunden. Bots, Webhooks und
 Systemmeldungen zählen nicht. **Offen halten** stoppt ihn bis zum nächsten manuellen Start – auch über
@@ -64,3 +71,31 @@ Nachrichten während eines Bot-Ausfalls werden vor dem Schließen berücksichtig
 Archiv-/Löscheinstellungen gelten wie beim manuellen Schließen. Wieder geöffnete Tickets haben keinen Timer.
 
 **Dashboard:** Tab **Tickets** → Einstellungen, Panels (inkl. Editor und Team-Zuordnung je Grund), Transcripts und Statistik pro Server. In **Offene Tickets** stehen die aktuelle Auto-Close-Frist (UTC) und Aktionen zum Starten/Stoppen des Timers sowie zum sofortigen Schließen bereit (ab WebCore-Stufe **Bedienen**). Mitglieder finden unter **Mein Bereich → Meine Tickets** ihre eigenen Tickets und Verläufe und können dort (gleiche Fragen und Limits wie der Button) ein Ticket öffnen – abschaltbar im Reiter Einstellungen.
+
+## Wartestatus, eigene Tickets und Erinnerungen
+
+Tickets zeigen **Wartet auf Nutzer** oder **Wartet auf Team**. Eine neue menschliche Nachricht setzt den Status passend: Team-Antwort → Nutzer, Nutzer-Antwort → Team. Das Team kann ihn auch per Button, Dashboard oder `[p]ticket waiting <user|team>` setzen.
+
+Die Übersicht filtert **Meine Tickets**, **Nicht zugewiesen** und beide Wartestatus. „Meine Tickets“ meint die dir zugewiesenen Tickets. Bei aktivem 24h-Timer erinnert der Bot ungefähr eine Stunde vor Ablauf einmal pro Frist an die Schließung. Der Hinweis bietet **Offen halten** und **Schließen**; eine neue Nachricht startet die 24 Stunden erneut. Vor Erinnern und Schließen werden auch Offline-Antworten geprüft.
+
+## Schnellantworten und Priorität
+
+Das Team öffnet **Schnellantwort**, wählt einen Textbaustein und bearbeitet ihn im Dialog. Danach erscheint eine Vorschau. Erst **Antwort jetzt senden** veröffentlicht den Text im Ticket. Auswahl, Bearbeiten und Vorschau senden nichts. Im Dashboard funktioniert derselbe Ablauf über **Entwurf öffnen** und die editierbare Vorschau; die Bestätigung gilt einmalig und läuft nach zehn Minuten ab. Fehlgeschlagene Sendungen erhalten die bearbeitete Vorschau.
+
+Unter **Schnellantworten → Erweitert** verwalten Administratoren mit WebCore-Recht **Bearbeiten** bis zu 25 Vorlagen und eine optionale Signatur (höchstens 200 Zeichen). Drei deutsche Beispiele sind vorbelegt. Platzhalter: `{user}` = Anzeigename des Inhabers, `{ticket}` = Ticketnummer, `{staff}` = Teammitglied, `{signature}` = gespeicherte Signatur. Nur diese Platzhalter werden einmal ersetzt; unbekannte bleiben wörtlich. Der vollständige Antworttext muss nach Ersetzung 1–2000 Zeichen enthalten. Vorlagenwahl veröffentlicht niemals automatisch und alle Erwähnungen sind beim Versand ohne Ping.
+
+Vorschau/Versand und Priorität brauchen im Dashboard **Bedienen** sowie die aktuellen Supportrechte des jeweiligen Tickets; Lesen und Schreiben im Kanal müssen weiterhin erlaubt sein. Der Bot prüft diese Rechte und den offenen Ticketstatus vor dem Senden erneut. Ein zwischenzeitlich geschlossenes Ticket erhält keine vorbereitete Antwort.
+
+**Normal** oder **Dringend** setzt das Team per Button, Dashboard oder `[p]ticket priority <normal|urgent>`. Prioritätswechsel verändern keine bereits gewartete Zeit.
+
+## Antwortzeiten (optional, Standard aus)
+
+Unter **Einstellungen → Erweitert: Priorität und Antwortzeiten** einschalten; Vorgaben sind 24 Stunden für Normal und 4 Stunden für Dringend (je 1–720 Stunden, Dringend höchstens so lang wie Normal). Dann zeigen Ticket-Steuerleiste und Übersicht **Antwort bis …** bzw. **Antwort fällig**.
+
+- Die Uhr zählt ausschließlich, während das Ticket auf das **Team** wartet. Weitere Nutzernachrichten verlängern eine laufende Frist nicht.
+- Manuelles Wechseln auf **Wartet auf Nutzer** pausiert den vorhandenen Zyklus. Beim Zurückschalten läuft nur die verbleibende Zeit weiter; wiederholtes Umschalten setzt die Frist nicht zurück.
+- Eine tatsächliche Teamantwort – auch eine bestätigte Schnellantwort – erledigt den bisherigen Antwortzyklus. Das nächste Nutzeranliegen startet einen neuen. Priorität verwendet jeweils dieselbe bereits angesammelte Teamwartezeit.
+- Zeiten und angesammelte Wartezeit bleiben bei Bot-Neustarts erhalten. Bei aktivierten Antwortzeiten gleicht der Bot seitdem verpasste menschliche Antworten aus dem Ticket-Verlauf ab. Fehlen Leserechte, wird keine ungesicherte Fälligkeit behauptet; die Übersicht meldet **Verlauf noch nicht bestätigt** und versucht es erneut.
+- Altbestand ohne bestätigten Antwortzyklus erhält keine aus dem Ticketalter geratene Frist. Ein bestätigtes Nutzeranliegen oder manuelles Setzen auf Team startet die Uhr. Wiederöffnen beginnt einen neuen Zyklus; geschlossen ist keine Antwort fällig.
+
+Antwortzeiten schließen kein Ticket und senden keine zusätzlichen Erinnerungs-Pings. Der vorhandene 24-Stunden-Inaktivitätstimer samt Erinnerung bleibt davon unabhängig.

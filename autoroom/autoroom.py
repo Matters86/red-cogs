@@ -9,6 +9,7 @@ import discord
 
 from redbot.core import Config, commands
 from redbot.core.bot import Red
+from .controls import RoomLimitModal, RoomTransferView, room_controls
 
 log = logging.getLogger("red.red-cogs.autoroom")
 
@@ -254,7 +255,9 @@ class AutoRoom(commands.Cog):
                 try:
                     await channel.delete(reason="AutoRoom: Nutzer war nicht mehr im Voice.")
                 except discord.HTTPException:
-                    pass
+                    async with self.config.guild(guild).active_rooms() as rooms:
+                        rooms[str(channel.id)] = {"owner_id": member.id, "source_id": source.id,
+                            "text_id": None, "created_at": time.time(), "cleanup_error": "Löschen fehlgeschlagen"}
                 return
 
             text_id = None
@@ -297,6 +300,7 @@ class AutoRoom(commands.Cog):
                 "created_at": time.time(),
             }
             await self.config.guild(guild).active_rooms.set(rooms)
+            await self._post_room_controls(guild, channel, rooms[str(channel.id)])
 
     async def _sync_text_access(self, member, channel, *, joined: bool):
         """Gibt/entzieht dem Mitglied Zugriff auf den Textkanal seines AutoRooms.
@@ -343,8 +347,8 @@ class AutoRoom(commands.Cog):
                 return
             if any(not m.bot for m in channel.members):
                 return
-            await self._delete_room(guild, channel, rec, "AutoRoom leer")
-            rooms.pop(str(channel.id), None)
+            if await self._delete_room(guild, channel, rec, "AutoRoom leer"):
+                rooms.pop(str(channel.id), None)
             await self.config.guild(guild).active_rooms.set(rooms)
 
     @commands.Cog.listener()
@@ -358,37 +362,48 @@ class AutoRoom(commands.Cog):
         guild = channel.guild
         async with self._lock(guild.id):
             rooms = await self.config.guild(guild).active_rooms()
-            rec = rooms.pop(str(channel.id), None)
+            rec = rooms.get(str(channel.id))
             if rec is None:
                 return
-            await self._delete_room(guild, None, rec, "AutoRoom gelöscht")
+            if await self._delete_room(guild, None, rec, "AutoRoom gelöscht"):
+                rooms.pop(str(channel.id), None)
             await self.config.guild(guild).active_rooms.set(rooms)
 
     async def _delete_room(self, guild, channel, rec, reason):
+        success = True
         text_id = rec.get("text_id")
         if text_id:
             tch = guild.get_channel(int(text_id))
             if tch is not None:
                 try:
                     await tch.delete(reason=reason)
+                    rec["text_id"] = None
+                except discord.NotFound:
+                    rec["text_id"] = None
                 except discord.HTTPException:
-                    pass
+                    success = False
         if channel is not None:
             try:
                 await channel.delete(reason=reason)
-            except discord.HTTPException:
+            except discord.NotFound:
                 pass
+            except discord.HTTPException:
+                success = False
+        rec["cleanup_error"] = None if success else "Kanal konnte nicht gelöscht werden – Bot-Rechte prüfen; erneuter Versuch folgt."
+        return success
 
     async def _initial_cleanup(self):
         try:
             await self.bot.wait_until_red_ready()
         except Exception:  # noqa: BLE001
             return
-        for guild in self.bot.guilds:
-            try:
-                await self._sweep_guild(guild)
-            except Exception:  # noqa: BLE001
-                log.exception("AutoRoom-Cleanup fehlgeschlagen in %s.", guild.id)
+        while True:
+            for guild in self.bot.guilds:
+                try:
+                    await self._sweep_guild(guild)
+                except Exception:  # noqa: BLE001
+                    log.exception("AutoRoom-Cleanup fehlgeschlagen in %s.", guild.id)
+            await asyncio.sleep(60)
 
     async def _sweep_guild(self, guild) -> int:
         removed = 0
@@ -399,18 +414,121 @@ class AutoRoom(commands.Cog):
                 ch = guild.get_channel(int(cid))
                 if ch is None:
                     # Voice-Raum weg -> auch den evtl. verwaisten Textkanal entfernen.
-                    await self._delete_room(guild, None, rec, "AutoRoom-Cleanup")
-                    rooms.pop(cid, None)
+                    if await self._delete_room(guild, None, rec, "AutoRoom-Cleanup"):
+                        rooms.pop(cid, None)
                     changed = True
                     continue
                 if not any(not m.bot for m in ch.members):
-                    await self._delete_room(guild, ch, rec, "AutoRoom-Cleanup")
-                    rooms.pop(cid, None)
+                    if await self._delete_room(guild, ch, rec, "AutoRoom-Cleanup"):
+                        rooms.pop(cid, None)
+                        removed += 1
                     changed = True
-                    removed += 1
+                elif not await self.bot.cog_disabled_in_guild(self, guild):
+                    await self._post_room_controls(guild, ch, rec)
             if changed:
                 await self.config.guild(guild).active_rooms.set(rooms)
         return removed
+
+    async def _post_room_controls(self, guild, channel, record, *, force=False):
+        target = guild.get_channel(record.get("text_id")) if record.get("text_id") else channel
+        if target is None:
+            target = channel
+        if record.get("controls_message_id") and not force:
+            try:
+                await target.fetch_message(record["controls_message_id"])
+                return True
+            except discord.NotFound:
+                pass
+            except discord.HTTPException:
+                return False
+        try:
+            message = await target.send("**Dein AutoRoom** – der aktuelle Besitzer verwaltet den Raum hier. "
+                "Übernehmen geht, sobald der bisherige Besitzer den Raum verlassen hat.", view=room_controls(channel.id),
+                allowed_mentions=discord.AllowedMentions.none())
+            record["controls_message_id"] = message.id
+            async with self.config.guild(guild).active_rooms() as rooms:
+                current = rooms.get(str(channel.id))
+                if current is not None:
+                    current["controls_message_id"] = message.id
+            return True
+        except discord.HTTPException:
+            log.warning("AutoRoom-Steuerung in %s nicht sendbar", channel.id)
+            return False
+
+    async def change_room(self, guild, channel_id, actor, action, value=None):
+        """Gemeinsame Prüfung für persistente Buttons und kurzlebige Dialoge."""
+        async with self._lock(guild.id):
+            if await self.bot.cog_disabled_in_guild(self, guild):
+                return "AutoRoom ist auf diesem Server deaktiviert."
+            channel = guild.get_channel(channel_id)
+            rooms = await self.config.guild(guild).active_rooms()
+            record = rooms.get(str(channel_id))
+            if not isinstance(channel, discord.VoiceChannel) or not record:
+                return "Dieser AutoRoom existiert nicht mehr."
+            bot_owner = await self.bot.is_owner(actor)
+            if actor not in channel.members and not bot_owner:
+                return "Du musst in diesem Sprachraum sein."
+            if getattr(actor, "bot", False):
+                return "Bots können keine Raumbesitzer sein."
+            if action != "claim" and record["owner_id"] != actor.id and not bot_owner:
+                return "Nur der aktuelle Besitzer darf den Raum ändern."
+            if action == "inspect":
+                return None
+            try:
+                if action in VIS_CHOICES:
+                    await channel.set_permissions(guild.default_role, overwrite=discord.PermissionOverwrite(
+                        view_channel=action != "private", connect=action == "public"), reason="AutoRoom-Steuerung")
+                elif action == "limit":
+                    if not isinstance(value, int) or not 0 <= value <= 99:
+                        return "Personenlimit: 0 bis 99."
+                    await channel.edit(user_limit=value, reason="AutoRoom-Steuerung")
+                elif action in ("transfer", "claim"):
+                    if action == "claim" and any(m.id == record["owner_id"] for m in channel.members):
+                        return "Der Besitzer ist noch im Raum."
+                    target = actor if action == "claim" else guild.get_member(value)
+                    if target is None or target not in channel.members or getattr(target, "bot", False):
+                        return "Der neue Besitzer muss als Mensch in diesem Raum sein."
+                    await channel.set_permissions(target, overwrite=discord.PermissionOverwrite(
+                        view_channel=True, connect=True, speak=True), reason="AutoRoom: Besitzerwechsel")
+                    if record.get("text_id"):
+                        text = guild.get_channel(record["text_id"])
+                        if text is not None:
+                            await text.set_permissions(target, overwrite=discord.PermissionOverwrite(
+                                view_channel=True, send_messages=True, read_message_history=True))
+                    previous = guild.get_member(record["owner_id"])
+                    if previous is not None and previous.id != target.id and previous not in channel.members:
+                        await channel.set_permissions(previous, overwrite=None, reason="AutoRoom: ehemaliger Besitzer")
+                        if record.get("text_id"):
+                            text = guild.get_channel(record["text_id"])
+                            if text is not None:
+                                await text.set_permissions(previous, overwrite=None)
+                    record["owner_id"] = target.id
+                    await self.config.guild(guild).active_rooms.set(rooms)
+                else:
+                    return "Unbekannte Raumaktion."
+            except discord.HTTPException:
+                return "Discord hat die Änderung abgelehnt. Bitte meine Kanalrechte prüfen und erneut versuchen."
+            return None
+
+    @commands.Cog.listener()
+    async def on_interaction(self, interaction):
+        if interaction.guild is None or interaction.type != discord.InteractionType.component:
+            return
+        parts = (interaction.data or {}).get("custom_id", "").split(":")
+        if len(parts) != 3 or parts[0] != "autoroom" or not parts[2].isdigit():
+            return
+        action, room_id = parts[1], int(parts[2])
+        if action in ("limit", "transfer"):
+            error = await self.change_room(interaction.guild, room_id, interaction.user, "inspect")
+            if error:
+                return await interaction.response.send_message(error, ephemeral=True)
+            if action == "limit":
+                return await interaction.response.send_modal(RoomLimitModal(self, room_id))
+            return await interaction.response.send_message("Neuen Besitzer wählen:",
+                view=RoomTransferView(self, room_id, interaction.user.id), ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        error = await self.change_room(interaction.guild, room_id, interaction.user, action)
+        await interaction.followup.send(error or "Raum geändert.", ephemeral=True)
 
     # ----------------------------------------------------------------- #
     #  Nutzer-Befehle: eigenen Raum verwalten  (hybrid = Text + Slash)
@@ -420,6 +538,15 @@ class AutoRoom(commands.Cog):
     async def autoroom(self, ctx: commands.Context):
         """Verwalte deinen eigenen AutoRoom."""
         await ctx.send_help()
+
+    @autoroom.command(name="controls")
+    async def ar_controls(self, ctx):
+        """Postet die Raumsteuerung erneut im Raumchat bzw. zugehörigen Textkanal."""
+        owned = await self._require_owned(ctx)
+        if owned:
+            async with self._lock(ctx.guild.id):
+                posted = await self._post_room_controls(ctx.guild, owned[0], owned[1], force=True)
+            await ctx.send("Raumsteuerung gepostet." if posted else "Raumsteuerung konnte nicht gesendet werden – Bot-Rechte im Raumchat prüfen.")
 
     @autoroom.command(name="settings")
     async def ar_settings(self, ctx: commands.Context):
@@ -450,17 +577,9 @@ class AutoRoom(commands.Cog):
         await ctx.send(embed=embed)
 
     async def _set_visibility(self, ctx, vc, visibility):
-        everyone = ctx.guild.default_role
-        if visibility == "private":
-            ow = discord.PermissionOverwrite(view_channel=False, connect=False)
-        elif visibility == "locked":
-            ow = discord.PermissionOverwrite(view_channel=True, connect=False)
-        else:
-            ow = discord.PermissionOverwrite(view_channel=True, connect=True)
-        try:
-            await vc.set_permissions(everyone, overwrite=ow, reason=f"AutoRoom: {visibility}")
-        except discord.HTTPException:
-            await ctx.send("Konnte die Berechtigungen nicht ändern (fehlende Rechte?).")
+        error = await self.change_room(ctx.guild, vc.id, ctx.author, visibility)
+        if error:
+            await ctx.send(error)
             return False
         return True
 
@@ -507,11 +626,11 @@ class AutoRoom(commands.Cog):
         if not owned:
             return
         limit = min(max(limit, 0), 99)
-        try:
-            await owned[0].edit(user_limit=limit, reason="AutoRoom-Limit")
+        error = await self.change_room(ctx.guild, owned[0].id, ctx.author, "limit", limit)
+        if not error:
             await ctx.send(f"Limit auf **{limit or 'unbegrenzt'}** gesetzt.")
-        except discord.HTTPException:
-            await ctx.send("Limit konnte nicht gesetzt werden.")
+        else:
+            await ctx.send(error)
 
     @autoroom.command(name="bitrate")
     async def ar_bitrate(self, ctx: commands.Context, kbps: int):
@@ -568,28 +687,8 @@ class AutoRoom(commands.Cog):
         if vc is None:
             await ctx.send("Du bist in keinem Voicechannel.")
             return
-        # Unter dem Guild-Lock frisch lesen und nur den betroffenen Key ändern,
-        # damit es keinen Race mit dem Cleanup gibt (verlorene Updates).
-        async with self._lock(ctx.guild.id):
-            rooms = await self.config.guild(ctx.guild).active_rooms()
-            rec = rooms.get(str(vc.id))
-            if rec is None:
-                await ctx.send("Dein aktueller Channel ist kein AutoRoom.")
-                return
-            owner = ctx.guild.get_member(rec.get("owner_id"))
-            if owner is not None and owner in vc.members:
-                await ctx.send("Der Besitzer ist noch im Raum – Übernahme nicht möglich.")
-                return
-            rec["owner_id"] = ctx.author.id
-            rooms[str(vc.id)] = rec
-            await self.config.guild(ctx.guild).active_rooms.set(rooms)
-        try:
-            await vc.set_permissions(
-                ctx.author, overwrite=discord.PermissionOverwrite(view_channel=True, connect=True, speak=True)
-            )
-        except discord.HTTPException:
-            pass
-        await ctx.send("Du bist jetzt der Besitzer dieses AutoRooms.")
+        error = await self.change_room(ctx.guild, vc.id, ctx.author, "claim")
+        await ctx.send(error or "Du bist jetzt der Besitzer dieses AutoRooms.")
 
     @autoroom.command(name="transfer")
     async def ar_transfer(self, ctx: commands.Context, member: discord.Member):
@@ -597,28 +696,8 @@ class AutoRoom(commands.Cog):
         owned = await self._require_owned(ctx)
         if not owned:
             return
-        vc, _rec = owned
-        if member not in vc.members:
-            await ctx.send("Diese Person ist nicht in deinem Raum.")
-            return
-        # Unter dem Guild-Lock frisch lesen (Existenz erneut prüfen) und nur den
-        # betroffenen Key ändern – kein Race mit dem Cleanup.
-        async with self._lock(ctx.guild.id):
-            rooms = await self.config.guild(ctx.guild).active_rooms()
-            rec = rooms.get(str(vc.id))
-            if rec is None:
-                await ctx.send("Dein aktueller Channel ist kein AutoRoom.")
-                return
-            rec["owner_id"] = member.id
-            rooms[str(vc.id)] = rec
-            await self.config.guild(ctx.guild).active_rooms.set(rooms)
-        try:
-            await vc.set_permissions(
-                member, overwrite=discord.PermissionOverwrite(view_channel=True, connect=True, speak=True)
-            )
-        except discord.HTTPException:
-            pass
-        await ctx.send(f"{member.mention} ist jetzt der Besitzer.")
+        error = await self.change_room(ctx.guild, owned[0].id, ctx.author, "transfer", member.id)
+        await ctx.send(error or f"{member.mention} ist jetzt der Besitzer.")
 
     # ----------------------------------------------------------------- #
     #  Admin-Befehle: Quellen einrichten
@@ -866,12 +945,16 @@ class AutoRoom(commands.Cog):
         for cid, rec in data.get("active_rooms", {}).items():
             ch = guild.get_channel(int(cid))
             if ch is None:
+                if rec.get("cleanup_error"):
+                    rows.append(ui.row("Sprachraum bereits entfernt", html.escape(rec["cleanup_error"]), "—"))
                 continue
             owner = guild.get_member(rec.get("owner_id"))
             count = len([m for m in ch.members if not m.bot])
             people += count
             src = guild.get_channel(int(rec["source_id"])) if str(rec.get("source_id") or "").isdigit() else None
             text = (" " + ui.badge("Textkanal", "info")) if rec.get("text_id") else ""
+            if rec.get("cleanup_error"):
+                text += " " + ui.badge("Aufräumen ausstehend", "warn") + f"<div class='wc-cell-sub'>{html.escape(rec['cleanup_error'])}</div>"
             rows.append(ui.row(
                 f"<div class='wc-cell-title'>{html.escape(ch.name)}{text}</div>"
                 + (f"<div class='wc-cell-sub'>über {html.escape(src.name)}</div>" if src

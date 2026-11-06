@@ -23,18 +23,28 @@
         <div class="sb-sub"><span class="dot"></span> Dashboard</div>
       </div>
     </div>
-    <nav class="sb-nav">
+    <nav class="sb-nav" data-user-id="{{ current_user.id if current_user else '' }}">
       {% if authorized %}
         <div class="nav-section">Allgemein</div>
         <a class="nav-link {% if active_page == 'home' %}active{% endif %}" href="/"><i class="bi bi-grid-1x2"></i> Übersicht</a>
+        <a class="nav-link {% if active_page == 'tasks' %}active{% endif %}" href="/tasks"><i class="bi bi-check2-square"></i> Meine Aufgaben</a>
+        {% if can_setup %}<a class="nav-link {% if active_page == 'setup' %}active{% endif %}" href="/setup"><i class="bi bi-magic"></i> Einrichtung</a>{% endif %}
         {% if nav_pages %}
           <div class="nav-section">Module</div>
+          <label class="wc-label" for="wc-module-search">Modul suchen</label>
+          <input id="wc-module-search" class="wc-input" type="search" placeholder="Name eingeben …" autocomplete="off">
+          <div id="wc-favorites" hidden><div class="nav-section">Meine Favoriten</div><div data-favorite-list></div></div>
+          <div id="wc-module-list">
           {% for p in nav_pages %}
+            <div class="wc-module-row" data-module="{{ p.slug }}" data-module-name="{{ p.name }}">
             <a class="nav-link {% if active_page == p.slug %}active{% endif %}" href="/cogs/{{ p.slug }}">
               <i class="bi {{ p.icon }}"></i> {{ p.name }}
               {% if p.readonly %}<span class="nav-badge" title="Nur Ansicht">Ansicht</span>{% elif p.operate %}<span class="nav-badge op" title="Bedienen: Aktionen ja, Einstellungen nein">Bedienen</span>{% endif %}
             </a>
+            <button type="button" class="wc-favorite" aria-label="{{ p.name }} als Favorit markieren" aria-pressed="false" data-favorite="{{ p.slug }}"><i class="bi bi-star" aria-hidden="true"></i></button>
+            </div>
           {% endfor %}
+          </div><p id="wc-module-empty" class="wc-help" hidden>Kein passendes Modul.</p>
         {% endif %}
         {% if is_full %}
           <div class="nav-section">Verwaltung</div>

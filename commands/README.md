@@ -81,3 +81,7 @@ Diese Seite hat **kein Tagesgeschäft**: Sie ist eine Übersicht; „Mitglied pr
   (mit POST-/CSRF-Unterstützung) auf dem Bot laufen. Die reine Anzeige funktioniert auch ohne.
 - Mitglieder werden aus dem Bot-Cache aufgelöst; sehr selten aktive Mitglieder sind ggf. erst
   nach einer Interaktion auffindbar.
+
+## Bedingte Freigaben
+
+Bei der Prüfung anderer Mitglieder bedeutet **Bedingt nutzbar**: Die allgemeinen Rechte passen, aber eigene Zusatzbedingungen des Befehls sind noch offen. Eine solche Prüfung erhält kein grünes „darf“. Beim tatsächlichen Ausführen gelten weiterhin alle Bedingungen. Die Eigenprüfung mit `[p]meinebefehle` nutzt Reds vollständige Prüfung. Der Markdown-Export kennzeichnet offene Zusatzprüfungen ebenfalls.

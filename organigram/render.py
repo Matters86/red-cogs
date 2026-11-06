@@ -1,6 +1,6 @@
 """Bild-Renderer für den Organigram-Cog.
 
-Erzeugt PNG-Bilder eines Organigramms in fünf Mustern, im Look des
+Erzeugt PNG-Bilder eines Organigramms in acht Mustern, im Look des
 WebCore-Dashboards (dunkel, Akzentgrün, Archivo + IBM Plex). Das Modul ist
 bewusst **frei von discord.py** – es bekommt ein aufgelöstes Datenmodell
 (``RChart`` mit ``RNode``/``RPerson``) und gibt ``bytes`` zurück. Die
@@ -58,6 +58,9 @@ PATTERNS = {
     "pyramide": "Pyramide (Ebenen)",
     "liste": "Kompaktliste",
     "karten": "Karten",
+    "horizontal": "Baum (links nach rechts)",
+    "teamzeilen": "Teamzeilen (breite Übersicht)",
+    "matrix": "Rollenmatrix (Personen × Positionen)",
 }
 
 
@@ -69,6 +72,7 @@ class RPerson:
     name: str
     avatar_png: bytes | None = None
     vacant: bool = False
+    member_id: int | None = None
 
 
 @dataclass
@@ -732,6 +736,134 @@ class _Renderer:
                        self._ellipsize(role, "body", 11, tw), "body", 11, MUTED)
         return self._finish()
 
+    def render_horizontal(self) -> bytes:
+        """Kartenbaum mit Spalten je Hierarchieebene und variablen Teilbaumhöhen."""
+        heights, spans, depths = {}, {}, {}
+        gap, column_gap = 24, 70
+
+        def measure(node, depth):
+            depths[node.id] = depth
+            heights[node.id] = self._card_height(node, self.CARD_W)
+            child_h = sum(measure(child, depth + 1) for child in node.children)
+            child_h += max(0, len(node.children) - 1) * gap
+            spans[node.id] = max(heights[node.id], child_h)
+            return spans[node.id]
+
+        total_h = sum(measure(root, 0) for root in self.chart.roots)
+        total_h += max(0, len(self.chart.roots) - 1) * gap
+        max_depth = max(depths.values(), default=0)
+        width = (max_depth + 1) * self.CARD_W + max_depth * column_gap
+        ox, oy = self._canvas(max(280, width), max(80, total_h))
+        positions = {}
+
+        def place(node, top):
+            x = ox + depths[node.id] * (self.CARD_W + column_gap)
+            y = oy + top + (spans[node.id] - heights[node.id]) / 2
+            positions[node.id] = (x, y)
+            used = sum(spans[c.id] for c in node.children) + max(0, len(node.children) - 1) * gap
+            child_top = top + (spans[node.id] - used) / 2
+            for child in node.children:
+                place(child, child_top)
+                child_top += spans[child.id] + gap
+
+        top = 0
+        for root in self.chart.roots:
+            place(root, top)
+            top += spans[root.id] + gap
+        for node in _iter_nodes(self.chart.roots):
+            x, y = positions[node.id]
+            for child in node.children:
+                cx, cy = positions[child.id]
+                sy, ey = y + heights[node.id] / 2, cy + heights[child.id] / 2
+                trunk = x + self.CARD_W + column_gap / 2
+                self._line([(x + self.CARD_W, sy), (trunk, sy), (trunk, ey), (cx, ey)],
+                           _mix(BORDER, MUTED, .45), 2)
+        for node in _iter_nodes(self.chart.roots):
+            self._draw_card(node, *positions[node.id], self.CARD_W)
+        return self._finish()
+
+    def render_team_rows(self) -> bytes:
+        """Eine breite, eingerückte Zeile pro Position; Namen stehen nebeneinander."""
+        rows = []
+
+        def collect(node, depth):
+            shown = node.people[:self.MAX_PEOPLE]
+            text = " · ".join(person.name for person in shown) or "Keine Personen"
+            if len(node.people) > self.MAX_PEOPLE:
+                text += f" · +{len(node.people) - self.MAX_PEOPLE} weitere"
+            lines = self._wrap(text, "body", 13, 530)
+            if len(lines) > 3:
+                lines = lines[:2] + [self._ellipsize(" ".join(lines[2:]), "body", 13, 530)]
+            rows.append((node, depth, lines, max(70, 24 + len(lines) * 21)))
+            for child in node.children:
+                collect(child, depth + 1)
+        for root in self.chart.roots:
+            collect(root, 0)
+        max_depth = max((depth for _, depth, _, _ in rows), default=0)
+        width = 830 + max_depth * 22
+        height = sum(row[3] + 12 for row in rows)
+        ox, oy = self._canvas(width, max(80, height))
+        y = oy
+        for node, depth, lines, row_h in rows:
+            x = ox + depth * 22
+            color = _hex(node.color, _hex(self.chart.accent))
+            self._rrect((x, y, ox + width, y + row_h), 10, fill=PANEL, outline=BORDER)
+            self._rrect((x, y, x + 5, y + row_h), 2, fill=color)
+            label = self._wrap(node.label or "—", "label", 14, 210)[:2]
+            for index, line in enumerate(label):
+                self._text((x + 18, y + 15 + index * 21), line, "label", 14, TEXT)
+            for index, line in enumerate(lines):
+                self._text((x + 250, y + 15 + index * 21), line, "body", 13, MUTED)
+            y += row_h + 12
+        return self._finish()
+
+    def render_matrix(self) -> bytes:
+        """Zuordnungsmatrix. Nur echte Mitglieds-IDs werden zwischen Positionen verbunden."""
+        nodes = list(_iter_nodes(self.chart.roots))
+        people, membership = {}, {}
+        for column, node in enumerate(nodes):
+            for index, person in enumerate(node.people[:self.MAX_PEOPLE]):
+                key = ("member", person.member_id) if person.member_id is not None else ("entry", column, index)
+                people.setdefault(key, person)
+                membership.setdefault(key, set()).add(column)
+        row_h, col_w, name_w, header_h = 46, 128, 242, 88
+        width = name_w + len(nodes) * col_w
+        has_overflow = any(len(node.people) > self.MAX_PEOPLE for node in nodes)
+        height = header_h + max(1, len(people)) * row_h + (34 if has_overflow else 0)
+        ox, oy = self._canvas(max(360, width), height)
+        self._rrect((ox, oy, ox + width, oy + height), 12, fill=PANEL, outline=BORDER)
+        self._text((ox + 16, oy + 24), "Person / Position", "label", 13, TEXT)
+        for column, node in enumerate(nodes):
+            x = ox + name_w + column * col_w
+            color = _hex(node.color, _hex(self.chart.accent))
+            self._rrect((x + 6, oy + 8, x + col_w - 6, oy + header_h - 10), 8, fill=PANEL2)
+            lines = self._wrap(node.label or "—", "label", 12, col_w - 20)
+            if len(lines) > 3:
+                lines = lines[:2] + [self._ellipsize(" ".join(lines[2:]), "label", 12, col_w - 20)]
+            for index, line in enumerate(lines):
+                self._text((x + 12, oy + 18 + index * 17), line, "label", 12, color)
+        for row, (key, person) in enumerate(people.items()):
+            y = oy + header_h + row * row_h
+            self._line([(ox + 12, y), (ox + width - 12, y)], BORDER)
+            tx = ox + 16
+            if self.chart.show_avatars:
+                self._paste(self._avatar(person, 28, _hex(self.chart.accent)), (tx, y + 9))
+                tx += 38
+            self._text((tx, y + 15), self._ellipsize(person.name, "body", 13, name_w - (tx - ox) - 12),
+                       "body", 13, MUTED if person.vacant else TEXT)
+            for column in membership[key]:
+                x = ox + name_w + column * col_w + col_w / 2
+                self._ellipse((x - 6, y + row_h / 2 - 6, x + 6, y + row_h / 2 + 6),
+                              fill=_hex(nodes[column].color, _hex(self.chart.accent)))
+        if has_overflow:
+            y = oy + header_h + len(people) * row_h
+            self._text((ox + 16, y + 9), "Weitere Personen", "body", 11, MUTED)
+            for column, node in enumerate(nodes):
+                if len(node.people) > self.MAX_PEOPLE:
+                    self._text((ox + name_w + column * col_w + 45, y + 9),
+                               f"+{len(node.people) - self.MAX_PEOPLE}", "mono", 11, MUTED)
+        return self._finish()
+
     # ---- Dispatch ----------------------------------------------------- #
     def render(self) -> bytes:
         fn = {
@@ -740,6 +872,9 @@ class _Renderer:
             "pyramide": self.render_tiers,
             "liste": self.render_list,
             "karten": self.render_cards,
+            "horizontal": self.render_horizontal,
+            "teamzeilen": self.render_team_rows,
+            "matrix": self.render_matrix,
         }.get(self.chart.pattern, self.render_tree)
         return fn()
 

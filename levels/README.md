@@ -103,3 +103,7 @@ Alle Mitgliedsdaten eines Servers werden einmal geladen und im Arbeitsspeicher g
 **alle 60 s** (und beim Entladen) gebündelt gespeichert. Die Rangkarte wird im Hintergrund-Thread gerendert,
 Avatare mit Timeout (8 s) und Größenlimit (4 MB) geladen. Schriften (Archivo, IBM Plex Sans, SIL OFL 1.1)
 liegen in `assets/fonts`.
+
+## Mitglieder eindeutig auswählen
+
+Unter **XP anpassen** kannst du nach dem Namen suchen und das Mitglied anhand von Anzeigename, Nutzername und eindeutiger ID auswählen. Eine Avatarvorschau bestätigt die Auswahl. Die bestehende serverseitige Prüfung und die Bestätigung vor XP-Änderungen bleiben aktiv.

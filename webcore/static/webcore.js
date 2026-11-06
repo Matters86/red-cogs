@@ -301,5 +301,98 @@
       $$(":scope > td", tr).forEach(function (td, i) { if (!td.hasAttribute("data-label") && heads[i]) td.setAttribute("data-label", heads[i]); });
     });
   });
+  /* --------------------------------------------------- Modulsuche/Favoriten */
+  (function () {
+    var list = document.getElementById("wc-module-list"), search = document.getElementById("wc-module-search");
+    if (!list || !search) return;
+    var nav = list.closest("nav"), key = "wc-favorites:" + nav.getAttribute("data-user-id");
+    var favorites = [], box = document.getElementById("wc-favorites");
+    try { var saved = JSON.parse(localStorage.getItem(key) || "[]"); if (Array.isArray(saved)) favorites = saved.filter(function (x) { return typeof x === "string"; }); } catch (e) {}
+    function render() {
+      var target = box.querySelector("[data-favorite-list]"), query = search.value.trim().toLocaleLowerCase(), visible = 0;
+      target.replaceChildren();
+      $$(".wc-module-row", list).forEach(function (row) {
+        var slug = row.getAttribute("data-module"), name = row.getAttribute("data-module-name"), favorite = favorites.indexOf(slug) !== -1;
+        var button = row.querySelector("[data-favorite]");
+        button.setAttribute("aria-pressed", String(favorite));
+        button.setAttribute("aria-label", name + (favorite ? " aus Favoriten entfernen" : " als Favorit markieren"));
+        button.querySelector("i").className = "bi " + (favorite ? "bi-star-fill" : "bi-star");
+        row.hidden = (name + " " + slug).toLocaleLowerCase().indexOf(query) === -1;
+        if (!row.hidden) visible++;
+        if (favorite && !row.hidden) target.appendChild(row.cloneNode(true));
+      });
+      box.hidden = !target.children.length;
+      document.getElementById("wc-module-empty").hidden = visible > 0;
+      $$(".tiles .tile[data-module]").forEach(function (tile) {
+        tile.hidden = tile.textContent.toLocaleLowerCase().indexOf(query) === -1;
+      });
+    }
+    nav.addEventListener("click", function (event) {
+      var button = event.target.closest("[data-favorite]"); if (!button) return;
+      var slug = button.getAttribute("data-favorite"), index = favorites.indexOf(slug);
+      if (index === -1) favorites.push(slug); else favorites.splice(index, 1);
+      try { localStorage.setItem(key, JSON.stringify(favorites)); } catch (e) {}
+      render();
+    });
+    search.addEventListener("input", render);
+    render();
+  })();
+
+  /* ------------------------------------------ Bedingte Felder/Mitgliedersuche */
+  $$("[data-wc-when]").forEach(function (box) {
+    var form = box.closest("form"); if (!form) return;
+    var control = form.elements.namedItem(box.getAttribute("data-wc-when")); if (!control) return;
+    var values = box.getAttribute("data-wc-values").split(" ");
+    function update() {
+      box.hidden = values.indexOf(control.value) === -1;
+      $$("input,select,textarea,button", box).forEach(function (input) {
+        if (box.hidden && !input.disabled) { input.disabled = true; input.setAttribute("data-conditional-disabled", "1"); }
+        else if (!box.hidden && input.hasAttribute("data-conditional-disabled")) { input.disabled = false; input.removeAttribute("data-conditional-disabled"); }
+      });
+    }
+    control.addEventListener("change", update); update();
+  });
+  $$("[data-wc-member-picker]").forEach(function (box) {
+    var input = box.querySelector("input"), choices = $$("option", box), preview = box.querySelector(".wc-member-selection");
+    function update() {
+      var selected = choices.find(function (option) { return option.value === input.value; }); preview.replaceChildren();
+      if (!selected) return;
+      var url = selected.getAttribute("data-avatar");
+      if (url && /^https:\/\//i.test(url)) { var img = el("img"); img.src = url; img.alt = ""; img.width = 28; img.height = 28; preview.appendChild(img); }
+      preview.appendChild(el("span", null, selected.label));
+    }
+    input.addEventListener("input", update); input.addEventListener("change", update); update();
+  });
+  $$("form[data-wc-preview-url]").forEach(function (form) {
+    var output = form.querySelector("[data-wc-preview-output]"), sequence = 0, timer, controller;
+    if (!output) return;
+    function update() {
+      clearTimeout(timer);
+      var current = ++sequence;
+      if (controller) controller.abort();
+      timer = setTimeout(function () {
+        var url = new URL(form.getAttribute("data-wc-preview-url"), location.origin);
+        var data = new FormData(form), payload = new FormData();
+        (form.getAttribute("data-wc-preview-fields") || "").split(" ").forEach(function (name) {
+          if (name) payload.set(name, data.get(name) || "");
+        });
+        payload.set("csrf_token", data.get("csrf_token") || "");
+        payload.set(form.getAttribute("data-wc-preview-action-field") || "form", form.getAttribute("data-wc-preview-action") || "preview");
+        if (controller) controller.abort(); controller = new AbortController();
+        fetch(url, {method: "POST", body: payload, signal: controller.signal, credentials: "same-origin", cache: "no-store"})
+          .then(function (response) { if (!response.ok) throw new Error("preview"); return response.json(); })
+          .then(function (result) { if (current === sequence) output.innerHTML = result.html; })
+          .catch(function (error) { if (error.name !== "AbortError" && current === sequence) output.textContent = "Vorschau vorübergehend nicht verfügbar; deine Eingaben bleiben erhalten."; });
+      }, 250);
+    }
+    form.addEventListener("input", update); form.addEventListener("change", update);
+  });
+  $$("time[data-wc-localtime]").forEach(function (node) {
+    var value = new Date(node.getAttribute("datetime"));
+    if (!isNaN(value.getTime())) {
+      node.title = node.textContent;
+      node.textContent = value.toLocaleString("de-DE", {dateStyle: "medium", timeStyle: "short"});
+    }
+  });
   initSavebars();
 })();

@@ -117,10 +117,50 @@ def _channel_items(guild):
 # --------------------------------------------------------------------------- #
 async def dashboard_handler(cog, request):
     if request.method == "POST":
-        return await _handle_post(cog, request)
+        data = await request.post()
+        if data.get("form") == "message_preview":
+            return await _message_preview(cog, request, data)
+        result = await _handle_post(cog, request)
+        data = await request.post()
+        kind = data.get("form")
+        if kind in _KIND_LABEL and "redirect" in result:
+            drafts = request.app["webcore"].drafts
+            if "err=" in result["redirect"]:
+                result["redirect"] += "&draft=" + kind
+            else:
+                drafts.discard(cog, request, data.get("guild"), kind)
+        return result
+    if request.query.get("preview") == "message":
+        return await _message_preview(cog, request)
     if request.query.get("preview") == "card":
         return await _preview(cog, request)
     return await _render(cog, request)
+
+
+def _draft_conf(conf, kind, values):
+    updated = dict(conf)
+    for field in ("mode", "text", "title", "color", "image"):
+        if field in values:
+            updated[f"{kind}_{field}"] = str(values[field])[:4000]
+    if values.get("language") in LANGUAGES:
+        updated["language"] = values["language"]
+    for field in ("ping_user", "ignore_bots"):
+        if field in values:
+            updated[field] = bool(values[field])
+    return updated
+
+
+async def _message_preview(cog, request, values=None):
+    values = request.query if values is None else values
+    guild = _pick(await _visible(request), values.get("guild"))
+    kind = values.get("kind") or request.query.get("kind")
+    if guild is None or kind not in _KIND_LABEL:
+        raise web.HTTPNotFound(text="Nachricht nicht gefunden")
+    conf = await cog.config.guild(guild).all()
+    if await _can_edit(request, guild):
+        conf = _draft_conf(conf, kind, values)
+    member = await _dashboard_member(request, guild) or _example(guild)
+    return web.json_response({"html": _example_text(cog, conf, kind, member)}, headers={"Cache-Control": "no-store"})
 
 
 # --------------------------------------------------------------------------- #
@@ -168,6 +208,15 @@ async def _render(cog, request):
     csrf = request.get("webcore_csrf", "")
     readonly = bool(request.get("webcore_readonly"))
     can_edit = await _can_edit(request, guild)
+    draft_kind = request.query.get("draft")
+    if can_edit and draft_kind in _KIND_LABEL:
+        values = webcore.drafts.restore(cog, request, guild.id, draft_kind)
+        conf = _draft_conf(conf, draft_kind, values)
+        if values:
+            conf[f"{draft_kind}_enabled"] = values.get("enabled", False)
+            if draft_kind != "dm":
+                raw_channel = values.get("channel") or ""
+                conf[f"{draft_kind}_channel"] = int(raw_channel) if raw_channel.isdigit() else None
     operate_only = await _operate_only(request, guild)
     example = await _dashboard_member(request, guild) or _example(guild)
 
@@ -265,7 +314,12 @@ def _example_text(cog, conf, kind, member) -> str:
 
     emb = msg.get("embed")
     if emb is not None:
-        return f"<b>{fmt(emb.title)}</b><br>{fmt(emb.description)}"
+        from .welcome import valid_url
+        color = f"#{int(emb.color.value if emb.color else 0x5865F2):06x}"
+        image_url = str(getattr(emb.image, "url", "") or "")
+        image = f"<img src='{_esc(image_url)}' alt='' loading='lazy'>" if image_url and valid_url(image_url) else ""
+        return (f"<div class='wc-embed-preview' style='--embed-color:{color}'>"
+                f"<b>{fmt(emb.title)}</b><br>{fmt(emb.description)}{image}</div>")
     return fmt(msg.get("content"))
 
 
@@ -322,8 +376,8 @@ def _kind_form(ui, cog, guild, conf, kind, csrf, example, readonly) -> str:
                      help="Sprache der Standardtexte und des Bildes."),
         ), icon="bi-sliders", desc="Gilt für Willkommen, Abschied und DM.")
     sample = _example_text(cog, conf, kind, example)
-    preview = ui.card("Beispiel", f"<div class='wc-help'>{sample}</div>" if sample else "",
-                      icon="bi-eye", desc="So sieht die <b>gespeicherte</b> Nachricht mit dir als Beispiel aus.")
+    preview = ui.card("Live-Vorschau", f"<div class='wc-help' data-wc-preview-output>{sample}</div>",
+                      icon="bi-eye", desc="Aktualisiert sich während der Eingabe mit dir als Beispiel; es wird nichts gepostet.")
     test_label = "Test-DM an mich senden" if kind == "dm" else "Testnachricht posten"
     test_help = ("Speichert und schickt dir die DM." if kind == "dm"
                  else "Speichert und postet die Nachricht mit dir als Beispiel in den eingestellten Kanal.")
@@ -333,7 +387,10 @@ def _kind_form(ui, cog, guild, conf, kind, csrf, example, readonly) -> str:
         f"<span class='wc-help'>{_esc(test_help)}</span>",
     )
     return ui.form(f"/cogs/{SLUG}", msg_card + embed_card + extra + preview + buttons, csrf=csrf,
-                   hidden={"form": kind, "guild": guild.id}, savebar=True)
+                   hidden={"form": kind, "guild": guild.id}, savebar=True,
+                   attrs={"data-wc-preview-url": f"/cogs/{SLUG}?preview=message&kind={kind}",
+                          "data-wc-preview-action": "message_preview",
+                          "data-wc-preview-fields": "guild mode text title color image language"})
 
 
 def _test_form(ui, guild, kind, csrf) -> str:
@@ -431,6 +488,11 @@ async def _handle_post(cog, request):
 
     if form in KINDS:
         kind = form
+        values = {key: data.get(key, "") for key in ("mode", "text", "title", "color", "image", "language", "channel")}
+        values["enabled"] = bool(data.get("enabled"))
+        if kind == "welcome":
+            values.update(ping_user=bool(data.get("ping_user")), ignore_bots=bool(data.get("ignore_bots")))
+        request.app["webcore"].drafts.remember(cog, request, guild.id, kind, values)
         updates: dict = {f"{kind}_enabled": bool(data.get("enabled"))}
         if kind != "dm":
             raw = (data.get("channel") or "").strip()

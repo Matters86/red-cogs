@@ -43,7 +43,6 @@ from . import db
 from .permissions import role_permissions
 from .adminpanel import (
     ALL_PERMS,
-    DEFAULT_API_KEY,
     DEFAULT_ITEM_MAX,
     DEFAULT_MONEY_MAX,
     DEFAULT_PUBLIC_URL,

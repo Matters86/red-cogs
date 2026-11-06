@@ -1,10 +1,14 @@
 {
-  "author": ["Matters86"],
+  "author": [
+    "Matters86"
+  ],
   "name": "AdminPanel",
   "short": "FiveM-Adminpanel: Web + Discord, gemeinsame Action-Queue.",
   "description": "Teleport & Garage-Verwaltung fuer QBox-Server per Discord-Command und eingebettetem Webpanel. Der FiveM-Server pollt die Action-Queue per HTTP.",
-  "install_msg": "Setup ohne Datei-Editieren: `[p]load fivemadmin`, dann `[p]ap config key` (erzeugt den API-Key), `[p]ap config url https://deine-panel-url` und die Rollen mit `[p]ap roles set support @Rolle`. Details: `[p]ap config show`.",
-  "requirements": ["aiohttp"],
+  "install_msg": "Nach dem Laden: Bot-Owner bindet in der Ziel-Guild `[p]ap profile bind live <Name>` und ordnet mit `[p]ap profile keyenv live ADMINPANEL_LIVE_KEY` eine außerhalb Discords gesetzte Schlüssel-Umgebungsvariable zu. Panel-URL und Rollen festlegen, dann `[p]ap server live` auswählen. Keine Schlüsselwerte in Chat/DM eingeben. Aktuelle Einrichtung: fivemadmin/README.md.",
+  "requirements": [
+    "aiohttp"
+  ],
   "min_bot_version": "3.5.0",
-  "end_user_data_statement": "Speichert Admin-Aktionen (Typ, Ziel, Ersteller-ID) in einer lokalen SQLite-Datenbank."
+  "end_user_data_statement": "Speichert profilgetrennt Admin-Aktionen mit Discord-Autor-IDs, Spieler-/Sperr-/Notizdaten sowie Supportfälle, Kommentare, Prüfberichte, Fotos und deren Urheber-IDs. Login-Tokens und Sitzungen enthalten Discord-ID, Guild-ID, Anzeigename und Ablaufzeit; Red Config speichert Einzelzugriffe und Profilwahl. Auf Red-Datenlöschung werden eigene Supportfälle vollständig entfernt, eigene Beiträge/Fotos in fremden Fällen entfernt bzw. anonymisiert, Zuständigkeiten und betroffene Antwortcaches bereinigt, Login-Tokens/Sitzungen ungültig und verifizierte Aktionsautor-IDs anonymisiert. Zuordnung ausschließlich über gespeicherte exakte Discord-IDs; Spielidentitäten werden nicht aus Namen/CitizenIDs geraten. Vorhandene Sicherungskopien und Discord-Nachrichten unterliegen der Aufbewahrung des Betreibers."
 }

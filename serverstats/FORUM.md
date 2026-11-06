@@ -34,3 +34,7 @@ Diagramme für 7, 30 oder 90 Tage.
 *Kanäle* (Tabelle mit Suche) und *Einstellungen* (Aufbewahrung, Zeitzone, Sprache, ignorierte Kanäle, Zurücksetzen).
 
 *Update-Hinweis:* Früher wurde in UTC-Tagen gezählt – vorhandene Daten laufen einfach weiter (Versatz max. 2 Stunden).
+
+## Eigene Zeiträume und Vergleich
+
+Neben 7/30/90 Tagen kannst du einen eigenen Zeitraum von bis zu 730 Tagen wählen. Er wird mit dem gleich langen vorherigen Zeitraum verglichen. Tage richten sich weiter nach der Server-Zeitzone. CSV-Exporte verwenden denselben gewählten Bereich. Daten außerhalb der eingestellten Aufbewahrungszeit sind nicht verfügbar; fehlende Zählungen sind keine rückwirkende Messung.

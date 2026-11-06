@@ -193,3 +193,7 @@ if (res.ok) {
 - Slash-Befehle ggf. mit `[p]slash sync` aktivieren.
 - Datenschutz: gespeichert werden die beobachteten Kanäle samt Einstellungen und – nur für die
   Live-Rolle – die Zuordnung Discord-Nutzer-ID ↔ Twitch-Login (wird bei einer Löschanfrage entfernt).
+
+## Vorschau direkt im Editor
+
+Die Live-Vorschau zeigt auch ungespeicherte Nachrichtentexte und Platzhalter direkt beim Bearbeiten. Sie fragt Twitch nicht zusätzlich ab und pingt niemanden. Bei einem Fehler bleiben Login, Zielkanal, Ping-Rolle, Status und Nachricht als kurzlebiger Entwurf erhalten. Bearbeitungsentwürfe verschiedener Streamer werden getrennt gehalten.

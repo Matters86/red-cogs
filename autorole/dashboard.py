@@ -134,6 +134,7 @@ async def _render(cog, request):
         ("Rollen-Panels", len(panels), "bi-ui-checks-grid", None, None),
     ])
 
+    conf["_apply_preview"] = await cog.preview_apply(guild)
     body = (
         ui.tab("uebersicht", "Übersicht", "bi-speedometer2", _render_overview(ui, cog, guild, conf, csrf))
         + _render_settings(ui, cog, guild, conf, csrf)
@@ -204,6 +205,16 @@ def _check_callout(ui, check) -> str:
 
 
 def _render_apply(ui, guild, conf, csrf, status=None, running=False) -> str:
+    plan = conf.get("_apply_preview") or {}
+    assignments = plan.get("assignments") or []
+    preview = ui.callout(f"<b>Vorschau:</b> {len(assignments)} Mitglieder · "
+                        f"{sum(len(rs) for _, rs in assignments)} Rollen-Vergaben. Noch nichts geändert.", tone="info")
+    preview += ui.table(["Mitglied", "Fehlende Rollen"], [ui.row(_esc(m.display_name),
+                        _esc(", ".join(r.name for r in rs))) for m, rs in assignments],
+                        search=True, id="ar-apply-preview", empty_text="Keine Vergaben vorgesehen.")
+    preview += "<p class='wc-help'>Übersprungen: " + _esc(", ".join(f"{k}: {v}" for k, v in plan.get("skipped", {}).items())) + ".</p>"
+    if plan.get("unavailable"):
+        preview += ui.callout("Nicht vergebbare oder gelöschte Rollen: " + _esc(", ".join(r.name if r else "gelöschte Rolle" for r in plan["unavailable"])), tone="warn")
     status_html = f"<div class='wc-help'>Letzter Lauf: {_esc(status)}</div>" if status else ""
     # Fehlt noch etwas, konkret sagen WAS – statt eines ausgegrauten Buttons (sieht sonst nach
     # „keine Berechtigung“ aus).
@@ -222,12 +233,12 @@ def _render_apply(ui, guild, conf, csrf, status=None, running=False) -> str:
     else:
         body = ui.form(
             "/cogs/autorole", ui.actions(ui.button("Jetzt anwenden", icon="bi-people"), status_html),
-            csrf=csrf, hidden={"form": "applyall", "guild": guild.id},
+            csrf=csrf, hidden={"form": "applyall", "guild": guild.id, "preview_hash": plan.get("hash", "")},
             confirm="Mitglieder-Rollen an alle bestehenden Mitglieder vergeben?",
         )
     return ui.card(
         "Auf bestehende Mitglieder anwenden",
-        body,
+        preview + body,
         icon="bi-arrow-repeat",
         desc="Vergibt die eingetragenen <b>Mitglieder-Rollen</b> nachträglich an alle Menschen auf dem Server, "
              "die sie noch nicht haben. Auf großen Servern kann das einen Moment dauern.",
@@ -554,6 +565,9 @@ async def _handle_post(cog, request):
         raise web.HTTPFound(f"/cogs/autorole?guild={guild.id}&ok=Einstellungen+gespeichert")
 
     if form == "applyall":
+        plan = await cog.preview_apply(guild)
+        if data.get("preview_hash") != plan["hash"]:
+            raise web.HTTPFound(f"/cogs/autorole?guild={guild.id}&err=" + quote_plus("Auswahl geändert – aktuelle Vorschau prüfen und erneut bestätigen"))
         # Im Hintergrund: auf großen Servern dauert das Minuten (Rate-Limits) – der
         # Request würde sonst hängen/timeouten und ein zweiter Klick liefe parallel.
         if cog.start_apply_job(guild) is None:

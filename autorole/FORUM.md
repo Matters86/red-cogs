@@ -97,3 +97,7 @@ bestehende Mitglieder – alles per Formular. Unter **Rollen-Panels** legst du b
 - Sticky-Rollen sparsam einsetzen (es wird nur gespeichert, was als Sticky markiert ist).
 - Slash-Befehle ggf. mit `[p]slash sync` aktivieren.
 - Voraussetzung für das Dashboard: `webcore` ist geladen und eingerichtet.
+
+## Vorschau vor der Massenvergabe
+
+Vor **Jetzt anwenden** zeigt die Übersicht jedes betroffene Mitglied und seine noch fehlenden Rollen, die Gesamtzahl der Vergaben sowie übersprungene Bots, bereits vollständig versorgte Mitglieder und das Sicherheitslimit. Nicht vergebbare oder gelöschte Rollen werden gesondert genannt. Eine veraltete Dashboard-Vorschau muss neu bestätigt werden. Die Vorschau selbst vergibt keine Rollen; die Ausführung prüft fehlende Rollen erneut. Auch `[p]autorole applyall` zeigt zuerst eine Vorschau mit einem Bestätigungsknopf (nur die anfragende Person darf bestätigen). Die vollständige Mitgliederliste steht im Dashboard.

@@ -53,3 +53,7 @@ Punkte je Treffer: Einladung 5, Erwähnungen 4, Rate/Wiederholung 3, Link/Wall/n
 **Dashboard:** Seite **Guard** (`/cogs/guard`) – Statistik, Notmodus-Schalter, alle Einstellungen und der Aktions-Verlauf.
 
 Hinweis: `modlog`-Spiegelung ist standardmäßig an, greift aber nur bei eingerichtetem `modlog`. Es werden keine Nachrichteninhalte dauerhaft gespeichert, nur Aktions-Metadaten.
+
+## Wiederherstellung nach dem Notmodus
+
+Kann Discord einzelne Kanäle oder Einladungen noch nicht zurücksetzen, zeigt das Dashboard **Teilweise beendet** mit den ausstehenden Änderungen. Die alten Werte bleiben gespeichert; der Bot versucht die Wiederherstellung automatisch erneut. **Wiederherstellung erneut versuchen** löst den nächsten Versuch direkt aus. Fehlende Kanalrechte zuerst korrigieren. Während der Wiederherstellung werden neue Beitritte nicht weiter wegen des alten Notmodus bestraft. Bereits vor dem Notmodus pausierte Einladungen bleiben pausiert.

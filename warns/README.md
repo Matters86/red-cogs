@@ -102,3 +102,7 @@ Alles gilt nur für den jeweiligen Server.
 Gespeichert werden pro Server die Verwarnungen (Nutzer-ID, Anzeigename, Grund, Punkte, Zeitpunkt,
 Moderator-ID und -Name). Bei einer Löschanfrage (`[p]mydata forgetme` bzw. durch den Owner) werden die
 Verwarnungen des Nutzers gelöscht und er wird als Moderator anonymisiert.
+
+## Auswirkung vor dem Verwarnen
+
+Beim Auswählen eines Mitglieds und der Punkte zeigt das Dashboard den aktuellen Punktestand, den voraussichtlichen neuen Stand und die dadurch ausgelöste automatische Maßnahme. Die Vorschau verändert nichts. Ändern andere Moderatoren den Verlauf währenddessen, rechnet die Ausführung mit dem dann aktuellen Stand neu und prüft die Hierarchie und Bot-Rechte erneut. Eine angezeigte Vorschau ist keine Reservierung einer Maßnahme.

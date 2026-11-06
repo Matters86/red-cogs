@@ -233,44 +233,41 @@ class Changelog(commands.Cog):
     # ----------------------------------------------------------------- #
     #  Modal-Auswertung: validieren, Embed bauen, posten, speichern
     # ----------------------------------------------------------------- #
-    async def handle_modal_submit(
-        self,
-        interaction: discord.Interaction,
-        *,
-        title: str,
-        neu: str,
-        geaendert: str,
-        fixes: str,
-        hinweis: str,
-        category_emoji: str,
-        category_label: str,
-        lang: str,
-    ):
-        guild = interaction.guild
-        if guild is None:
-            await interaction.response.send_message(t(lang, "err_guild_only"), ephemeral=True)
-            return
+    @staticmethod
+    def entry_fields(values):
+        fields = {key: str(values.get(key) or "").strip() for key in ("title", "neu", "geaendert", "fixes", "hinweis")}
+        if not fields["title"] or len(fields["title"]) > 230:
+            raise ValueError("Bitte einen Titel mit 1 bis 230 Zeichen angeben")
+        if not has_any_section(fields["neu"], fields["geaendert"], fields["fixes"]):
+            raise ValueError("Bitte mindestens einen Eintrag unter Neu, Geändert oder Fixes angeben")
+        for key in ("neu", "geaendert", "fixes", "hinweis"):
+            if len(fields[key]) > (200 if key == "hinweis" else 500):
+                raise ValueError("Abschnitt zu lang (Neu/Geändert/Fixes: 500, Hinweis: 200 Zeichen)")
+        return fields
 
+    @staticmethod
+    def entry_embed(conf, author, fields, category_emoji, lang, when=None):
+        avatar = getattr(getattr(author, "display_avatar", None), "url", None)
+        return build_changelog_embed(**fields, category_emoji=category_emoji,
+            author_name=author.display_name, author_icon=str(avatar) if avatar else None,
+            color=int(conf.get("color", DEFAULT_COLOR)), lang=lang,
+            messages=conf.get("messages") or {}, when=when)
+
+    async def create_entry(self, guild, author, *, category_emoji="🆕", category_label="", lang=None,
+                           authorized=False, **values):
+        """Gemeinsames validiertes Veröffentlichen aus Discord und WebCore."""
         conf = await self.config.guild(guild).all()
-
-        if not has_any_section(neu, geaendert, fixes):
-            await interaction.response.send_message(t(lang, "err_need_section"), ephemeral=True)
-            return
-
+        lang = lang or conf.get("language", "de")
+        if not authorized and not await self._can_post(author, conf):
+            raise ValueError(t(lang, "err_no_perm"))
+        fields = self.entry_fields(values)
+        title, neu, geaendert, fixes, hinweis = (fields[k] for k in ("title", "neu", "geaendert", "fixes", "hinweis"))
         channel = guild.get_channel(conf["channel_id"]) if conf.get("channel_id") else None
         if channel is None:
-            await interaction.response.send_message(t(lang, "err_channel_gone"), ephemeral=True)
-            return
-
-        me = guild.me
-        perms = channel.permissions_for(me) if me is not None else None
+            raise ValueError(t(lang, "err_channel_gone"))
+        perms = channel.permissions_for(guild.me) if guild.me else None
         if perms is None or not perms.send_messages or not perms.embed_links:
-            await interaction.response.send_message(t(lang, "err_cant_send"), ephemeral=True)
-            return
-
-        # Ab hier posten wir – kann kurz dauern, daher ephemer aufschieben.
-        await interaction.response.defer(ephemeral=True)
-
+            raise ValueError(t(lang, "err_cant_send"))
         # Optionaler Ping als separate Nachricht vor dem Embed.
         if conf.get("ping_enabled") and conf.get("ping_role_id"):
             role = guild.get_role(conf["ping_role_id"])
@@ -284,27 +281,13 @@ class Changelog(commands.Cog):
                     pass
 
         now = datetime.now(tz=timezone.utc)
-        author = interaction.user
-        embed = build_changelog_embed(
-            title=title,
-            neu=neu,
-            geaendert=geaendert,
-            fixes=fixes,
-            hinweis=hinweis,
-            category_emoji=category_emoji,
-            author_name=author.display_name,
-            author_icon=str(author.display_avatar.url) if author else None,
-            color=int(conf.get("color", DEFAULT_COLOR)),
-            lang=lang,
-            messages=conf.get("messages") or {},
-            when=now,
-        )
+        embed = self.entry_embed(conf, author, fields, category_emoji, lang, now)
+
 
         try:
             message = await channel.send(embed=embed)
         except discord.HTTPException:
-            await interaction.followup.send(t(lang, "err_cant_send"), ephemeral=True)
-            return
+            raise ValueError(t(lang, "err_cant_send"))
 
         # Zähler unter dem Value-Lock frisch lesen und erhöhen, damit gleichzeitige
         # Changelogs keine kollidierenden Eintrags-IDs erzeugen (kein Überschreiben).
@@ -329,6 +312,19 @@ class Changelog(commands.Cog):
         }
         await self._store_entry(guild, record)
 
+        return record
+
+    async def handle_modal_submit(self, interaction, *, title, neu, geaendert, fixes, hinweis,
+                                  category_emoji, category_label, lang):
+        if interaction.guild is None:
+            return await interaction.response.send_message(t(lang, "err_guild_only"), ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await self.create_entry(interaction.guild, interaction.user, title=title, neu=neu,
+                geaendert=geaendert, fixes=fixes, hinweis=hinweis, category_emoji=category_emoji,
+                category_label=category_label, lang=lang)
+        except ValueError as exc:
+            return await interaction.followup.send(str(exc), ephemeral=True)
         await interaction.followup.send(t(lang, "posted_ok"), ephemeral=True)
 
     # ----------------------------------------------------------------- #

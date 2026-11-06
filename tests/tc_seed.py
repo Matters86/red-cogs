@@ -55,6 +55,7 @@ async def seed(bot, tk, cl, *, entries=12):
 
     # Changelog
     cc = cl.config.guild(g)
+    await cc.poster_roles.set([1101])  # Der Modal-Abschluss prüft die weiterhin gültige Poster-Berechtigung.
     await cc.channel_id.set(g.id + 3)
     for i in range(entries):
         rec = []

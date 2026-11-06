@@ -43,3 +43,7 @@ bekommen automatisch **Rollen-Belohnungen**. Mit schicker **Rangkarte**, **Rangl
 
 **Dashboard:** Seite **Level** mit den Reitern *Rangliste*, *Belohnungen*, *Einstellungen* und *XP anpassen*.
 Mitglieder finden unter **Mein Bereich → Mein Level** ihren Rang, ihre Rangkarte und die Top 10.
+
+## Mitglieder eindeutig auswählen
+
+Unter **XP anpassen** kannst du nach dem Namen suchen und das Mitglied anhand von Anzeigename, Nutzername und eindeutiger ID auswählen. Eine Avatarvorschau bestätigt die Auswahl. Die bestehende serverseitige Prüfung und die Bestätigung vor XP-Änderungen bleiben aktiv.

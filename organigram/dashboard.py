@@ -22,12 +22,14 @@ import re
 import secrets
 import time
 from collections import defaultdict
+from datetime import datetime
 from urllib.parse import quote_plus
 
 import discord
 from aiohttp import web
 
 from .render import PATTERNS, ChartTooLarge, render_notice_png
+from .pages import PagesTooLarge, MIN_PAGE_SIZE, MAX_PAGE_SIZE
 
 log = logging.getLogger("red.red-cogs.organigram")
 
@@ -94,17 +96,14 @@ def _label_of(guild, nodes: dict, nid) -> str:
     return "(ohne Titel)"
 
 
-def _people_count(guild, nd: dict) -> int:
-    role = guild.get_role(nd["role_id"]) if nd.get("role_id") else None
-    manual = len([m for m in nd.get("manual_names", []) if (m or "").strip()])
-    return (len(role.members) if role else 0) + manual
-
-
 def _posted_channels(guild, chart: dict) -> list[str]:
-    return [
-        f"#{ch.name}" for p in chart.get("posts", [])
-        if (ch := guild.get_channel_or_thread(p.get("channel_id"))) is not None
-    ]
+    result = []
+    for entry in chart.get("posts", []):
+        channel = guild.get_channel_or_thread(entry.get("channel_id"))
+        name = channel.name if channel is not None else entry.get("channel_name")
+        if entry.get("message_id") and name:
+            result.append(f"#{name}")
+    return result
 
 
 def _accent(value) -> str:
@@ -177,19 +176,34 @@ async def _render(cog, request):
         if not chart:
             raise web.HTTPNotFound(text="Organigramm nicht gefunden")
         try:
-            png = await cog._render_png(guild, chart)
+            if request.query.get("download") and chart.get("image_mode") == "pages" and "page" not in request.query:
+                archive = await cog._export_images_zip(guild, chart)
+                return web.Response(body=archive, content_type="application/zip", headers={
+                    "Cache-Control": "no-store",
+                    "Content-Disposition": f'attachment; filename="{_slug(chart.get("name"))}-seiten.zip"'})
+            page_raw = request.query.get("page", "1")
+            if not page_raw.isdigit() or int(page_raw) < 1:
+                raise web.HTTPNotFound(text="Seite nicht gefunden")
+            png = await cog._render_png(guild, chart, page=int(page_raw) - 1)
+        except IndexError:
+            raise web.HTTPNotFound(text="Seite nicht gefunden") from None
+        except PagesTooLarge as exc:
+            raise web.HTTPBadRequest(text=str(exc)) from None
         except ChartTooLarge as exc:
             if request.query.get("download"):
                 raise web.HTTPBadRequest(text=f"Organigramm zu groß für ein Bild ({exc.width}×{exc.height} px)")
             png = render_notice_png("Zu groß für ein Bild",
                                     f"{exc.width}×{exc.height} px – bitte Modus „Embed“/„Text“ oder weniger Positionen.")
+        except web.HTTPException:
+            raise
         except Exception:
             log.exception("Vorschau-Rendering fehlgeschlagen")
             raise web.HTTPInternalServerError(text="Rendering fehlgeschlagen")
         headers = {"Cache-Control": "no-store"}
         if request.query.get("download"):
+            suffix = f"-seite-{int(page_raw):03d}" if chart.get("image_mode") == "pages" else ""
             headers["Content-Disposition"] = (
-                f'attachment; filename="{_slug(chart.get("name"))}.png"'
+                f'attachment; filename="{_slug(chart.get("name"))}{suffix}.png"'
             )
         return web.Response(body=png, content_type="image/png", headers=headers)
 
@@ -208,7 +222,14 @@ async def _render(cog, request):
     selected = charts.get(sel_cid) if sel_cid else None
 
     if selected:
-        body = _render_editor(ui, guild, sel_cid, selected, csrf, request)
+        try:
+            manifest = await cog._image_manifest(guild, selected)
+        except PagesTooLarge as exc:
+            manifest = []
+            body_error = ui.callout(_esc(str(exc)), tone="bad")
+        else:
+            body_error = ""
+        body = body_error + _render_editor(ui, guild, sel_cid, selected, csrf, request, manifest)
         title = "Organigramm · bearbeiten"
     else:
         body = _render_overview(ui, guild, charts, csrf)
@@ -237,7 +258,9 @@ def _render_overview(ui, guild, charts, csrf) -> str:
     return (
         head
         + ui.tab("organigramme", "Organigramme", "bi-diagram-3", _render_list(ui, guild, charts, csrf), count=len(charts))
+        + ui.tab("schnellstart", "Schnellstart", "bi-magic", _render_quickstart(ui, guild, csrf))
         + ui.tab("neu", "Neu anlegen", "bi-plus-square", _render_new(ui, guild, csrf))
+        + ui.tab("muster", "Layout-Beispiele", "bi-images", _render_gallery(ui, guild, csrf))
     )
 
 
@@ -245,9 +268,8 @@ def _render_list(ui, guild, charts, csrf) -> str:
     if not charts:
         return ui.card(body=ui.empty(
             "bi-diagram-3", "Noch keine Organigramme.",
-            "Lege im Reiter „Neu anlegen“ dein erstes Organigramm an.",
-            action=ui.button("Organigramm anlegen", icon="bi-plus-lg", href="#neu",
-                             attrs={"onclick": "if (window.wcActivateTab) { wcActivateTab('neu', true); return false; }"}),
+            "Der Schnellstart erstellt aus ausgewählten Discord-Rollen eine bearbeitbare Hierarchie.",
+            action=ui.goto("Mit Rollen starten", "schnellstart", icon="bi-magic"),
         ))
     rows = []
     for cid, c in charts.items():
@@ -270,6 +292,8 @@ def _render_list(ui, guild, charts, csrf) -> str:
             ui.badge(MODE_LABEL.get(c.get("mode", "image"), "Bild"), "info"),
             f"<span class='mono'>{n}</span>",
             (ui.badge(posted, "ok") if posted else ui.badge("nicht gepostet", "muted"))
+            + (" " + ui.badge(f"{sum(bool(p.get('last_error')) for p in c.get('posts', []))} Fehler", "bad")
+               if any(p.get("last_error") for p in c.get("posts", [])) else "")
             + ("" if c.get("auto_update", True) else " " + ui.badge("Auto-Update aus", "warn")),
             f"><div class='wc-row-actions'>{edit}{delete}</div>",
         ))
@@ -317,12 +341,30 @@ def _chart_cards(ui, chart: dict, form_id: str) -> str:
     opts = ui.card("Optionen", "<div class='wc-switches'>"
         + ui.switch("show_avatars", "Avatare im Bild anzeigen", chart.get("show_avatars", True),
                     desc="Profilbilder der Rollenmitglieder neben den Namen.")
-        + ui.switch("show_vacant", "Leere Positionen zeigen", chart.get("show_vacant", True),
-                    desc="Positionen ohne Personen erscheinen als „unbesetzt“.")
+        + ui.switch("show_vacant", "Hinweis „unbesetzt“ anzeigen", chart.get("show_vacant", True),
+                    desc="Zeigt bei leeren Positionen „unbesetzt“. Die Position selbst bleibt sichtbar.")
         + ui.switch("auto_update", "Automatisch aktualisieren", chart.get("auto_update", True),
                     desc="Gepostete Beiträge werden bei Rollen-Änderungen neu erstellt.")
         + "</div>", icon="bi-toggles")
-    return general + look + opts
+    members = ui.card("Mitglieder", ui.field(
+        "Mehrere Positionen pro Mitglied",
+        ui.select("member_display", [
+            ("multiple", "Mehrfach – in jeder passenden Position"),
+            ("highest", "Einmal – nur in der höchsten Position"),
+        ], chart.get("member_display", "multiple")),
+        help="Höchste Position = oberste Ebene im Organigramm. Bei gleicher Ebene entscheidet "
+             "die sichtbare Reihenfolge der Zweige/Positionen. Discord-Rollenhöhe spielt dabei "
+             "keine Rolle. Zusätzliche Freitext-Namen bleiben unverändert.",
+    ), icon="bi-people")
+    pagination = ui.disclosure("Große Organigramme: Bildseiten", ui.grid(
+        ui.field("Bildaufteilung", ui.select("image_mode", [("single", "Einzelbild – bisherige Übersicht"),
+                   ("pages", "Mehrseitig – Hierarchie und vollständige Personenlisten")], chart.get("image_mode", "single")),
+                 help="Mehrseitig zeigt alle Positionen und Personen. Jede Bildseite wird als eigene Discord-Nachricht verfolgt."),
+        ui.field("Personen / Positionen je Seite", ui.number("page_size", chart.get("page_size", 20),
+                   min=MIN_PAGE_SIZE, max=MAX_PAGE_SIZE),
+                 help="5–50. Gilt für die Bildseiten; Embed und Text behalten ihre bisherigen Discord-Limits."),
+    ))
+    return general + look + members + pagination + opts
 
 
 def _render_new(ui, guild, csrf) -> str:
@@ -333,13 +375,48 @@ def _render_new(ui, guild, csrf) -> str:
     )
 
 
+def _render_quickstart(ui, guild, csrf) -> str:
+    roles = sorted((role for role in guild.roles if not role.is_default()),
+                   key=lambda role: role.position, reverse=True)
+    return ui.card("In drei Schritten zum Organigramm", ui.form(
+        "/cogs/organigram",
+        ui.field("1 · Name", ui.text_input("name", placeholder="Unser Team", attrs={"required": True}))
+        + ui.field("2 · Discord-Rollen auswählen", ui.select(
+            "roles", [(r.id, r.name) for r in roles], [], multiple=True,
+            placeholder="Rollen suchen und auswählen …", attrs={"required": True}),
+            help="Die höchste ausgewählte Discord-Rolle steht an der Spitze; weitere folgen darunter. "
+                 "Du kannst die Hierarchie danach mit Unterpositionen und Pfeilen anpassen.")
+        + ui.field("Aufbau", ui.select("structure", [("chain", "Hierarchie – Rollen untereinander"),
+                                                      ("flat", "Teamübersicht – Rollen nebeneinander")], "chain"))
+        + ui.actions(ui.button("3 · Hierarchie ansehen", icon="bi-eye")),
+        csrf=csrf, hidden={"form": "quickstart", "guild": guild.id}),
+        desc="Erstellt einen Entwurf. Erst nach der Vorschau wählst du einen Kanal und klickst auf Posten.",
+        icon="bi-magic")
+
+
+def _render_gallery(ui, guild, csrf, cid=None) -> str:
+    cards = []
+    for pattern, label in PATTERNS.items():
+        image = (f"<img class='img-fluid rounded' src='/cogs/organigram?muster={_esc(pattern)}' "
+                 f"alt='{_esc(label)} – Beispiel' loading='lazy'>")
+        if cid:
+            image += ui.form("/cogs/organigram", ui.button("Layout verwenden", icon="bi-check2"),
+                             csrf=csrf, hidden={"form": "pattern_apply", "guild": guild.id,
+                                                "chart": cid, "pattern": pattern})
+        cards.append(ui.card(label, image, icon="bi-image"))
+    return ui.columns(*cards, cols=2)
+
+
 # --------------------------------------------------------------------------- #
 #  Editor eines Organigramms
 # --------------------------------------------------------------------------- #
-def _render_editor(ui, guild, cid, chart, csrf, request) -> str:
+def _render_editor(ui, guild, cid, chart, csrf, request, manifest=None) -> str:
+    from .organigram import resolve_node_people
+
     nodes = chart.get("nodes", {})
     where = _posted_channels(guild, chart)
-    n_people = sum(_people_count(guild, nd) for nd in nodes.values())
+    node_people = resolve_node_people(guild, chart)
+    n_people = sum(len(entries) for entries in node_people.values())
 
     back = ui.button("Alle Organigramme", icon="bi-arrow-left", kind="ghost",
                      href=f"/cogs/organigram?guild={guild.id}#organigramme")
@@ -365,13 +442,58 @@ def _render_editor(ui, guild, cid, chart, csrf, request) -> str:
     return (
         head
         + ui.tab("positionen", "Positionen", "bi-diagram-2",
-                 _render_positions(ui, guild, cid, nodes, csrf, request), count=len(nodes))
+                  _render_positions(ui, guild, cid, nodes, csrf, request, node_people), count=len(nodes))
         + ui.tab("einstellungen", "Einstellungen", "bi-sliders", settings)
-        + ui.tab("posten", "Vorschau & Posten", "bi-send", _render_preview_post(ui, guild, cid, chart, where, csrf))
+        + ui.tab("posten", "Vorschau & Posten", "bi-send", _render_preview_post(ui, guild, cid, chart, where, csrf, request, manifest))
+        + ui.tab("muster", "Layout-Beispiele", "bi-images", _render_gallery(ui, guild, csrf, cid))
     )
 
 
-def _render_positions(ui, guild, cid, nodes, csrf, request) -> str:
+def _position_tree(ui, guild, cid, nodes, csrf, node_people):
+    children = defaultdict(list)
+    for nid, nd in nodes.items():
+        parent = nd.get("parent")
+        children[parent if parent in nodes and parent != nid else None].append(nid)
+    for siblings in children.values():
+        siblings.sort(key=lambda nid: (nodes[nid].get("order", 0), (nodes[nid].get("label") or "").lower()))
+    visited = set()
+
+    def branch(parent=None):
+        pieces = []
+        siblings = children[parent]
+        for index, nid in enumerate(siblings):
+            if nid in visited:
+                continue
+            visited.add(nid)
+            label = _label_of(guild, nodes, nid)
+            link = f"/cogs/organigram?guild={guild.id}&chart={_esc(cid)}"
+            controls = ui.button("Bearbeiten", kind="ghost", small=True, href=f"{link}&node={_esc(nid)}#positionen")
+            controls += ui.button("Unterposition", icon="bi-plus", kind="ghost", small=True,
+                                  href=f"{link}&parent={_esc(nid)}#positionen")
+            for direction, caption, icon, disabled in (
+                    ("up", "Nach oben", "bi-arrow-up", index == 0),
+                    ("down", "Nach unten", "bi-arrow-down", index == len(siblings) - 1)):
+                controls += ui.form("/cogs/organigram", ui.button(
+                    caption, icon=icon, kind="ghost", small=True, attrs={"disabled": disabled}),
+                    csrf=csrf, hidden={"form": "node_move", "guild": guild.id, "chart": cid,
+                                       "node": nid, "direction": direction})
+            people = node_people.get(nid, [])
+            names = ", ".join(_esc(name) for name, _ in people[:50]) or "Keine Personen zugeordnet"
+            if len(people) > 50:
+                names += f" · +{len(people) - 50} weitere"
+            pieces.append(f"<li role='treeitem'><div class='wc-toolbar'><b>{_esc(label)}</b>"
+                          + ui.badge(f"{len(people)} Personen", "muted")
+                          + f"<div class='wc-row-actions'>{controls}</div></div>"
+                          + f"<details><summary>Personen ansehen</summary><p>{names}</p></details>"
+                          + branch(nid) + "</li>")
+        return "<ul role='group'>" + "".join(pieces) + "</ul>" if pieces else ""
+
+    tree = branch()
+    return ui.card("Teamstruktur", "<div role='tree' aria-label='Positionen im Organigramm'>" + tree + "</div>",
+                   icon="bi-diagram-3", desc="Unterposition hinzufügen oder Positionen innerhalb derselben Ebene verschieben.")
+
+
+def _render_positions(ui, guild, cid, nodes, csrf, request, node_people) -> str:
     prows = []
     for nid, nd in sorted(nodes.items(), key=lambda kv: (kv[1].get("order", 0), _label_of(guild, nodes, kv[0]).lower())):
         role = guild.get_role(nd["role_id"]) if nd.get("role_id") else None
@@ -393,7 +515,7 @@ def _render_positions(ui, guild, cid, nodes, csrf, request) -> str:
             f"<div class='wc-cell-sub'>{_esc(sub)}</div>",
             ui.badge(role_name, "bad" if role_name == "@gelöscht" else "muted") if role_name != "—"
             else "<span class='wc-muted'>—</span>",
-            f"><span class='mono'>{_people_count(guild, nd)}</span>",
+            f"><span class='mono'>{len(node_people.get(nid, []))}</span>",
             f"><div class='wc-row-actions'>{edit}{delete}</div>",
         ))
     if prows:
@@ -410,15 +532,22 @@ def _render_positions(ui, guild, cid, nodes, csrf, request) -> str:
             "Lege unten die oberste Position an (z. B. „Leitung“) und ordne weitere darunter an."))
 
     editor = _render_node_editor(ui, guild, cid, nodes, csrf, request)
-    # Beim Bearbeiten steht der Editor oben, damit er nach dem Klick sofort sichtbar ist.
-    return editor + table if request.query.get("node") in nodes else table + editor
+    tree = _position_tree(ui, guild, cid, nodes, csrf, node_people) if nodes else table
+    preview = ui.card("Aktuelle Vorschau", f"<img class='img-fluid rounded' loading='lazy' "
+                      f"src='/cogs/organigram?guild={guild.id}&preview={_esc(cid)}&t={int(time.time())}' "
+                      "alt='Organigramm mit den gespeicherten Positionen'>", icon="bi-image")
+    content = ui.columns(tree, preview)
+    details = "<details><summary>Alle Positionen als Tabelle</summary>" + table + "</details>" if nodes else ""
+    return (editor + content if request.query.get("node") in nodes or request.query.get("parent") in nodes
+            else content + editor) + details
 
 
 def _render_node_editor(ui, guild, cid, nodes, csrf, request) -> str:
     sel_nid = request.query.get("node")
     nd = nodes.get(sel_nid) if sel_nid else None
-    nd = nd or {}
-    is_edit = bool(nd)
+    if not nd:
+        nd = {"parent": request.query.get("parent")} if request.query.get("parent") in nodes else {}
+    is_edit = bool(sel_nid and sel_nid in nodes)
 
     color = (nd.get("color") or "").strip()
     color_val = ("#" + color.lstrip("#")) if color else "#3ddc97"
@@ -446,18 +575,19 @@ def _render_node_editor(ui, guild, cid, nodes, csrf, request) -> str:
                  help="Unter welcher Position diese im Organigramm hängt."),
         ui.field("Verknüpfte Rolle", ui.select("role_id", role_items, nd.get("role_id"), none_label="— keine Rolle —"),
                  help="Alle Mitglieder dieser Rolle erscheinen automatisch."),
-        ui.field("Reihenfolge", ui.number("order", int(nd.get("order", 0) or 0)),
-                 help="Kleinere Zahl = weiter links bzw. oben."),
         ui.field("Zusätzliche Namen", ui.textarea("manual_names", manual_text, rows=3,
                                                    placeholder="Max Mustermann\nErika Beispiel"),
                  help="Eine Person pro Zeile – für Personen ohne passende Discord-Rolle. "
                       "Werden zusätzlich zu den Rollenmitgliedern angezeigt.", wide=True),
+    ) + "<details><summary>Weitere Optionen: Reihenfolge, Emoji und Farbe</summary>" + ui.grid(
+        ui.field("Reihenfolge", ui.number("order", int(nd.get("order", 0) or 0)),
+                 help="Kleinere Zahl = weiter links bzw. oben. Oder die Pfeile in der Teamstruktur verwenden."),
         ui.field("Emoji", ui.text_input("emoji", nd.get("emoji", ""), placeholder="👑"),
                  help="Nur in der Embed- und Text-Ausgabe."),
         ui.field("Farbe", ui.switch("use_color", "Eigene Farbe statt Rollenfarbe", has_color)
                  + _color_input(ui, "color", color_val),
                  help="Ohne eigene Farbe wird die Farbe der verknüpften Rolle genutzt."),
-    )
+    ) + "</details>"
     buttons = [ui.button("Position speichern" if is_edit else "Position anlegen", icon="bi-check2")]
     if is_edit:
         buttons.append(ui.button("Abbrechen", icon="bi-x-lg", kind="ghost",
@@ -471,15 +601,31 @@ def _render_node_editor(ui, guild, cid, nodes, csrf, request) -> str:
     )
 
 
-def _render_preview_post(ui, guild, cid, chart, where, csrf) -> str:
+def _render_preview_post(ui, guild, cid, chart, where, csrf, request, manifest=None) -> str:
     cache_bust = int(time.time())
     preview_src = f"/cogs/organigram?guild={guild.id}&preview={_esc(cid)}&t={cache_bust}"
     download_src = f"/cogs/organigram?guild={guild.id}&download={_esc(cid)}"
+    is_pages = chart.get("image_mode") == "pages"
+    navigation = ""
+    if is_pages:
+        manifest = manifest or []
+        raw_page = request.query.get("page", "1")
+        chosen = int(raw_page) if raw_page.isdigit() and 1 <= int(raw_page) <= len(manifest) else 1
+        preview_src += f"&page={chosen}"
+        navigation = ui.form("/cogs/organigram", ui.field("Bildseite auswählen", ui.select(
+            "page", [(index + 1, f"{index + 1}/{len(manifest)} · {title}") for index, title in enumerate(manifest)],
+            chosen, autosubmit=True)), csrf="", method="get",
+            hidden={"guild": guild.id, "chart": cid, "tab": "posten"})
+    downloads = ui.button("Alle Seiten als ZIP" if is_pages else "PNG herunterladen",
+                          icon="bi-download", kind="ghost", small=True, href=download_src)
+    if is_pages:
+        downloads += ui.button("Diese Seite als PNG", icon="bi-image", kind="ghost", small=True,
+                               href=download_src + f"&page={chosen}")
     preview = ui.card(
         "Vorschau",
-        f"<div class='text-center'><img class='img-fluid rounded' src='{preview_src}' alt='Vorschau' loading='lazy'></div>",
-        icon="bi-image", desc="So sieht die Bild-Ausgabe mit den aktuellen Einstellungen aus.",
-        actions=ui.button("PNG herunterladen", icon="bi-download", kind="ghost", small=True, href=download_src),
+        navigation + f"<div class='text-center'><img class='img-fluid rounded' src='{preview_src}' alt='Vorschau' loading='lazy'></div>",
+        icon="bi-image", desc="Alle Seiten enthalten vollständige Personenlisten." if is_pages else "So sieht die Bild-Ausgabe mit den aktuellen Einstellungen aus.",
+        actions=downloads,
     )
     chan_items = [(c.id, f"#{c.name}") for c in guild.text_channels]
     # Pflichtauswahl: ohne Kanal meldet der Browser das Feld direkt.
@@ -498,14 +644,54 @@ def _render_preview_post(ui, guild, cid, chart, where, csrf) -> str:
                 cols=1,
             )
             + ui.callout("Ein bereits geposteter Beitrag im selben Kanal wird aktualisiert statt neu erstellt. "
-                         "Mit aktiviertem Auto-Update bleibt er danach automatisch aktuell.", tone="info")
+                         "Mit aktiviertem Auto-Update bleibt er danach automatisch aktuell. "
+                         + (f"Bild-Ausgabe: {len(manifest or [])} Seiten, je eine verfolgte Nachricht. "
+                            "Text und Embed bleiben Einzelbeiträge mit ihren bisherigen Kürzungsgrenzen." if is_pages else ""), tone="info")
             + ui.actions(ui.button("Posten / Aktualisieren", icon="bi-send")),
             csrf=csrf, hidden={"form": "post", "guild": guild.id, "chart": cid},
         )
         + f"<div class='wc-sub'>Aktuell gepostet in</div><div>{current}</div>",
         icon="bi-send",
     )
-    return ui.columns(preview, post)
+    return ui.columns(preview, post) + _render_post_status(ui, guild, cid, chart, csrf)
+
+
+def _render_post_status(ui, guild, cid, chart, csrf):
+    rows = []
+    for entry in chart.get("posts", []):
+        channel = guild.get_channel_or_thread(entry.get("channel_id"))
+        name = f"#{channel.name}" if channel else (f"#{entry['channel_name']}" if entry.get("channel_name")
+                                                    else f"Kanal {entry.get('channel_id')}")
+        message_id = entry.get("message_id")
+        link = (ui.button("In Discord öffnen", icon="bi-box-arrow-up-right", kind="ghost", small=True,
+                          href=f"https://discord.com/channels/{guild.id}/{entry['channel_id']}/{message_id}")
+                if message_id else "")
+        ids = entry.get("page_message_ids") or ([message_id] if message_id else [])
+        if len(ids) > 1:
+            page_links = " ".join(ui.button(f"Seite {index + 1}", kind="ghost", small=True,
+                href=f"https://discord.com/channels/{guild.id}/{entry['channel_id']}/{mid}")
+                for index, mid in enumerate(ids))
+            link += ui.disclosure(f"Alle {len(ids)} Seiten öffnen", page_links)
+        stamp = entry.get("last_success_at")
+        try:
+            stamp = datetime.fromisoformat(stamp).strftime("%d.%m.%Y %H:%M UTC") if stamp else "Noch nicht geprüft"
+        except (ValueError, TypeError):
+            stamp = "Noch nicht geprüft"
+        error = entry.get("last_error")
+        status = (ui.badge("Veröffentlichung nicht abgeschlossen" if entry.get("publishing") else "Aktualisierung fehlgeschlagen",
+                           "warn" if entry.get("publishing") else "bad") + f"<div class='wc-cell-sub'>{_esc(error)}</div>"
+                  if error else ui.badge("Aktuell" if entry.get("last_success_at") else "Bereit", "ok"))
+        retry = ui.form("/cogs/organigram", ui.button("Erneut versuchen" if error else "Aktualisieren",
+                        icon="bi-arrow-repeat", kind="ghost", small=True), csrf=csrf,
+                        hidden={"form": "retry", "guild": guild.id, "chart": cid,
+                                "channel_id": entry.get("channel_id")}, operate=True)
+        rows.append(ui.row(_esc(name), status, _esc(stamp),
+                           f"><div class='wc-row-actions'>{link}{retry}</div>"
+                           + (f"<div class='wc-cell-sub'>{len(entry.get('message_ids') or ids)} Nachrichten verfolgt</div>"
+                              if message_id else "")))
+    return ui.card("Veröffentlichte Beiträge", ui.table(["Kanal", "Status", "Letzte erfolgreiche Aktualisierung", ">"],
+                   rows, empty_text="Noch keine Beiträge. Erst mit Posten wird eine Discord-Nachricht erstellt."),
+                   icon="bi-broadcast")
 
 
 # --------------------------------------------------------------------------- #
@@ -534,10 +720,23 @@ async def _handle_post(cog, request):
     base = f"/cogs/organigram?guild={guild.id}"
 
     # ---- neues Organigramm ---------------------------------------------- #
-    if form == "chart_new":
+    if form in {"chart_new", "quickstart"}:
         name = (data.get("name") or "").strip()
         if not name:
             raise web.HTTPFound(f"{base}&ok=Bitte+einen+Namen+angeben")
+        try:
+            size = int(data.get("page_size", 20))
+        except (ValueError, TypeError):
+            size = 0
+        if not MIN_PAGE_SIZE <= size <= MAX_PAGE_SIZE:
+            raise web.HTTPFound(f"{base}&err=Seitengr%C3%B6%C3%9Fe+muss+5+bis+50+sein")
+        selected_roles = []
+        if form == "quickstart":
+            ids = set(data.getall("roles", []))
+            selected_roles = sorted((r for r in guild.roles if str(r.id) in ids and not r.is_default()),
+                                    key=lambda r: r.position, reverse=True)
+            if not selected_roles or len(selected_roles) != len(ids):
+                raise web.HTTPFound(f"{base}&err=Bitte+g%C3%BCltige+Rollen+ausw%C3%A4hlen#schnellstart")
         async with gconf.charts() as charts:
             if any(c.get("name", "").lower() == name.lower() for c in charts.values()):
                 raise web.HTTPFound(f"{base}&ok=Name+bereits+vergeben")
@@ -549,6 +748,9 @@ async def _handle_post(cog, request):
                 "title": (data.get("title") or "").strip(),
                 "pattern": data.get("pattern") if data.get("pattern") in PATTERNS else "baum",
                 "mode": MODE_MAP.get(data.get("mode"), "image"),
+                "member_display": "highest" if data.get("member_display") == "highest" else "multiple",
+                "image_mode": "pages" if data.get("image_mode") == "pages" else "single",
+                "page_size": size,
                 "accent": (data.get("accent") or "#3ddc97").strip(),
                 "show_avatars": "show_avatars" in data,
                 "show_vacant": "show_vacant" in data,
@@ -556,7 +758,64 @@ async def _handle_post(cog, request):
                 "nodes": {},
                 "posts": [],
             }
-        raise web.HTTPFound(f"{base}&chart={new_id}&ok=Organigramm+angelegt")
+            if form == "quickstart":
+                chart = charts[new_id]
+                chart.update(show_avatars=True, show_vacant=True, auto_update=True, draft=True)
+                previous = None
+                for index, role in enumerate(selected_roles):
+                    nid = secrets.token_hex(3)
+                    while nid in chart["nodes"]:
+                        nid = secrets.token_hex(3)
+                    chart["nodes"][nid] = {"role_id": role.id, "label": "", "parent": previous,
+                                           "order": index, "manual_names": [], "emoji": "", "color": ""}
+                    if data.get("structure") != "flat":
+                        previous = nid
+        anchor = "#posten" if form == "quickstart" else ""
+        raise web.HTTPFound(f"{base}&chart={new_id}&ok=Organigramm+angelegt{anchor}")
+
+    if form in {"node_move", "pattern_apply"}:
+        cid = data.get("chart")
+        async with gconf.charts() as charts:
+            chart = charts.get(cid)
+            if chart is None:
+                raise web.HTTPFound(f"{base}&err=Organigramm+nicht+gefunden")
+            if form == "pattern_apply":
+                pattern = data.get("pattern")
+                if pattern not in PATTERNS:
+                    raise web.HTTPFound(f"{base}&chart={cid}&err=Ung%C3%BCltiges+Layout")
+                chart["pattern"] = pattern
+            else:
+                nodes, nid, direction = chart.get("nodes", {}), data.get("node"), data.get("direction")
+                if nid not in nodes or direction not in {"up", "down"}:
+                    raise web.HTTPFound(f"{base}&chart={cid}&err=Ung%C3%BCltige+Position")
+                siblings = sorted((key for key, nd in nodes.items() if nd.get("parent") == nodes[nid].get("parent")),
+                                  key=lambda key: (nodes[key].get("order", 0), (nodes[key].get("label") or "").lower()))
+                index = siblings.index(nid)
+                other = index + (-1 if direction == "up" else 1)
+                if 0 <= other < len(siblings):
+                    siblings[index], siblings[other] = siblings[other], siblings[index]
+                    for order, key in enumerate(siblings):
+                        nodes[key]["order"] = order
+            refresh = bool(chart.get("posts")) and chart.get("auto_update", True)
+        if refresh:
+            cog._schedule(guild.id, cid)
+        raise web.HTTPFound(f"{base}&chart={cid}&ok=Gespeichert#positionen")
+
+    if form == "retry":
+        cid = data.get("chart")
+        raw_channel = data.get("channel_id")
+        if raw_channel and not raw_channel.isdigit():
+            raise web.HTTPFound(f"{base}&err=Ung%C3%BCltiger+Kanal")
+        chart = (await gconf.charts()).get(cid)
+        if chart is None or (raw_channel and not any(str(p.get("channel_id")) == raw_channel for p in chart.get("posts", []))):
+            raise web.HTTPFound(f"{base}&err=Beitrag+nicht+gefunden")
+        result = await cog._refresh_chart(guild.id, cid, channel_id=int(raw_channel) if raw_channel else None)
+        summary = f"{result['updated']} aktualisiert"
+        if result["failed"]:
+            summary += f", {result['failed']} fehlgeschlagen"
+        if result["removed"]:
+            summary += f", {result['removed']} gelöschte Kanäle entfernt"
+        raise web.HTTPFound(f"{base}&chart={cid}&{'err' if result['failed'] else 'ok'}={quote_plus(summary)}#posten")
 
     # ---- Einstellungen speichern ---------------------------------------- #
     if form == "chart_settings":
@@ -566,6 +825,15 @@ async def _handle_post(cog, request):
             chart = charts.get(cid)
             if not chart:
                 raise web.HTTPFound(f"{base}&ok=Organigramm+nicht+gefunden")
+            try:
+                size = int(data.get("page_size", chart.get("page_size", 20)))
+            except (ValueError, TypeError):
+                size = 0
+            if not MIN_PAGE_SIZE <= size <= MAX_PAGE_SIZE:
+                raise web.HTTPFound(f"{base}&chart={cid}&err=Seitengr%C3%B6%C3%9Fe+muss+5+bis+50+sein")
+            chart["page_size"] = size
+            image_mode = data.get("image_mode", chart.get("image_mode", "single"))
+            chart["image_mode"] = "pages" if image_mode == "pages" else "single"
             if name and any(
                 c.get("name", "").lower() == name.lower() and k != cid
                 for k, c in charts.items()
@@ -577,6 +845,8 @@ async def _handle_post(cog, request):
             if data.get("pattern") in PATTERNS:
                 chart["pattern"] = data.get("pattern")
             chart["mode"] = MODE_MAP.get(data.get("mode"), chart.get("mode", "image"))
+            member_display = data.get("member_display", chart.get("member_display", "multiple"))
+            chart["member_display"] = "highest" if member_display == "highest" else "multiple"
             chart["accent"] = (data.get("accent") or "#3ddc97").strip()
             chart["show_avatars"] = "show_avatars" in data
             chart["show_vacant"] = "show_vacant" in data
@@ -589,8 +859,9 @@ async def _handle_post(cog, request):
     # ---- Organigramm löschen -------------------------------------------- #
     if form == "chart_delete":
         cid = data.get("chart")
-        async with gconf.charts() as charts:
-            charts.pop(cid, None)
+        async with cog._lock(guild.id, cid):
+            async with gconf.charts() as charts:
+                charts.pop(cid, None)
         raise web.HTTPFound(f"{base}&ok=Organigramm+gel%C3%B6scht")
 
     # ---- Position speichern --------------------------------------------- #
@@ -600,6 +871,8 @@ async def _handle_post(cog, request):
         label = (data.get("label") or "").strip()
         role_raw = data.get("role_id")
         role_id = int(role_raw) if role_raw and role_raw.isdigit() else None
+        if role_id is not None and (guild.get_role(role_id) is None or guild.get_role(role_id).is_default()):
+            raise web.HTTPFound(f"{base}&chart={cid}&err=Ung%C3%BCltige+Rolle")
         if not label and role_id is None:
             dest = f"{base}&chart={cid}" + (f"&node={nid}" if nid else "")
             raise web.HTTPFound(f"{dest}&ok=Bitte+Bezeichnung+oder+Rolle+angeben")

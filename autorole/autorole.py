@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -371,21 +372,15 @@ class Autorole(commands.Cog):
         Rückgabe ``(added, members)`` oder ``None`` (deaktiviert / keine Rollen /
         keine Rechte).
         """
-        gconf = self.config.guild(guild)
-        if not await gconf.enabled():
+        plan = await self.preview_apply(guild)
+        if plan["blocked"]:
             return None
-        roles = self._filter_roles(guild, await gconf.join_roles())
-        me = guild.me
-        if not roles or me is None or not me.guild_permissions.manage_roles:
-            return None
-        added = touched = count = 0
-        for member in guild.members:
-            if member.bot:
+        added = touched = 0
+        for member, missing in plan["assignments"]:
+            # Zwischen Vorschau und Ausführung können Mitglieder Rollen erhalten/verlassen.
+            if guild.get_member(member.id) is None:
                 continue
-            count += 1
-            if count > APPLY_LIMIT:
-                break
-            missing = [r for r in roles if r not in member.roles]
+            missing = [role for role in missing if role not in member.roles and self._assignable_reason(guild, role) is None]
             if not missing:
                 continue
             try:
@@ -395,6 +390,34 @@ class Autorole(commands.Cog):
             added += len(missing)
             touched += 1
         return added, touched
+
+    async def preview_apply(self, guild):
+        """Dieselbe aktuelle Auswahl wie applyall, ohne Rollen zu verändern."""
+        conf = await self.config.guild(guild).all()
+        roles = self._filter_roles(guild, conf["join_roles"])
+        blocked = (not conf["enabled"] or not roles or guild.me is None
+                   or not guild.me.guild_permissions.manage_roles)
+        skipped = {"Bots": 0, "Rollen bereits vorhanden": 0, "Über dem Limit": 0}
+        assignments, humans = [], 0
+        for member in guild.members:
+            if member.bot:
+                skipped["Bots"] += 1
+                continue
+            humans += 1
+            if humans > APPLY_LIMIT:
+                skipped["Über dem Limit"] += 1
+                continue
+            missing = [role for role in roles if role not in member.roles]
+            if not missing:
+                skipped["Rollen bereits vorhanden"] += 1
+            elif not blocked:
+                assignments.append((member, missing))
+        unavailable = [guild.get_role(int(rid)) for rid in conf["join_roles"]
+                       if int(rid) not in {role.id for role in roles}]
+        snapshot = (blocked, [(m.id, [r.id for r in rs]) for m, rs in assignments], skipped,
+                    sorted(int(rid) for rid in conf["join_roles"]))
+        return {"assignments": assignments, "skipped": skipped, "blocked": blocked,
+                "unavailable": unavailable, "hash": hashlib.sha256(repr(snapshot).encode()).hexdigest()}
 
     # ----------------------------------------------------------------- #
     #  Listener
@@ -721,15 +744,37 @@ class Autorole(commands.Cog):
         me = ctx.guild.me
         if me is None or not me.guild_permissions.manage_roles:
             return await self._say(ctx, "no_manage_roles")
-        task = self.start_apply_job(ctx.guild)
-        if task is None:
-            return await self._say(ctx, "apply_busy")
-        await self._say(ctx, "apply_running")
-        result = await task
-        if result is None:
-            return await self._say(ctx, "apply_none")
-        added, members = result
-        await self._say(ctx, "apply_done", added=added, members=members)
+        plan = await self.preview_apply(ctx.guild)
+        view = discord.ui.View(timeout=120)
+        button = discord.ui.Button(label="Jetzt vergeben", style=discord.ButtonStyle.primary)
+        async def confirm(interaction):
+            if interaction.user.id != ctx.author.id:
+                return await interaction.response.send_message("Diese Vorschau gehört einer anderen Person.", ephemeral=True)
+            await interaction.response.defer(ephemeral=True)
+            member = ctx.guild.get_member(interaction.user.id)
+            is_owner = await self.bot.is_owner(interaction.user)
+            is_admin = getattr(self.bot, "is_admin", None)
+            authorized = is_owner or (member is not None and (member.guild_permissions.manage_guild
+                or (is_admin is not None and await is_admin(member))))
+            if not authorized:
+                return await interaction.followup.send("Deine Verwaltungsrechte haben sich geändert. Keine Rollen vergeben.", ephemeral=True)
+            current = await self.preview_apply(ctx.guild)
+            if current["hash"] != plan["hash"]:
+                return await interaction.followup.send("Die Auswahl hat sich geändert. Bitte die Vorschau erneut öffnen.", ephemeral=True)
+            task = self.start_apply_job(ctx.guild)
+            await interaction.followup.send("Rollenvergabe gestartet; Ergebnis im Dashboard." if task else "Läuft bereits.", ephemeral=True)
+            view.stop()
+            button.disabled = True
+            await interaction.edit_original_response(view=view)
+        button.callback = confirm
+        view.add_item(button)
+        lines = [f"{len(plan['assignments'])} Mitglieder · {sum(len(rs) for _, rs in plan['assignments'])} Rollen-Vergaben",
+                 "Übersprungen: " + ", ".join(f"{name}: {count}" for name, count in plan["skipped"].items())]
+        lines += [f"{m.display_name}: {', '.join(r.name for r in rs)}" for m, rs in plan["assignments"][:15]]
+        if len(plan["assignments"]) > 15:
+            lines.append("Alle betroffenen Mitglieder und Rollen stehen in der Dashboard-Vorschau.")
+        await ctx.send("**Vorschau – noch nichts vergeben**\n" + "\n".join(lines)[:1800], view=view,
+                       allowed_mentions=discord.AllowedMentions.none())
 
     @autorole.command(name="settings", aliases=["list", "show"])
     @commands.admin_or_permissions(manage_roles=True)

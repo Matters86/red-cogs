@@ -180,6 +180,8 @@ async def _post(cog, request, wc, form, guild):
         mode = mode if mode in P.MODES else "merge"
         parts = [p for p in str(form.get("parts") or "").split(",") if p in L.PARTS]
         back = f"layout={quote_plus(lid)}&mode={mode}&preview=1&" + "&".join(f"{p}=1" for p in parts)
+        if not str(form.get("hash") or "").strip():
+            return _go(gid, "laden", extra=back, err="Bitte zuerst eine aktuelle Vorschau erstellen – nichts geändert.")
         if mode == "exact" and str(form.get("confirm_name") or "").strip() != guild.name.strip():
             return _go(gid, "laden", extra=back, err="Server-Name falsch eingetippt – nichts geändert.")
         user = await wc.current_user(request) or {}
@@ -457,5 +459,10 @@ def _tab_history(ui, csrf, guild, job, reports) -> str:
             for x in r.get("log") or [])
         log_html = (f"<details class='mt-3'><summary>Protokoll ({len(r.get('log') or [])} Zeilen)</summary>"
                     f"<ul class='wc-list'>{lines}</ul></details>") if lines else ""
-        out += ui.card(f"{r.get('layout_name')} – {when}", kv + log_html, icon="bi-journal-text")
+        restore = ""
+        if r.get("backup_id"):
+            url = f"{BASE}?guild={guild.id}&tab=laden&layout={quote_plus(str(r['backup_id']))}&mode=exact&preview=1&" + "&".join(f"{p}=1" for p in L.PARTS)
+            restore = ui.actions(ui.button("Sicherung prüfen / wiederherstellen", icon="bi-arrow-counterclockwise",
+                                           kind="ghost", href=url))
+        out += ui.card(f"{r.get('layout_name')} – {when}", kv + restore + log_html, icon="bi-journal-text")
     return out

@@ -235,7 +235,7 @@ async def _render(cog, request):
     sel_event = request.query.get("event")
     if sel_event and sel_event in events:
         return {"title": "Raidplaner · Roster",
-                "content": bar + _render_roster(ui, events[sel_event], guild.id, tz_name)}
+                "content": bar + _render_roster(ui, events[sel_event], guild.id, tz_name, guild=guild, csrf=csrf)}
     # Bearbeiten-Ansicht?
     edit_id = request.query.get("edit")
     if edit_id and isinstance(events.get(edit_id), dict):
@@ -694,7 +694,7 @@ def _render_icons(ui, csrf: str, guild_id: int, emojis: dict, supported: bool, s
     )
 
 
-def _render_roster(ui, event: dict, guild_id: int, tz_name: str) -> str:
+def _render_roster(ui, event: dict, guild_id: int, tz_name: str, *, guild=None, csrf="") -> str:
     game_id = event.get("game") or games.DEFAULT_GAME
     signups = event.get("signups") or {}
     ordered = sorted(signups.items(), key=lambda kv: (kv[1].get("at") or 0, kv[0]))
@@ -750,6 +750,22 @@ def _render_roster(ui, event: dict, guild_id: int, tz_name: str) -> str:
     out = head + ui.columns(*role_cards, cols=2)
     if status_cards:
         out += "<h3 class='wc-sub'>Weitere Rückmeldungen</h3>" + ui.columns(*status_cards, cols=2)
+    if guild is not None:
+        members = {str(m.id): f"{m.display_name} (@{m.name})" for m in guild.members if not getattr(m, "bot", False)}
+        for uid, entry in signups.items():
+            members.setdefault(uid, entry.get("name") or f"ID {uid}")
+        picks = [(f"{cid}|{sid}", f"{games.class_label(game_id, cid)} · {label}")
+                 for cid in games.class_order(game_id) for sid, label, _role in games.specs_of(game_id, cid)]
+        form = ui.form("/cogs/raidhelper", ui.grid(
+            ui.field("Mitglied", ui.select("member_id", list(members.items()), none_label="Mitglied wählen")),
+            ui.field("Aktion", ui.select("roster_action", [("signed", "Eintragen / zurück ins Roster"),
+                      ("bench", "Auf die Bank setzen"), ("remove", "Anmeldung entfernen")])),
+            ui.field("Klasse / Spezialisierung", ui.select("pick", picks),
+                     help="Nur beim Eintragen erforderlich. Team-Einträge dürfen die Anmeldelimits bewusst übergehen."),
+        ) + ui.actions(ui.button("Teilnehmer aktualisieren", icon="bi-person-check")),
+            csrf=csrf, hidden={"form": "action", "action": "roster", "guild": guild_id, "event_id": event["id"]},
+            operate=True)
+        out += ui.card("Teilnehmer verwalten", form, icon="bi-person-gear")
     return out
 
 
@@ -814,6 +830,17 @@ async def _handle_post(cog, request):
 
     if form == "edit":
         return await _post_edit(cog, request, guild, data)
+
+    if form == "action" and data.get("action") == "roster":
+        eid = str(data.get("event_id") or "")
+        pick = str(data.get("pick") or "").split("|", 1)
+        try:
+            await cog.manage_signup(guild, eid, data.get("member_id"),
+                                    action=data.get("roster_action"), class_id=pick[0],
+                                    spec_id=pick[1] if len(pick) > 1 else None, authorized=True)
+        except ValueError as exc:
+            raise web.HTTPFound(f"/cogs/raidhelper?guild={guild.id}&event={quote(eid)}&err=" + quote(str(exc)))
+        raise web.HTTPFound(f"/cogs/raidhelper?guild={guild.id}&event={quote(eid)}&ok=Teilnehmer+aktualisiert")
 
     if form == "action" and data.get("action") == "repost":
         # Gleiche Rechte wie die anderen Event-Aktionen (Tagesgeschäft: Server mit mind. „Bedienen“),

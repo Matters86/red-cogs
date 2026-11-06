@@ -96,3 +96,7 @@ Ist der Mitglieder-Bereich eingeschaltet (`[p]webcore portal on`), finden Mitgli
 Pro Gewinnspiel: Preis, Beschreibung, Kanal/Nachricht, Regeln, Discord-IDs und Anzeigenamen der Teilnehmenden
 mit Beitrittszeit, Gewinner-IDs (inkl. ersetzter) und die ID der startenden Person. `red_delete_data_for_user`
 entfernt Teilnahmen und Gewinner-Einträge und setzt die Veranstalter-ID auf 0.
+
+## Schnell anlegen
+
+Preis, Kanal, Gewinnerzahl und Laufzeit stehen im Hauptformular. Optionale Teilnahme-Regeln und Bonus-Lose findest du unter **Erweitert**. Enthält ein wiederhergestellter Entwurf solche Werte, ist der Bereich bereits geöffnet. Zugeklappte Regeln bleiben beim Absenden vollständig erhalten.

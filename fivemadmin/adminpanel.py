@@ -47,11 +47,12 @@ from redbot.core.data_manager import cog_data_path
 from . import db
 from .permissions import PERMISSION_CATALOG, PERMISSION_IDS, validate_permissions, role_permissions, role_revision
 from .serverprofiles import Profiles, PROFILE_ID, ENV_NAME, ALLOWED_PROFILES
+from .faction_discord import Coordinator as FactionDiscord, Refused as FactionDiscordRefused, safe_role as faction_discord_safe_role, snowflake as faction_discord_id
 
 log = logging.getLogger("red.adminpanel")
 
 # This identifies the loaded Python module independently of a later source copy.
-PANEL_BUILD = "2026-11-04-support-v2.2.9"
+PANEL_BUILD = "2026-11-06-support-v2.3.1"
 try:
     with open(__file__, "rb") as _module_source:
         LOADED_MODULE_SHA256 = hashlib.sha256(_module_source.read()).hexdigest()
@@ -370,6 +371,10 @@ def parking_catalog(payload):
 class AdminPanel(commands.Cog):
     """FiveM-Server-Verwaltung per Discord und Webbrowser."""
 
+    async def red_delete_data_for_user(self, *, requester, user_id: int):
+        from .privacy import delete_user
+        await delete_user(self, user_id)
+
     def __init__(self, bot):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=0xA0D141)
@@ -416,6 +421,8 @@ class AdminPanel(commands.Cog):
         self._closing = False
         self._web_task = None
         self._backup_task = None
+        self._faction_task = None
+        self.faction_discord = FactionDiscord(self)
 
     async def _resolve_settings(self):
         """Effektive Settings = Config-Wert, sonst ENV/Default."""
@@ -495,6 +502,8 @@ class AdminPanel(commands.Cog):
             self._web_task = self.bot.loop.create_task(self._start_webserver())
         if self._backup_task is None:
             self._backup_task = self.bot.loop.create_task(self._backup_loop())
+        if self._faction_task is None:
+            self._faction_task = self.bot.loop.create_task(self.faction_discord.loop())
 
     @commands.Cog.listener()
     async def on_webcore_ready(self, webcore):
@@ -523,13 +532,14 @@ class AdminPanel(commands.Cog):
                 webcore.unregister_owner(self)
         except Exception as exc:
             log.warning("AdminPanel Dashboard-Abmeldung fehlgeschlagen (%s).", type(exc).__name__)
-        tasks = [task for task in (self._web_task, self._backup_task)
+        tasks = [task for task in (self._web_task, self._backup_task, self._faction_task)
                  if task is not None and task is not asyncio.current_task()]
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._web_task = self._backup_task = None
+        self._faction_task = None
         runner, self.runner = self.runner, None
         if runner is not None:
             try:
@@ -1156,7 +1166,20 @@ class AdminPanel(commands.Cog):
         actions = await self._actions_for_bridge(request["profile"])
         if await self.profile_locked():
             actions = [action for action in actions if action["action_type"] in READ_ACTIONS]
-        return web.json_response({"actions": actions, "bans": bans})
+        response = {"actions": actions, "bans": bans}
+        if request["profile"]["id"] in ("dev", "live"):
+            try:
+                response["faction_discord"] = await self.faction_discord.sync(
+                    request["profile"]["id"], data.get("faction_discord"))
+            except Exception as exc:
+                self.faction_discord_log(request["profile"]["id"], type(exc).__name__)
+                response["faction_discord"] = {"schema": 1, "profile": request["profile"]["id"],
+                    "ready": False, "needSnapshot": True, "code": "coordinator_unavailable",
+                    "catalog": {"roles": [], "categories": []}, "statuses": []}
+        return web.json_response(response)
+
+    def faction_discord_log(self, profile_id, code):
+        log.warning("Fraktions-Discord Profil %s: %s", profile_id, code)
 
     async def _queued_action_authorization(self, action, profile, members):
         """One concrete capability, fresh Discord state, and the original guild/profile."""
@@ -1816,6 +1839,109 @@ class AdminPanel(commands.Cog):
         await ctx.send("Umgebungsvariable dem Profil zugeordnet. Kein Schlüsselwert wird angezeigt oder erzeugt.")
 
     # ---- Login ----
+
+    @ap.command(name="factiondiscord")
+    @commands.guild_only()
+    async def ap_factiondiscord(self, ctx: commands.Context, profile_id: str,
+                               operation: str = "status", *, value: str = ""):
+        """Discord-Admin: Profil vorbereiten; fachliche Auswahl bleibt im Editor-Tablet.
+
+        ap factiondiscord live status|enable|disable
+        ap factiondiscord live allowrole|denyrole|protect|unprotect <Rollen-ID>
+        ap factiondiscord live allowcategory|denycategory <Kategorie-ID>
+        ap factiondiscord live resolve <Fraktions-ID> <role|text|voice|category> <ID>
+        """
+        if ctx.guild is None or not bool(getattr(ctx.author.guild_permissions, "administrator", False)):
+            return await ctx.send("Nur Discord-Administratoren dieser Guild dürfen die Fraktionsanbindung konfigurieren.")
+        profile = self.profiles.select(profile_id, ctx.guild.id)
+        if profile is None or profile_id not in ("dev", "live"):
+            return await ctx.send("Nur ein explizit gebundenes Dev-/Live-Profil ist zulässig. Legacy bleibt gesperrt.")
+        allowed = {"status", "enable", "disable", "allowrole", "denyrole", "protect",
+                   "unprotect", "allowcategory", "denycategory", "resolve", "retry"}
+        if operation not in allowed:
+            return await ctx.send("Aktionen: status, enable, disable, allowrole, denyrole, protect, unprotect, allowcategory, denycategory, resolve, retry.")
+        if operation == "status":
+            result = await self.faction_discord.sync(profile_id)
+            return await ctx.send("Fraktions-Discord · " + profile_id + ": " + result["code"]
+                + ". Auswahl von Rolle/Text/Voice erfolgt je Fraktion im Editor-Tablet. Bestehende Rollen und Kategorien benötigen hier eine Freigabe.")
+        if operation == "retry":
+            store = await self.faction_discord.store(profile_id)
+            await asyncio.to_thread(store.retry_reset)
+            return await ctx.send("Fehler-Wartezeiten zurückgesetzt. Unklare Erstellungsbelege bleiben geschützt und werden nicht erneut erstellt.")
+        if operation == "resolve":
+            try:
+                fid_text, kind, did = value.split()
+                fid = int(fid_text)
+                faction_discord_id(did)
+                guild, policy, protected = await self.faction_discord.policy(profile_id)
+                store = await self.faction_discord.store(profile_id)
+                row = await asyncio.to_thread(store.resource, fid, kind)
+                if kind not in ("role", "text", "voice", "category") or fid < 0 or (kind == "category") != (fid == 0):
+                    raise FactionDiscordRefused("invalid_resource")
+                if row is None or row["phase"] != "held" or (row["discord_id"] and row["discord_id"] != did):
+                    raise FactionDiscordRefused("no_held_creation")
+                obj = guild.get_role(int(did)) if kind == "role" else guild.get_channel(int(did))
+                types = {"text": discord.TextChannel, "voice": discord.VoiceChannel, "category": discord.CategoryChannel}
+                if kind == "role":
+                    if not faction_discord_safe_role(obj, guild, policy, protected, owned=True) or obj.permissions.value != 0:
+                        raise FactionDiscordRefused("role_not_safe")
+                elif not isinstance(obj, types[kind]):
+                    raise FactionDiscordRefused("channel_type_mismatch")
+                # Explicit ID recovery only; never discover/adopt by matching name.
+                await asyncio.to_thread(store.put_resource, fid, kind, did, "ready", "discord_admin_resolved")
+                await asyncio.to_thread(store.retry_reset)
+                self.faction_discord.catalogs.pop(profile_id, None)
+                return await ctx.send("Die ausdrücklich gewählte ID wurde dem offenen Erstellungsbeleg zugeordnet. Bitte nur das im Discord-Audit bestätigte Objekt verwenden; es wird beim nächsten Abgleich privat abgesichert.")
+            except (ValueError, FactionDiscordRefused):
+                return await ctx.send("Zuordnung abgelehnt. Syntax: ap factiondiscord <Profil> resolve <Fraktions-ID> <role|text|voice|category> <Discord-ID>. Nur offene Erstellungsbelege und passende sichere Objekte sind zulässig.")
+        async with self._profile_config_lock:
+            records = await self.config.server_profiles()
+            records = dict(records) if isinstance(records, dict) else {}
+            record = dict(records.get(profile_id) or {})
+            policy = dict(record.get("faction_discord") or {})
+            if operation == "enable":
+                if any(other.id not in (profile_id, "legacy") and other.guild_id == str(ctx.guild.id)
+                       for other in self.profiles.items.values()):
+                    return await ctx.send("Dev und Live müssen getrennte Discord-Guilds verwenden. Die Aktivierung wurde abgelehnt.")
+                me = ctx.guild.me
+                if me is None or not me.guild_permissions.manage_roles or not me.guild_permissions.manage_channels:
+                    return await ctx.send("Dem Bot fehlen Rollen verwalten oder Kanäle verwalten.")
+                store = await self.faction_discord.store(profile_id)
+                try:
+                    await asyncio.to_thread(store.bind, ctx.guild.id)
+                except FactionDiscordRefused:
+                    return await ctx.send("Dieses Profil besitzt bereits eine andere dauerhafte Guild-Zuordnung; keine automatische Umbindung.")
+                policy["enabled"] = True
+            elif operation == "disable":
+                policy["enabled"] = False
+            else:
+                try:
+                    did = faction_discord_id(value.strip())
+                except FactionDiscordRefused:
+                    return await ctx.send("Bitte nur die numerische Discord-ID der Rolle beziehungsweise Kategorie angeben.")
+                key = ("allow_category_ids" if operation.endswith("category") else
+                       "protected_role_ids" if operation in ("protect", "unprotect") else "allow_existing_role_ids")
+                ids = {str(item) for item in policy.get(key, [])}
+                if operation == "allowrole":
+                    temporary = dict(policy, allow_existing_role_ids=[did])
+                    mapping = await self.config.guild(ctx.guild).role_map()
+                    if not faction_discord_safe_role(ctx.guild.get_role(int(did)), ctx.guild, temporary, set(mapping)):
+                        return await ctx.send("Diese Rolle ist geschützt, privilegiert, verwaltet oder oberhalb des Bots und kann nicht als Fraktionsrolle freigegeben werden.")
+                if operation == "allowcategory" and not isinstance(ctx.guild.get_channel(int(did)), discord.CategoryChannel):
+                    return await ctx.send("Die Kategorie wurde in dieser Guild nicht bestätigt.")
+                if operation in ("denyrole", "unprotect", "denycategory"):
+                    ids.discard(did)
+                else:
+                    ids.add(did)
+                if len(ids) > 128:
+                    return await ctx.send("Höchstens 128 freigegebene IDs je Liste.")
+                policy[key] = sorted(ids)
+            record["faction_discord"] = policy
+            records[profile_id] = record
+            await self.config.server_profiles.set(records)
+            await self._refresh_profiles()
+            self.faction_discord.catalogs.pop(profile_id, None)
+        await ctx.send("Fraktions-Discord-Einstellung gespeichert. Die fachliche Zuordnung bleibt unter Editor-Tablet → Fraktionen → Discord. Keine Kanäle oder Chatverläufe wurden gelöscht.")
 
     @ap.command(name="login")
     @commands.guild_only()

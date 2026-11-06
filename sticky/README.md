@@ -89,3 +89,7 @@ Sticky anschließend sofort neu posten.
   die alte Nachricht wird dabei gelöscht.
 - Slash-Befehle ggf. mit `[p]slash sync` aktivieren.
 - Voraussetzung für das Dashboard: der Cog `webcore` ist geladen und eingerichtet.
+
+## Zustellung prüfen und erneut versuchen
+
+Eine neue Sticky wird **zuerst erfolgreich gesendet**, anschließend wird die alte Nachricht entfernt. Scheitert das Senden, bleibt die alte Nachricht sichtbar. Die Übersicht unterscheidet gepostete Nachrichten und Zustellfehler. **Erneut posten** versucht die Zustellung direkt noch einmal (Dashboard-Recht Bedienen). Kann nur die alte Nachricht nicht entfernt werden, weist die Übersicht auf das mögliche Duplikat hin.

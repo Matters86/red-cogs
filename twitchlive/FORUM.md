@@ -70,3 +70,7 @@ Status („gesetzt/nicht gesetzt“) und Anleitung.
 - Genau eine Meldung pro Stream, auch nach einem Bot-Neustart.
 - Ping nur für die gewählte Rolle – nie @everyone/@here.
 - Slash-Befehle ggf. mit `[p]slash sync` aktivieren.
+
+## Vorschau direkt im Editor
+
+Die Live-Vorschau zeigt auch ungespeicherte Nachrichtentexte und Platzhalter direkt beim Bearbeiten. Sie fragt Twitch nicht zusätzlich ab und pingt niemanden. Bei einem Fehler bleiben Login, Zielkanal, Ping-Rolle, Status und Nachricht als kurzlebiger Entwurf erhalten. Bearbeitungsentwürfe verschiedener Streamer werden getrennt gehalten.

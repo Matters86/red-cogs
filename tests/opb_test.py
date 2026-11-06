@@ -36,7 +36,7 @@ OPERATE = {  # slug -> erwartete operate_forms
     "giveaways": {"create", "action"},
     "scheduler": {"entry", "action"},
     "twitchlive": {"test", "toggle"},
-    "organigram": {"post"},
+    "organigram": {"post", "retry"},
 }
 NO_OPERATE = ("autoroom", "onlyimagevideo", "commands", "example")
 

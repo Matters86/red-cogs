@@ -21,6 +21,28 @@ Dashboard-Seiten zu registrieren. Neue Cogs erscheinen automatisch in der Naviga
   Dashboard-Einstellungen des Servers (Rollen-Rechte, Mein Bereich, Log-Kanal) – als JSON sichern und mit
   Vorschau, Bestätigung und „Rückgängig“ wieder einspielen.
 - Login-Seite, Nutzer-Menü mit Avatar und Rolle, Toast-Meldungen.
+- **Meine Aufgaben:** eigene zugewiesene Tickets, persönliche Event-Anmeldungen und geplante
+  Nachrichten sowie anstehende Antwortfristen auf einer Seite. Fehlgeschlagene Veröffentlichungen
+  und ausstehende Wiederherstellungen erscheinen mit einem direkten Link zur passenden Funktion.
+  Sichtbar sind ausschließlich Quellen, für die der Nutzer auf dem gewählten Server Rechte hat.
+- **Einrichtungsassistent:** Server und Module wählen, Rollen/Kanäle einstellen, konkrete Änderungen
+  prüfen und anschließend übernehmen. Der Entwurf bleibt 30 Minuten verfügbar. Erst der eigene
+  Test-Schritt kann eine Welcome-Testnachricht senden; das Speichern veröffentlicht nichts.
+
+## Alltag und geführte Einrichtung
+
+**Meine Aufgaben** in der Navigation bietet Filter für Tickets, Termine, fällige Aufgaben und
+Probleme. Antwortfristen werden nur angezeigt, wenn sie im Ticket-Cog eingeschaltet sind; während
+„Warten auf Nutzer“ steht die Antwortuhr still. Die Anzeige verwendet die lokale Browserzeit.
+
+**Einrichtung** führt durch Tickets, Welcome, Autorole, Poll, Raidhelper, Organigram, Sticky,
+Giveaways und Scheduler, soweit diese Cogs geladen und für den Nutzer bearbeitbar sind. Andere
+Module lassen sich über ihre Einstellungsseiten öffnen. Bestehende Einstellungen erscheinen als
+Vorbelegung; die Prüfung zeigt die tatsächlichen Änderungen vor dem Übernehmen. Bei zwischenzeitlich
+geänderten Einstellungen oder Rechten muss die Prüfung erneuert werden. Scheitert das Übernehmen,
+werden bereits vorgenommene Änderungen soweit möglich zurückgenommen; fremde neuere Änderungen
+werden dabei bewahrt. Der Assistent richtet Grundwerte ein, die Detailseiten bleiben für weitere
+Optionen verfügbar.
 
 ## Installation
 
@@ -547,3 +569,9 @@ async def public_status(self, request):
 - Hinter einem Reverse-Proxy: Die Client-IP für das Rate-Limit kommt aus `X-Forwarded-For`, aber nur,
   wenn die Verbindung von `127.0.0.1`/`::1` oder aus einem privaten Netz (z. B. Docker, Synology-Proxy)
   kommt; sonst zählt die direkte Gegenstelle (gefälschte Header aus dem Internet wirken nicht).
+
+## Einfacher navigieren und bearbeiten
+
+Die Modulsuche filtert die freigegebenen Module. Mit dem Stern speicherst du persönliche Favoriten für dieses Browserprofil und dieses Dashboard-Konto; Rechte werden weiterhin serverseitig geprüft.
+
+Neue UI-Helfer: `ui.disclosure(...)` für erweiterte Optionen, `ui.conditional(...)` für auswahlabhängige Felder und `ui.member_picker(...)` für eindeutige Mitgliedersuche mit Avatarvorschau. Live-Vorschauen senden nur freigegebene Felder per POST mit CSRF-Schutz und speichern oder veröffentlichen nichts. Formularentwürfe bleiben höchstens eine Stunde im Speicher und sind nach Sitzung, Server und Formular getrennt.

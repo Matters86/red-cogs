@@ -295,9 +295,8 @@ async def _render(cog, request):
     xp_form = ui.form(
         f"/cogs/{SLUG}",
         ui.grid(
-            ui.field("Mitglied", ui.text_input("member", "", placeholder="Nutzer-ID oder Anzeigename",
-                                               attrs={"maxlength": 100, "autocomplete": "off"}),
-                     help="ID (Rechtsklick → ID kopieren), Erwähnung oder eindeutiger Name."),
+            ui.field("Mitglied", ui.member_picker("member", guild.members, picker_id="level-members"),
+                     help="Nach Namen suchen und die eindeutige Nutzer-ID auswählen. Das gewählte Mitglied wird mit Avatar angezeigt."),
             ui.field("Aktion", ui.select("action", [("give", "XP geben"), ("take", "XP abziehen"),
                                                     ("set", "XP auf Wert setzen"), ("reset", "Zurücksetzen (0 XP)")],
                                          "give")),

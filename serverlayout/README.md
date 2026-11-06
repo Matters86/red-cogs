@@ -140,3 +140,13 @@ nur ein kleines Verzeichnis (Name, Quelle, Datum, Ersteller-ID, Teile, Größe) 
 
 `red_delete_data_for_user` setzt Ersteller-/Nutzer-IDs auf 0 und entfernt mitgeschriebene
 Mitglieder-Überschreibungen dieser Person aus allen Layout-Dateien.
+
+## Aus einem Ergebnisbericht wiederherstellen
+
+Im Reiter **Verlauf** führt **Sicherung prüfen / wiederherstellen** direkt zur Vorschau der automatischen
+Sicherung vor diesem Ladevorgang. Der Link verändert noch nichts: Prüfe Zielserver, Teile und die
+vorgesehenen Änderungen. Danach sind die übliche Bestätigung und bei Exakt angleichen der eingetippte
+Servername nötig. Auch vor einer Wiederherstellung entsteht erneut eine Sicherung. Ohne aktuelle
+Vorschau oder bei geändertem Plan wird nicht angewendet. Schlägt die automatische Sicherung fehl,
+bleibt der Server unverändert. Gelöschte Kanäle werden nur leer wiederhergestellt; Nachrichten kommen
+nicht zurück. Fehlt eine ältere Sicherung bereits, zeigt die Ladeansicht einen entsprechenden Hinweis.

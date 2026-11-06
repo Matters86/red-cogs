@@ -92,7 +92,7 @@ class Sticky(commands.Cog):
         page = dict(owner=self, slug="sticky", name="Sticky", icon="bi-pin-angle", handler=self.dashboard_page)
         try:
             # Tagesgeschäft für die Stufe „Bedienen“: einzelne Stickies anlegen/bearbeiten, pausieren, löschen.
-            webcore.register_page(**page, operate_forms={"save", "toggle", "delete"})
+            webcore.register_page(**page, operate_forms={"save", "toggle", "delete", "refresh"})
         except TypeError:  # ältere WebCore-Versionen ohne Stufe „Bedienen“
             webcore.register_page(**page)
 
@@ -226,20 +226,6 @@ class Sticky(commands.Cog):
                 webhook = await self._get_or_create_webhook(channel)
                 if webhook is not None:
                     new_webhook_id = webhook.id
-                    # Webhook-ID früh sichern, damit on_message die gleich gepostete
-                    # Sticky zuverlässig ignoriert (auch bei ignore_bots = False).
-                    if str(old_webhook_id) != str(new_webhook_id):
-                        async with self.config.guild(guild).stickies() as st:
-                            cur = st.get(str(channel.id))
-                            if cur is not None:
-                                cur["webhook_id"] = str(new_webhook_id)
-                    if old_message_id:
-                        try:
-                            await webhook.delete_message(int(old_message_id))
-                        except discord.NotFound:
-                            pass
-                        except discord.HTTPException:
-                            self._webhook_cache.pop(channel.id, None)
                     msg = await webhook.send(
                         content=content or None,
                         embed=embed,
@@ -252,13 +238,6 @@ class Sticky(commands.Cog):
                     posted_via_webhook = True
 
             if not posted_via_webhook:
-                if old_message_id:
-                    try:
-                        await channel.get_partial_message(int(old_message_id)).delete()
-                    except discord.NotFound:
-                        pass
-                    except discord.HTTPException:
-                        pass
                 msg = await channel.send(
                     content=content or None,
                     embed=embed,
@@ -267,18 +246,48 @@ class Sticky(commands.Cog):
                 new_message_id = msg.id
                 new_webhook_id = None
         except discord.Forbidden:
+            self._webhook_cache.pop(channel.id, None)
             log.warning("Keine Rechte zum Posten der Sticky in Kanal %s.", channel.id)
+            await self._delivery_state(channel, "Mir fehlen Rechte zum Senden. Die vorherige Nachricht bleibt erhalten.")
             return False
         except discord.HTTPException:
+            self._webhook_cache.pop(channel.id, None)
             log.exception("Sticky-Repost in Kanal %s fehlgeschlagen.", channel.id)
+            await self._delivery_state(channel, "Discord hat das Senden abgelehnt. Vorherige Nachricht bleibt erhalten; erneut versuchen.")
             return False
+
+        # Erst nach erfolgreichem Ersatz entfernen. Bei einem Fehler bleibt die sichtbare alte Sticky erhalten.
+        cleanup_failed = False
+        if old_message_id:
+            try:
+                if old_webhook_id:
+                    old_hook = await self._get_or_create_webhook(channel)
+                    if old_hook is not None and str(old_hook.id) == str(old_webhook_id):
+                        await old_hook.delete_message(int(old_message_id))
+                    else:
+                        await channel.get_partial_message(int(old_message_id)).delete()
+                else:
+                    await channel.get_partial_message(int(old_message_id)).delete()
+            except discord.NotFound:
+                pass
+            except discord.HTTPException:
+                cleanup_failed = True
 
         async with self.config.guild(guild).stickies() as stickies:
             cur = stickies.get(str(channel.id))
             if cur is not None:
                 cur["message_id"] = str(new_message_id) if new_message_id else None
                 cur["webhook_id"] = str(new_webhook_id) if new_webhook_id else None
+                cur["last_posted_at"] = int(time.time())
+                cur["delivery_error"] = ("Neue Nachricht gepostet; alte Nachricht konnte nicht entfernt werden."
+                                         if cleanup_failed else None)
         return True
+
+    async def _delivery_state(self, channel, error):
+        async with self.config.guild(channel.guild).stickies() as entries:
+            current = entries.get(str(channel.id))
+            if current is not None:
+                current["delivery_error"] = error
 
     async def post_now(self, channel) -> bool:
         """Sofortiges Neu-Posten (ohne Cooldown). Vom Dashboard/Befehl genutzt."""
@@ -344,6 +353,11 @@ class Sticky(commands.Cog):
             return
         # Eigene Nachrichten nie verarbeiten.
         if message.author.id == self.bot.user.id:
+            return
+        # Der eigene Webhook ist schon vor dem Send-Aufruf im Cache. Die persistierte
+        # ID muss bis zum erfolgreichen Ersatz weiterhin zur alten Nachricht gehören.
+        own_webhook = self._webhook_cache.get(message.channel.id)
+        if own_webhook is not None and message.webhook_id == own_webhook.id:
             return
 
         guild_conf = await self.config.guild(message.guild).all()

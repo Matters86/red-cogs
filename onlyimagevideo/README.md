@@ -82,3 +82,7 @@ Diese Seite hat **kein Tagesgeschäft**: Sie besteht nur aus Einstellungen (übe
 ## Datenspeicherung
 
 Es werden keine personenbezogenen Daten gespeichert – nur serverbezogene Einstellungen und ein Zähler gelöschter Nachrichten. Inhalte gelöschter Nachrichten werden nicht gespeichert.
+
+## Konkrete Kanalprüfung
+
+Die Übersicht prüft die Bot-Rechte für jeden eingetragenen Kanal einzeln und nennt fehlendes Kanal-Ansehen, Nachrichten-Verwalten sowie bei eingeschalteten Hinweisen Nachrichten-Senden. Die Meldung erklärt den Weg über **Kanal bearbeiten → Berechtigungen → Bot-Rolle**. Eigene Einschränkungen in Threads zusätzlich in Discord prüfen.

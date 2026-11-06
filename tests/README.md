@@ -38,6 +38,17 @@ Red-Instanz im System-Temp an und löscht sie am Ende wieder.
 
 | Suite | prüft |
 |---|---|
+| `ticket_support_test.py` | Sichere Schnellantworten mit bearbeitbarer Vorschau, Priorität und Team-Antwortuhr mit Pausen/Offline-Prüfung |
+| `my_tasks_test.py` | Persönliche Aufgaben, server- und modulweise Rechte, Termine, Fehlerisolation und lesender Zugriff |
+| `setup_wizard_test.py` | Einrichtungsentwurf, erneute Rollen-/Kanalprüfung, explizite Übernahme und Wiederherstellung bei Fehlern |
+| `og_pages_test.py` | Vollständige Mitglieder-/Positionsseiten, ZIP, größere Teams und nach Fehlern fortsetzbare Seitenveröffentlichung |
+| `og_ux_test.py` | Organigramm-Schnellstart, Baumeditor, Veröffentlichungsstatus, Fehler und gezielte Wiederholung |
+| `og_layout_test.py` | Acht native Organigramm-Layouts, Beispiele und Größen-/Namensgrenzen |
+| `ux_reliability_test.py` | Guard/AutoRoom/Sticky-Wiederherstellung und direkte Bedienung; Autorole-Vorschau, Rechte, Medienfilter, Warns und Validierung |
+| `workflow_ux_test.py` | Raid-Roster, Poll-Entwürfe und Neu-Posten, Changelog-Editor, ähnliche Ideas vor Erstellung und echte ServerLayout-Wiederherstellung |
+| `dashboard_ux_test.py` | Sichere Live-Vorschauen, Formularentwürfe, Mitgliedersuche und freie Statistikzeiträume |
+| `ticket_workflow_test.py` | Wartestatus, eigene Tickets und Erinnerung vor Ablauf des 24h-Timers |
+| `fivem_privacy_test.py` | Profilgetrennte Löschung von Supportdaten/Fotos, Auth-Sitzungen und Schutz der Aktionswarteschlange |
 | `realred.py` | Echtes Red: alle Cogs importierbar (`setup()`), `info.json` gültig, `identifier` eindeutig + in CONVENTIONS.md, keine Namenskollision mit Python-Standardmodulen/Red-Core-Cogs, Config-Locks/Nebenläufigkeit |
 | `wc_test.py` | WebCore: Login, Server-Wechsler, Rollen-Rechte-Matrix, Nur-Ansicht, Schutz vor Selbst-Hochstufung, Audit-Log, Zugriffsmodus `admin` |
 | `wcm_test.py` | WebCore: Mitglieder-Bereich `/me` (Portal-Schalter, fremde Server, CSRF, Rate-Limit), öffentliche API (CORS, Cache, 429, Fehler ohne Details), Audit-Kanal, Befehle |
@@ -48,6 +59,8 @@ Red-Instanz im System-Temp an und löscht sie am Ende wieder.
 | `pr_test.py` | poll + autorole: Mitgliederseiten `/me/umfragen` und `/me/rollen` (gleiche Logik wie Buttons, Hierarchie, Fehler) |
 | `tc_functest.py` | tickets + changelog: „Meine Tickets“ (eigene und hinzugefügte Tickets/Transcripts, keine fremden) und öffentliche Changelog-API |
 | `ticket_timer_test.py` | tickets: 24h ab Start/letzter menschlicher Nachricht, Abbruch und Rechte, Neustart/Downtime, fehlende Leserechte, veraltete Timer und paralleles Schließen, Wiederöffnen |
+| `ticket_assignment_test.py` | tickets: Zuweisen/Übergabe/Freigabe über Buttons, native Mitgliedersuche, Befehle und Dashboard; aktuelle Rechte, Kanalzugriff, Threads und gleichzeitige Übernahmen |
+| `og_test.py` | organigram: Mitglieder mehrfach oder nur an höchster Position; Text-, Bild- und Website-Ausgabe, Befehl, Dashboard und Bearbeiten-Rechte |
 | `tw_functest.py` | twitchlive: gemockte Twitch-API (Token, 401/429/5xx, Backoff), genau eine Meldung pro Stream, Live-Rolle, Befehle, Dashboard |
 | `wl_test_welcome.py` | welcome: Beitritt/Verlassen, Willkommensbild mit Avatar, DM, Befehle, Dashboard mit Vorschau |
 | `wl_test_warns.py` | warns: Punkte, Verfall, automatische Maßnahmen mit Hierarchie-Schutz, DM/Log, Befehle, Dashboard |

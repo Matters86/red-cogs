@@ -111,6 +111,7 @@ class Guard(commands.Cog):
             lockdown_until=0,                # 0 = aus, -1 = aktiv (manuell), >0 = Ende-Zeitstempel
             lockdown_prev={},                # channel_id -> ursprünglicher Slowmode
             lockdown_invites_paused=False,
+            lockdown_recovering=False,
             # Texte / Verlauf / Statistik
             messages={},
             history=[],
@@ -435,6 +436,7 @@ class Guard(commands.Cog):
         auto = int(conf.get("lockdown_auto_minutes", 10))
         until = now + auto * 60 if auto > 0 else -1
         await gconf.lockdown_until.set(until)
+        await gconf.lockdown_recovering.set(False)
 
         # Slowmode setzen, alte Werte sichern.
         slow = int(conf.get("lockdown_slowmode", 10))
@@ -444,6 +446,8 @@ class Guard(commands.Cog):
                 try:
                     if ch.slowmode_delay != slow:
                         prev[str(ch.id)] = ch.slowmode_delay
+                        # Vor der Discord-Änderung sichern, damit auch ein Neustart rückgängig machen kann.
+                        await gconf.lockdown_prev.set(dict(prev))
                         await ch.edit(slowmode_delay=slow, reason="Guard: Notmodus")
                 except Exception:  # noqa: BLE001
                     continue
@@ -451,12 +455,15 @@ class Guard(commands.Cog):
 
         # Einladungen pausieren (sofern unterstützt).
         paused = False
-        if conf.get("lockdown_pause_invites", True):
+        if conf.get("lockdown_pause_invites", True) and "INVITES_DISABLED" not in getattr(guild, "features", []):
+            await gconf.lockdown_invites_paused.set(True)
+            paused = True
             try:
                 await guild.edit(invites_disabled=True, reason="Guard: Notmodus")
-                paused = True
             except Exception:  # noqa: BLE001
-                paused = False
+                # Auch eine abgebrochene HTTP-Antwort kann bereits wirksam geworden sein.
+                # Vorher waren Einladungen offen; späteres Freigeben ist deshalb sicher.
+                pass
         await gconf.lockdown_invites_paused.set(paused)
 
         await self._log_action(guild, kind="raid", member=None, action="none",
@@ -474,20 +481,29 @@ class Guard(commands.Cog):
             return False
         conf = await gconf.all()
         prev = conf.get("lockdown_prev", {}) or {}
+        remaining = {}
         for cid, old in prev.items():
             ch = guild.get_channel(int(cid))
             if isinstance(ch, discord.TextChannel):
                 try:
                     await ch.edit(slowmode_delay=int(old), reason="Guard: Notmodus beendet")
                 except Exception:  # noqa: BLE001
-                    continue
+                    remaining[cid] = old
+        invites_pending = bool(conf.get("lockdown_invites_paused"))
         if conf.get("lockdown_invites_paused"):
             try:
                 await guild.edit(invites_disabled=False, reason="Guard: Notmodus beendet")
+                invites_pending = False
             except Exception:  # noqa: BLE001
                 pass
-        await gconf.lockdown_prev.set({})
-        await gconf.lockdown_invites_paused.set(False)
+        await gconf.lockdown_prev.set(remaining)
+        await gconf.lockdown_invites_paused.set(invites_pending)
+        if remaining or invites_pending:
+            await gconf.lockdown_recovering.set(True)
+            await gconf.lockdown_until.set(int(time.time()))
+            log.warning("Notmodus auf %s nur teilweise beendet; Wiederherstellung wird erneut versucht", guild.id)
+            return False
+        await gconf.lockdown_recovering.set(False)
         await gconf.lockdown_until.set(0)
         await self._log_action(guild, kind="lockdown_end", member=None, action="none", rules=[])
         log.info("Guard-Notmodus beendet auf %s.", guild.id)
@@ -506,7 +522,7 @@ class Guard(commands.Cog):
         conf = await self.config.guild(guild).all()
 
         # Während aktivem Notmodus neue Beitritte ggf. behandeln.
-        if await self._lockdown_active(guild):
+        if await self._lockdown_active(guild) and not conf.get("lockdown_recovering"):
             action = conf.get("lockdown_action_joins", "none")
             if action in ("kick", "timeout") and not await self._is_exempt(member):
                 reason = await self._text(guild, "reason_lockdown_join")
@@ -927,6 +943,8 @@ class Guard(commands.Cog):
         elif state in ("off", "aus", "false"):
             if await self._end_lockdown(ctx.guild):
                 await self._say(ctx, "lockdown_ended")
+            elif await self.config.guild(ctx.guild).lockdown_recovering():
+                await ctx.send("Teilweise beendet: Einige Kanalrechte oder Einladungen konnten noch nicht zurückgesetzt werden. Ich versuche es automatisch erneut; prüfe meine Rechte.")
             else:
                 await self._say(ctx, "lockdown_not_active")
         else:

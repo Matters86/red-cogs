@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import html
 import json
+import time
+from types import SimpleNamespace
 from urllib.parse import quote, urlsplit
 
 from aiohttp import web
@@ -44,7 +46,51 @@ def _values(data, key) -> list:
 def is_operate_post(data) -> bool:
     """Tagesgeschäft für ``register_page(operate_forms=…)``: nur „einzelnen Changelog löschen“
     (genau ``form=action`` + ``action=delete``) – alles andere braucht „Bearbeiten“."""
-    return _values(data, "form") == ["action"] and _values(data, "action") == ["delete"]
+    return ((_values(data, "form") == ["action"] and _values(data, "action") == ["delete"])
+            or (_values(data, "form") == ["compose"] and _values(data, "action") in (["preview"], ["publish"])))
+
+
+def _compose_draft(cog, request, guild, data=None):
+    drafts = cog.__dict__.setdefault("_compose_drafts", {})
+    key = (request.get("webcore_csrf", ""), guild.id)
+    now = time.monotonic()
+    for old in list(drafts):
+        if drafts[old][0] < now - 1800:
+            drafts.pop(old, None)
+    if data is not None:
+        drafts[key] = (now, {k: str(data.get(k) or "") for k in ("title", "neu", "geaendert", "fixes", "hinweis", "category")})
+    return drafts.get(key, (0, {}))[1]
+
+
+async def _compose_author(request, guild):
+    user = await request.app["webcore"].current_user(request) or {}
+    uid = int(user.get("id") or 0)
+    return guild.get_member(uid) or SimpleNamespace(id=uid, display_name=user.get("name") or "Dashboard")
+
+
+async def _render_compose(cog, request, ui, guild, conf, csrf):
+    draft = _compose_draft(cog, request, guild)
+    fields = [ui.field("Titel", ui.text_input("title", draft.get("title", ""), attrs={"maxlength": 230, "required": True}), wide=True)]
+    fields += [ui.field(label, ui.textarea(key, draft.get(key, ""), rows=4),
+                       help="Höchstens 200 Zeichen." if key == "hinweis" else "Höchstens 500 Zeichen; eine Änderung je Zeile.", wide=True)
+               for key, label in (("neu", "Neu"), ("geaendert", "Geändert"), ("fixes", "Fixes"), ("hinweis", "Hinweis"))]
+    fields.append(ui.field("Kategorie für Neu", ui.select("category", [(c["label"], c["label"]) for c in cog._categories(conf)], draft.get("category"))))
+    preview = ""
+    if request.query.get("preview") == "1" and draft:
+        try:
+            values = cog.entry_fields(draft)
+            emoji, _label = cog._resolve_category(conf, draft.get("category"))
+            emb = cog.entry_embed(conf, await _compose_author(request, guild), values, emoji, conf.get("language", "de"))
+            preview = ui.card("Vorschau – noch nicht veröffentlicht", f"<h3>{_esc(emb.title)}</h3>" + "".join(
+                f"<b>{_esc(field.name)}</b>{_lines_html(field.value)}" for field in emb.fields), icon="bi-eye")
+        except ValueError as exc:
+            preview = ui.callout(_esc(str(exc)), tone="warn")
+    form = ui.form("/cogs/changelog", ui.grid(*fields) + ui.actions(
+        ui.button("Vorschau", icon="bi-eye", kind="ghost", name="action", value="preview"),
+        ui.button("Veröffentlichen", icon="bi-send", name="action", value="publish")),
+        csrf=csrf, hidden={"form": "compose", "guild": guild.id}, operate=True)
+    return preview + ui.card("Neuer Changelog", form, icon="bi-pencil-square",
+                             desc="Mindestens Neu, Geändert oder Fixes ausfüllen. Vorschau sendet keine Nachricht und keinen Ping. Entwürfe bleiben 30 Minuten erhalten.")
 
 
 def _esc(value) -> str:
@@ -160,7 +206,8 @@ async def _render(cog, request):
 
     base, public_host = await _public_base(request)
     body = (
-        _render_settings(ui, cog, guild, conf, channel, csrf, base, public_host)
+        ui.tab("neu", "Neuer Changelog", "bi-pencil-square", await _render_compose(cog, request, ui, guild, conf, csrf))
+        + _render_settings(ui, cog, guild, conf, channel, csrf, base, public_host)
         + ui.tab("historie", "Historie", "bi-clock-history", _render_history(ui, guild, entries, csrf),
                  count=len(entries))
     )
@@ -406,6 +453,24 @@ async def _handle_post(cog, request):
         raise web.HTTPFound("/cogs/changelog?ok=" + quote("Server nicht gefunden"))
 
     gconf = cog.config.guild(guild)
+
+    if form == "compose":
+        draft = _compose_draft(cog, request, guild, data)
+        target = f"/cogs/changelog?guild={guild.id}"
+        if data.get("action") == "preview":
+            raise web.HTTPFound(target + "&preview=1#neu")
+        if data.get("action") != "publish":
+            raise web.HTTPFound(target + "&err=Unbekannte+Aktion#neu")
+        conf = await gconf.all()
+        emoji, label = cog._resolve_category(conf, draft.get("category"))
+        try:
+            values = cog.entry_fields(draft)
+            await cog.create_entry(guild, await _compose_author(request, guild), **values,
+                                   category_emoji=emoji, category_label=label, authorized=True)
+        except ValueError as exc:
+            raise web.HTTPFound(target + "&err=" + quote(str(exc)) + "#neu")
+        cog.__dict__.get("_compose_drafts", {}).pop((request.get("webcore_csrf", ""), guild.id), None)
+        raise web.HTTPFound(target + "&ok=Changelog+veröffentlicht#historie")
 
     if form == "settings":
         # Ziel-Kanal

@@ -18,7 +18,7 @@ Danach `webcore` einrichten (siehe [`webcore/README.md`](webcore/README.md)).
 
 | Cog | Beschreibung |
 |---|---|
-| [`webcore`](webcore/) | Zentrales Web-Dashboard (aiohttp, Discord-OAuth2) mit Rollen-Rechten (Ansehen/Bearbeiten je Seite), globalem Server-Wechsler, Audit-Log, Bot-Status mit Fehlerprotokoll und Sichern & Wiederherstellen. Andere Cogs klinken sich ein. |
+| [`webcore`](webcore/) | Zentrales Web-Dashboard mit Discord-Login, Rollen-Rechten, Modulsuche und Favoriten, „Meine Aufgaben“, geführter Einrichtung, Audit-Log sowie Sichern & Wiederherstellen. Andere Cogs klinken sich ein. |
 | [`example`](example/) | Vorlage: Hybrid-Befehl + automatische Dashboard-Seite. |
 | [`autoroom`](autoroom/) | Autovoiceroom: automatische temporäre Voicechannels, voll per Dashboard konfigurierbar. |
 | [`autorole`](autorole/) | Automatische Rollenvergabe bei Beitritt + Self-Service-Rollen-Panels (Buttons/Dropdown). |
@@ -29,13 +29,13 @@ Danach `webcore` einrichten (siehe [`webcore/README.md`](webcore/README.md)).
 | [`guard`](guard/) | Spamschutz, Honeypot und Raid-Notmodus – mehrsprachig und per Dashboard steuerbar. |
 | [`levels`](levels/) | Levelsystem: XP für Nachrichten und Voice, Level-Up-Meldungen, Rollen-Belohnungen mit Hierarchie-Schutz, Rangkarte (`[p]rank`), Rangliste – Dashboard „Level“ und Mitgliederseite „Mein Level“. |
 | [`onlyimagevideo`](onlyimagevideo/) | Macht Kanäle zu Nur-Medien-Kanälen: löscht Nachrichten ohne Bild/Video/GIF (auch Tenor-/Giphy-Links, Sticker), Threads erben die Regel, mit Dashboard. |
-| [`organigram`](organigram/) | Postet Server-Organigramme als Bild (5 Muster), Embed oder Text – mit Live-Vorschau im Dashboard. |
+| [`organigram`](organigram/) | Postet Server-Organigramme als Bild (8 Muster), Embed oder Text – mit wählbarer Mehrfach-/höchster Mitgliederposition, Schnellstart und Baumeditor. Mehrseitige Bilder zeigen die vollständige Übersicht und alle Personen; PNG- und ZIP-Export inklusive. |
 | [`poll`](poll/) | Mehrsprachige Umfragen: Abstimmung per Button, Live-Ergebnis, Einzel-/Mehrfachauswahl, anonym/öffentlich, Auto-Ende, CSV-Export und Dashboard. |
 | [`raidhelper`](raidhelper/) | Mehrsprachiger Raid-Planer: Anmeldung per Button, Roster, Erinnerungen, Wiederholung, CSV-Export und Dashboard. |
 | [`scheduler`](scheduler/) | Geplante Nachrichten (Text/Embed, Rollen-Ping): einmalig, täglich, Wochentage, monatlich, Intervall – mit Zeitzone/Sommerzeit, Auto-Pause bei Fehlern, Dashboard mit Vorschau und „Jetzt testen“. |
 | [`serverstats`](serverstats/) | Server-Statistik ohne Personendaten: Beitritte, Abgänge, Mitglieder, Nachrichten und Voice-Zeit je Kanal – Dashboard „Statistik“ mit Diagrammen (7/30/90 Tage), Top-Kanälen, CSV-Export und `[p]stats`. |
 | [`sticky`](sticky/) | Hält eine Nachricht am unteren Ende eines Kanals fest – mit Webhook-Modus, Platzhaltern und Dashboard. |
-| [`tickets`](tickets/) | Mehrsprachiges Ticketsystem mit Panels, Team-Zuordnung je Grund, abbrechbarem 24h-Inaktivitätstimer, Transcripts und Dashboard. |
+| [`tickets`](tickets/) | Ticketsystem mit Panels, Team- und Mitgliederzuweisung, abbrechbarem 24h-Inaktivitätstimer, bearbeitbaren Schnellantworten, Prioritäten, optionalen pausierbaren Antwortfristen, Transcripts und Dashboard. |
 | [`twitchlive`](twitchlive/) | Twitch-Live-Benachrichtigungen: genau eine Meldung pro Stream mit Vorschaubild, Rollen-Ping, eigener Nachricht, „war live“-Bearbeitung nach Stream-Ende, optionaler Live-Rolle und Dashboard. |
 | [`warns`](warns/) | Verwarnsystem mit Punkten, Verfall, automatischen Maßnahmen (inkl. Hierarchie-Schutz), DM und Log sowie Dashboard. Hinweis: Reds eingebauten Cog `warnings` vorher entladen (`[p]unload warnings`). |
 | [`welcome`](welcome/) | Willkommens- und Abschiedsnachrichten, Willkommensbild mit Avatar, Willkommens-DM und Dashboard mit Live-Vorschau. |
