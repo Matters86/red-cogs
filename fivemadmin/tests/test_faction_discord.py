@@ -323,7 +323,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.guild = Guild()
         self.member = Member(10000000000800001)
         self.guild.members[self.member.id] = self.member
-        self.policy = {"enabled": True, "allow_existing_role_ids": [], "allow_category_ids": [], "protected_role_ids": []}
+        self.policy = {"enabled": True, "allow_existing_role_ids": [], "allow_category_ids": [], "protected_role_ids": [], "management_role_ids": []}
         profiles = types.SimpleNamespace(
             items={"live": types.SimpleNamespace(id="live", guild_id=str(self.guild.id), enabled=True)},
             raw={"live": {"faction_discord": self.policy}})
@@ -526,6 +526,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         return row
 
     async def test_profile_missing_policy_defaults_on_through_actual_sync_and_tick(self):
+        self.guild.roles.append(Role(int(fd.DEFAULT_LIVE_MANAGEMENT_ROLE_ID), "Verwaltung"))
         self.cog.profiles.raw["live"].pop("faction_discord")
         self.assertIsNone(fd.profile_gate("live", self.cog.profiles))
         self.assertTrue((await self.submit(snapshot()))["ready"])
@@ -533,6 +534,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.member.roles), 1)
 
     async def test_profile_empty_policy_defaults_on_explicit_false_preserved(self):
+        self.guild.roles.append(Role(int(fd.DEFAULT_LIVE_MANAGEMENT_ROLE_ID), "Verwaltung"))
         self.cog.profiles.raw["live"]["faction_discord"] = {}
         self.assertTrue((await self.submit(snapshot()))["ready"])
         self.cog.profiles.raw["live"]["faction_discord"] = {"enabled": False}
@@ -901,6 +903,246 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         value["generation"] = True
         with self.assertRaises(fd.Refused):
             fd.normalize_snapshot(value)
+
+
+class ManagementVisibilityTests(unittest.IsolatedAsyncioTestCase):
+    loop_factory = OfflineLoop
+    asyncSetUp = CoordinatorTests.asyncSetUp
+    asyncTearDown = CoordinatorTests.asyncTearDown
+    submit = CoordinatorTests.submit
+
+    def manager(self, did=None):
+        role = Role(int(did or fd.DEFAULT_LIVE_MANAGEMENT_ROLE_ID), "Verwaltung", position=150)
+        role.guild = self.guild
+        self.guild.roles.append(role)
+        return role
+
+    async def ready(self, factions=None):
+        await self.submit(snapshot(factions=factions))
+        for _ in range(3):
+            await self.engine.tick("live")
+
+    def channel(self, fid, kind):
+        return self.guild.get_channel(int(self.store.resource(fid, kind)["discord_id"]))
+
+    @staticmethod
+    def allowed(channel, guild, roles, permission, admin=False):
+        if admin:
+            return True  # Discord Administrator bypass is a server platform rule.
+        base = channel.overwrites[guild.default_role].flags.get(permission, False)
+        flags = [channel.overwrites[role].flags.get(permission) for role in roles if role in channel.overwrites]
+        return True if True in flags else False if False in flags else base
+
+    async def test_live_default_exact_id_and_renaming(self):
+        manager = self.manager()
+        self.policy.pop("management_role_ids")
+        await self.ready()
+        manager.name = "DNP Teamleitung – neuer Name"
+        await self.engine.tick("live")
+        for kind in ("text", "voice"):
+            self.assertIn(manager, self.channel(6, kind).overwrites)
+        self.assertEqual(manager.edits, [])
+        self.assertEqual(manager.deletes, [])
+
+    async def test_defaults_live_dev_and_explicit_empty(self):
+        self.assertEqual(fd.management_role_ids("live", {}), (fd.DEFAULT_LIVE_MANAGEMENT_ROLE_ID,))
+        self.assertEqual(fd.management_role_ids("dev", {}), ())
+        self.assertEqual(fd.management_role_ids("live", {"management_role_ids": []}), ())
+        self.manager()
+        await self.ready()
+        self.assertNotIn(self.guild.get_role(int(fd.DEFAULT_LIVE_MANAGEMENT_ROLE_ID)), self.channel(6, "text").overwrites)
+
+    async def test_text_voice_only_own_faction_management_admin(self):
+        manager = self.manager()
+        self.policy.pop("management_role_ids")
+        await self.ready([faction(6), faction(7)])
+        own = self.guild.get_role(int(self.store.resource(6, "role")["discord_id"]))
+        other = self.guild.get_role(int(self.store.resource(7, "role")["discord_id"]))
+        for kind, permission in (("text", "view_channel"), ("voice", "connect")):
+            channel = self.channel(6, kind)
+            self.assertEqual(set(channel.overwrites), {self.guild.default_role, self.guild.me, own, manager})
+            self.assertTrue(self.allowed(channel, self.guild, [own], permission))
+            self.assertTrue(self.allowed(channel, self.guild, [manager], permission))
+            self.assertTrue(self.allowed(channel, self.guild, [], permission, admin=True))
+            self.assertFalse(self.allowed(channel, self.guild, [other], permission))
+            self.assertFalse(self.allowed(channel, self.guild, [], permission))
+
+    async def test_archived_channels_management_readonly_no_faction(self):
+        manager = self.manager()
+        self.policy.pop("management_role_ids")
+        await self.ready()
+        disabled = faction(enabled=False, revision=2)
+        await self.submit(snapshot(2, factions=[disabled]))
+        await self.engine.tick("live")
+        for kind in ("text", "voice"):
+            channel = self.channel(6, kind)
+            self.assertEqual(set(channel.overwrites), {self.guild.default_role, self.guild.me, manager})
+            flags = channel.overwrites[manager].flags
+            self.assertTrue(flags["view_channel"])
+            self.assertTrue(flags["read_message_history"])
+            self.assertFalse(flags["send_messages"])
+            self.assertFalse(flags["connect"])
+            self.assertFalse(flags["speak"])
+
+    async def test_management_removed_from_existing_own_category_and_children(self):
+        manager = self.manager()
+        self.policy.pop("management_role_ids")
+        await self.ready()
+        self.policy["management_role_ids"] = []
+        await self.engine.tick("live")
+        for channel in self.guild.channels:
+            self.assertNotIn(manager, channel.overwrites)
+
+    async def test_all_disabled_own_category_reconciles_management(self):
+        manager = self.manager()
+        self.policy.pop("management_role_ids")
+        await self.ready()
+        await self.submit(snapshot(2, factions=[faction(enabled=False, revision=2)]))
+        await self.engine.tick("live")
+        self.policy["management_role_ids"] = []
+        await self.engine.tick("live")
+        self.assertNotIn(manager, self.guild.categories[0].overwrites)
+        for kind in ("text", "voice"):
+            self.assertNotIn(manager, self.channel(6, kind).overwrites)
+
+    async def test_external_public_category_untouched_children_strict(self):
+        manager = self.manager()
+        self.policy.pop("management_role_ids")
+        category = CategoryChannel(10000000000700001, "Public", overwrites={self.guild.default_role: Overwrite(view_channel=True)})
+        self.guild.channels.append(category)
+        self.policy["allow_category_ids"] = [str(category.id)]
+        item = faction()
+        item["config"].update(categoryMode="existing", categoryId=str(category.id))
+        await self.ready([item])
+        self.assertEqual(category.edits, [])
+        self.assertTrue(category.overwrites[self.guild.default_role].flags["view_channel"])
+        for kind in ("text", "voice"):
+            self.assertFalse(self.channel(6, kind).overwrites[self.guild.default_role].flags["view_channel"])
+            self.assertIn(manager, self.channel(6, kind).overwrites)
+
+    async def test_missing_default_live_role_pauses_without_creates(self):
+        self.policy.pop("management_role_ids")
+        result = await self.submit(snapshot())
+        self.assertEqual(result["code"], "management_role_unavailable")
+        self.assertFalse(result["ready"])
+        await self.engine.tick("live")
+        self.assertEqual(self.guild.create_calls, [])
+
+    async def test_malformed_management_values_fail_closed(self):
+        for values in (None, "1497218321660248165", [1], ["1"], [fd.DEFAULT_LIVE_MANAGEMENT_ROLE_ID] * 2, [str(10000000000000000+i) for i in range(33)]):
+            self.policy["management_role_ids"] = values
+            result = await self.submit(snapshot())
+            self.assertFalse(result["ready"])
+            await self.engine.tick("live")
+            self.assertEqual(self.guild.create_calls, [])
+
+    async def test_everyone_and_managed_cannot_be_management(self):
+        for role in (self.guild.default_role, self.manager()):
+            if role is not self.guild.default_role:
+                role.managed = True
+            self.policy["management_role_ids"] = [str(role.id)]
+            result = await self.submit(snapshot())
+            self.assertFalse(result["ready"])
+            await self.engine.tick("live")
+            self.assertEqual(self.guild.create_calls, [])
+
+    async def test_management_cannot_be_faction_role_or_get_granted(self):
+        manager = self.manager()
+        self.policy.pop("management_role_ids")
+        self.policy["allow_existing_role_ids"] = [str(manager.id)]
+        await self.ready([faction(mode="existing", role=str(manager.id))])
+        self.assertFalse(fd.safe_role(manager, self.guild, {}, set(), owned=True))
+        self.assertEqual(self.member.calls, [])
+        self.assertEqual(self.guild.create_calls, [])
+
+    async def test_owned_role_newly_protected_as_management_never_deleted(self):
+        await self.ready()
+        role = self.member.roles[0]
+        self.policy["management_role_ids"] = [str(role.id)]
+        dissolved = faction(enabled=False, revision=2)
+        dissolved["deleted"] = True
+        await self.submit(snapshot(2, factions=[dissolved], members=[]))
+        await self.engine.tick("live")
+        self.assertEqual(role.deletes, [])
+        self.assertIn(role, self.member.roles)
+
+    async def test_policy_mutation_in_last_snapshot_await_denied(self):
+        manager = self.manager()
+        self.policy["management_role_ids"] = [str(manager.id)]
+        await self.ready()
+        original = self.store.snapshot
+        def changed():
+            value = original()
+            self.policy["management_role_ids"].clear()
+            return value
+        self.store.snapshot = changed
+        with self.assertRaisesRegex(fd.Refused, "trusted_policy_changed"):
+            await self.engine.current("live", self.store)
+
+    async def test_final_channel_edit_cannot_restore_removed_management(self):
+        manager = self.manager()
+        self.policy["management_role_ids"] = [str(manager.id)]
+        await self.ready()
+        channel = self.channel(6, "text")
+        channel.name = "old-name"
+        original = self.engine.current
+        calls = 0
+        async def changed(*args, **kwargs):
+            nonlocal calls
+            result = await original(*args, **kwargs)
+            calls += 1
+            if calls == 2:
+                self.policy["management_role_ids"].clear()
+            return result
+        self.engine.current = changed
+        await self.engine.channels("live", self.store, fd.normalize_snapshot(snapshot())["factions"][0], self.member.roles[0], [12])
+        self.assertNotIn(manager, channel.overwrites)
+
+    async def test_last_role_grant_check_rejects_new_management_role(self):
+        await self.ready()
+        role = self.member.roles[0]
+        self.member.roles = []
+        self.member.calls.clear()
+        self.guild.members.clear()
+        async def changed(did):
+            self.policy["management_role_ids"] = [str(role.id)]
+            return self.member
+        self.guild.fetch_hook = changed
+        await self.engine.tick("live")
+        self.assertEqual(self.member.calls, [])
+
+    async def test_management_change_during_grant_persistence_blocks_add(self):
+        await self.ready()
+        role = self.member.roles[0]
+        self.member.roles = []
+        self.member.calls.clear()
+        original = self.store.grant
+        def changed(rid, uid, wanted):
+            original(rid, uid, wanted)
+            self.policy["management_role_ids"] = [str(role.id)]
+        self.store.grant = changed
+        await self.engine.tick("live")
+        self.assertEqual(self.member.calls, [])
+
+    async def test_management_change_at_role_rename_boundary_blocks_rename(self):
+        await self.ready()
+        role = self.member.roles[0]
+        role.name = "Nicht verändern"
+        original = self.engine.current
+        calls = 0
+        async def changed(*args, **kwargs):
+            nonlocal calls
+            result = await original(*args, **kwargs)
+            calls += 1
+            if calls == 3:
+                self.policy["management_role_ids"] = [str(role.id)]
+                result = await original(*args, **kwargs)
+            return result
+        self.engine.current = changed
+        with self.assertRaises(fd.Refused):
+            await self.engine.role("live", self.store, fd.normalize_snapshot(snapshot())["factions"][0], [12])
+        self.assertEqual(role.name, "Nicht verändern")
+        self.assertEqual(role.edits, [])
 
 
 if __name__ == "__main__":

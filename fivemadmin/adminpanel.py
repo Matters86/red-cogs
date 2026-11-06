@@ -47,12 +47,12 @@ from redbot.core.data_manager import cog_data_path
 from . import db
 from .permissions import PERMISSION_CATALOG, PERMISSION_IDS, validate_permissions, role_permissions, role_revision
 from .serverprofiles import Profiles, PROFILE_ID, ENV_NAME, ALLOWED_PROFILES
-from .faction_discord import Coordinator as FactionDiscord, Refused as FactionDiscordRefused, safe_role as faction_discord_safe_role, snowflake as faction_discord_id
+from .faction_discord import Coordinator as FactionDiscord, Refused as FactionDiscordRefused, safe_role as faction_discord_safe_role, snowflake as faction_discord_id, management_role_ids as faction_discord_management_ids
 
 log = logging.getLogger("red.adminpanel")
 
 # This identifies the loaded Python module independently of a later source copy.
-PANEL_BUILD = "2026-11-06-support-v2.3.1"
+PANEL_BUILD = "2026-11-06-support-v2.3.2"
 try:
     with open(__file__, "rb") as _module_source:
         LOADED_MODULE_SHA256 = hashlib.sha256(_module_source.read()).hexdigest()
@@ -1849,6 +1849,7 @@ class AdminPanel(commands.Cog):
         ap factiondiscord live status|enable|disable
         ap factiondiscord live allowrole|denyrole|protect|unprotect <Rollen-ID>
         ap factiondiscord live allowcategory|denycategory <Kategorie-ID>
+        ap factiondiscord live allowmanagement|denymanagement <Rollen-ID>
         ap factiondiscord live resolve <Fraktions-ID> <role|text|voice|category> <ID>
         """
         if ctx.guild is None or not bool(getattr(ctx.author.guild_permissions, "administrator", False)):
@@ -1857,13 +1858,19 @@ class AdminPanel(commands.Cog):
         if profile is None or profile_id not in ("dev", "live"):
             return await ctx.send("Nur ein explizit gebundenes Dev-/Live-Profil ist zulässig. Legacy bleibt gesperrt.")
         allowed = {"status", "enable", "disable", "allowrole", "denyrole", "protect",
-                   "unprotect", "allowcategory", "denycategory", "resolve", "retry"}
+                   "unprotect", "allowcategory", "denycategory", "allowmanagement", "denymanagement", "resolve", "retry"}
         if operation not in allowed:
-            return await ctx.send("Aktionen: status, enable, disable, allowrole, denyrole, protect, unprotect, allowcategory, denycategory, resolve, retry.")
+            return await ctx.send("Aktionen: status, enable, disable, allowrole, denyrole, protect, unprotect, allowcategory, denycategory, allowmanagement, denymanagement, resolve, retry.")
         if operation == "status":
+            try:
+                managers = faction_discord_management_ids(profile_id,
+                    self.profiles.raw.get(profile_id, {}).get("faction_discord", {}))
+            except FactionDiscordRefused:
+                return await ctx.send("Ungültige Verwaltungsrollen-Konfiguration; keine Einstellung geändert.")
             result = await self.faction_discord.sync(profile_id)
             return await ctx.send("Fraktions-Discord · " + profile_id + ": " + result["code"]
-                + ". Auswahl von Rolle/Text/Voice erfolgt je Fraktion im Editor-Tablet. Bestehende Rollen und Kategorien benötigen hier eine Freigabe.")
+                + ". Auswahl von Rolle/Text/Voice erfolgt je Fraktion im Editor-Tablet. Bestehende Rollen und Kategorien benötigen hier eine Freigabe."
+                + " Verwaltungsrollen (nur Kanalzugriff): " + (", ".join(managers) or "keine"))
         if operation == "retry":
             store = await self.faction_discord.store(profile_id)
             await asyncio.to_thread(store.retry_reset)
@@ -1898,7 +1905,14 @@ class AdminPanel(commands.Cog):
             records = await self.config.server_profiles()
             records = dict(records) if isinstance(records, dict) else {}
             record = dict(records.get(profile_id) or {})
-            policy = dict(record.get("faction_discord") or {})
+            original_policy = record.get("faction_discord", {})
+            if not isinstance(original_policy, dict):
+                return await ctx.send("Ungültige Fraktions-Discord-Konfiguration; bitte zunächst prüfen. Keine Einstellung geändert.")
+            policy = dict(original_policy)
+            try:
+                management_ids = faction_discord_management_ids(profile_id, policy)
+            except FactionDiscordRefused:
+                return await ctx.send("Ungültige Verwaltungsrollen-Konfiguration; keine Einstellung geändert.")
             if operation == "enable":
                 if any(other.id not in (profile_id, "legacy") and other.guild_id == str(ctx.guild.id)
                        for other in self.profiles.items.values()):
@@ -1919,22 +1933,27 @@ class AdminPanel(commands.Cog):
                     did = faction_discord_id(value.strip())
                 except FactionDiscordRefused:
                     return await ctx.send("Bitte nur die numerische Discord-ID der Rolle beziehungsweise Kategorie angeben.")
-                key = ("allow_category_ids" if operation.endswith("category") else
+                key = ("management_role_ids" if operation.endswith("management") else
+                       "allow_category_ids" if operation.endswith("category") else
                        "protected_role_ids" if operation in ("protect", "unprotect") else "allow_existing_role_ids")
-                ids = {str(item) for item in policy.get(key, [])}
+                ids = set(management_ids) if key == "management_role_ids" else {str(item) for item in policy.get(key, [])}
+                if operation == "allowmanagement":
+                    manager = ctx.guild.get_role(int(did))
+                    if not isinstance(manager, discord.Role) or manager.is_default() or manager.managed or manager not in ctx.guild.roles:
+                        return await ctx.send("Diese Verwaltungsrolle ist in dieser Guild nicht bestätigt oder ist eine Standard-/Integrationsrolle.")
                 if operation == "allowrole":
-                    temporary = dict(policy, allow_existing_role_ids=[did])
+                    temporary = dict(policy, allow_existing_role_ids=[did], management_role_ids=list(management_ids))
                     mapping = await self.config.guild(ctx.guild).role_map()
                     if not faction_discord_safe_role(ctx.guild.get_role(int(did)), ctx.guild, temporary, set(mapping)):
                         return await ctx.send("Diese Rolle ist geschützt, privilegiert, verwaltet oder oberhalb des Bots und kann nicht als Fraktionsrolle freigegeben werden.")
                 if operation == "allowcategory" and not isinstance(ctx.guild.get_channel(int(did)), discord.CategoryChannel):
                     return await ctx.send("Die Kategorie wurde in dieser Guild nicht bestätigt.")
-                if operation in ("denyrole", "unprotect", "denycategory"):
+                if operation in ("denyrole", "unprotect", "denycategory", "denymanagement"):
                     ids.discard(did)
                 else:
                     ids.add(did)
-                if len(ids) > 128:
-                    return await ctx.send("Höchstens 128 freigegebene IDs je Liste.")
+                if len(ids) > (32 if key == "management_role_ids" else 128):
+                    return await ctx.send("Höchstens 32 Verwaltungsrollen beziehungsweise 128 freigegebene IDs je übriger Liste.")
                 policy[key] = sorted(ids)
             record["faction_discord"] = policy
             records[profile_id] = record

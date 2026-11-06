@@ -5,6 +5,7 @@ may opt out and must allow any existing role/category before selection.
 Creation intent is durable: an uncertain create is held, never retried by name.
 """
 import asyncio
+from copy import deepcopy
 import hashlib
 import json
 import re
@@ -16,7 +17,8 @@ from contextlib import contextmanager
 import discord
 from .faction_discord_transport import SingleAttemptCreates
 
-BUILD = "faction-discord.2"
+BUILD = "faction-discord.3"
+DEFAULT_LIVE_MANAGEMENT_ROLE_ID = "1497218321660248165"
 MAX_FACTIONS, MAX_MEMBERS, MAX_PAIRS = 128, 4096, 16384
 SNOWFLAKE = re.compile(r"[1-9][0-9]{16,19}\Z")
 ELEVATED = (
@@ -317,22 +319,59 @@ def profile_gate(profile_id, profiles):
     return None
 
 
+def management_role_ids(profile_id, policy):
+    """Trusted bot configuration only; a renamed role keeps its exact ID."""
+    if not isinstance(policy, dict):
+        raise Refused("management_policy_invalid")
+    values = policy.get("management_role_ids", [DEFAULT_LIVE_MANAGEMENT_ROLE_ID] if profile_id == "live" else [])
+    if not isinstance(values, list) or len(values) > 32:
+        raise Refused("management_policy_invalid")
+    checked = [snowflake(value) for value in values]
+    if len(checked) != len(set(checked)):
+        raise Refused("management_policy_invalid")
+    return tuple(sorted(checked))
+
+
+def normalized_policy(profile_id, policy):
+    ids = management_role_ids(profile_id, policy)
+    result = deepcopy(policy)
+    result["management_role_ids"] = list(ids)
+    return result
+
+
+def management_roles(guild, policy):
+    result = []
+    for did in policy["management_role_ids"]:
+        role = guild.get_role(int(did))
+        if (not isinstance(role, discord.Role) or role.is_default() or role.managed
+                or role not in guild.roles):
+            raise Refused("management_role_unavailable")
+        result.append(role)
+    return result
+
+
 def safe_role(role, guild, policy, protected, owned=False):
     if role is None or role.is_default() or role.managed or role >= guild.me.top_role:
         return False
-    if str(role.id) in protected or str(role.id) in policy.get("protected_role_ids", []):
+    # Management roles are never faction membership grants, even when a caller
+    # holds an unnormalized raw policy or this ID was once owned by a faction.
+    management = {DEFAULT_LIVE_MANAGEMENT_ROLE_ID, *policy.get("management_role_ids", [])}
+    if str(role.id) in management or str(role.id) in protected or str(role.id) in policy.get("protected_role_ids", []):
         return False
     if any(getattr(role.permissions, name, False) for name in ELEVATED):
         return False
     return owned or str(role.id) in policy.get("allow_existing_role_ids", [])
 
 
-def private_overwrites(guild, role=None):
+def private_overwrites(guild, role=None, management=(), archived=False):
     result = {
         guild.default_role: discord.PermissionOverwrite(view_channel=False, connect=False),
         guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True,
             read_message_history=True, connect=True, speak=True, manage_channels=True),
     }
+    for manager in management:
+        result[manager] = discord.PermissionOverwrite(view_channel=True, send_messages=not archived,
+            read_message_history=True, connect=not archived, speak=not archived)
     if role is not None:
         result[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True,
             read_message_history=True, connect=True, speak=True)
@@ -378,16 +417,29 @@ class Coordinator:
             raise Refused("discord_guild_unavailable")
         if not guild.me.guild_permissions.manage_roles or not guild.me.guild_permissions.manage_channels:
             raise Refused("bot_permissions_missing")
-        policy = self.cog.profiles.raw.get(pid, {}).get("faction_discord", {})
+        raw_policy = deepcopy(self.cog.profiles.raw.get(pid, {}).get("faction_discord", {}))
+        policy = normalized_policy(pid, raw_policy)
+        management_roles(guild, policy)  # Missing configured IDs pause; never infer by name.
         store = await self.store(pid)
         await asyncio.to_thread(store.bind, guild.id)
         mapping = await self.cog.config.guild(guild).role_map()
-        if profile_gate(pid, self.cog.profiles) is not None or self.cog.profiles.raw.get(pid, {}).get("faction_discord", {}) != policy:
+        if profile_gate(pid, self.cog.profiles) is not None or self.cog.profiles.raw.get(pid, {}).get("faction_discord", {}) != raw_policy:
             raise Refused("trusted_policy_changed")
         if self.cog.profiles.items[pid].guild_id != str(guild.id):
             raise Refused("trusted_guild_changed")
         protected = set(mapping) if isinstance(mapping, dict) else set()
+        management_roles(guild, policy)
         return guild, policy, protected
+
+    def channel_overwrites(self, pid, guild, role=None, archived=False):
+        # No await between this fresh policy read and constructing the request.
+        if profile_gate(pid, self.cog.profiles) is not None or self.cog.profiles.items[pid].guild_id != str(guild.id):
+            raise Refused("trusted_policy_changed")
+        policy = normalized_policy(pid, self.cog.profiles.raw.get(pid, {}).get("faction_discord", {}))
+        managers = management_roles(guild, policy)
+        if role is not None and str(role.id) in policy["management_role_ids"]:
+            raise Refused("management_role_not_faction_role")
+        return private_overwrites(guild, role, managers, archived)
 
     async def sync(self, pid, payload=None):
         async with self.sync_locks.setdefault(pid, asyncio.Lock()):
@@ -472,6 +524,13 @@ class Coordinator:
             row = next((item for item in latest["factions"] if item["id"] == faction["id"]), None)
             if row != faction:
                 raise Refused("desired_state_changed")
+        guild, policy, _ = context
+        # A mutable configuration can change during the final SQLite awaits.
+        if (profile_gate(pid, self.cog.profiles) is not None
+                or self.cog.profiles.items[pid].guild_id != str(guild.id)
+                or normalized_policy(pid, self.cog.profiles.raw.get(pid, {}).get("faction_discord", {})) != policy):
+            raise Refused("trusted_policy_changed")
+        management_roles(guild, policy)
         return context, latest
 
     async def create(self, pid, store, faction, kind, operation, budget, check_faction=None):
@@ -518,6 +577,7 @@ class Coordinator:
             did = await self.create(pid, store, faction, "role", lambda: self.transport.role(guild, faction["label"]), budget)
         else:
             did = cfg["roleId"]
+        (guild, policy, protected), _ = await self.current(pid, store, faction)
         role = guild.get_role(int(did))
         if not safe_role(role, guild, policy, protected, owned=owned):
             raise Refused("role_missing_protected_or_not_allowed")
@@ -525,7 +585,10 @@ class Coordinator:
             if budget[0] <= 0:
                 raise Refused("pending_budget")
             budget[0] -= 1
-            await self.current(pid, store, faction)
+            (guild, policy, protected), _ = await self.current(pid, store, faction)
+            role = guild.get_role(int(did))
+            if not safe_role(role, guild, policy, protected, owned=owned):
+                raise Refused("role_missing_protected_or_not_allowed")
             await role.edit(name=faction["label"], reason="DNP Fraktion umbenannt")
         return role
 
@@ -542,10 +605,18 @@ class Coordinator:
                     raise Refused("category_missing")
             else:
                 did = await self.create(pid, store, None, "category", lambda: self.transport.channel(
-                    guild, "category", "DNP · Fraktionen", private_overwrites(guild)), budget, check_faction=faction)
+                    guild, "category", "DNP · Fraktionen", self.channel_overwrites(pid, guild)), budget, check_faction=faction)
                 category = guild.get_channel(int(did))
                 if not isinstance(category, discord.CategoryChannel):
                     raise Refused("owned_category_missing")
+                desired = self.channel_overwrites(pid, guild)
+                if category.overwrites != desired:
+                    if budget[0] <= 0:
+                        raise Refused("pending_budget")
+                    budget[0] -= 1
+                    await self.current(pid, store, faction)
+                    await category.edit(overwrites=self.channel_overwrites(pid, guild),
+                        reason="DNP Fraktionskategorie: Verwaltung aktualisiert")
         names = {}
         for kind, enabled in (("text", cfg["textEnabled"]), ("voice", cfg["voiceEnabled"])):
             row = await asyncio.to_thread(store.resource, faction["id"], kind)
@@ -556,13 +627,13 @@ class Coordinator:
                 name = faction["label"][:80]
             if not row or row["phase"] != "ready":
                 await self.create(pid, store, faction, kind, lambda: self.transport.channel(
-                    guild, kind, name, private_overwrites(guild, role), category), budget)
+                    guild, kind, name, self.channel_overwrites(pid, guild, role), category), budget)
                 row = await asyncio.to_thread(store.resource, faction["id"], kind)
             channel = guild.get_channel(int(row["discord_id"])) if row["discord_id"] else None
             expected_type = discord.TextChannel if kind == "text" else discord.VoiceChannel
             if not isinstance(channel, expected_type):
                 raise Refused(row["note"] or "owned_channel_missing")
-            overwrites = private_overwrites(guild, role if enabled else None)
+            overwrites = self.channel_overwrites(pid, guild, role if enabled else None, archived=not enabled)
             desired_name = name if enabled else ("archiv-" + name)[:95]
             # Explicit full replacement defeats unsafe inherited/category overwrites.
             changes = channel.overwrites != overwrites or channel.name != desired_name
@@ -573,7 +644,7 @@ class Coordinator:
                     raise Refused("pending_budget")
                 budget[0] -= 1
                 await self.current(pid, store, faction)
-                kwargs = {"name": desired_name, "overwrites": overwrites,
+                kwargs = {"name": desired_name, "overwrites": self.channel_overwrites(pid, guild, role if enabled else None, archived=not enabled),
                           "reason": "DNP Fraktionszugang aktualisiert"}
                 if enabled:
                     kwargs.update(category=category, sync_permissions=False)
@@ -583,6 +654,16 @@ class Coordinator:
 
     async def archive(self, pid, store, faction, budget):
         (guild, _, _), _ = await self.current(pid, store)
+        own_category = await asyncio.to_thread(store.resource, 0, "category")
+        if own_category and own_category["phase"] == "ready" and own_category["discord_id"]:
+            category = guild.get_channel(int(own_category["discord_id"]))
+            if isinstance(category, discord.CategoryChannel) and category.overwrites != self.channel_overwrites(pid, guild):
+                if budget[0] <= 0:
+                    raise Refused("pending_budget")
+                budget[0] -= 1
+                await self.current(pid, store)
+                await category.edit(overwrites=self.channel_overwrites(pid, guild),
+                    reason="DNP Fraktionskategorie: Verwaltung aktualisiert")
         for kind in ("text", "voice"):
             row = await asyncio.to_thread(store.resource, faction["id"], kind)
             if not row or not row["discord_id"]:
@@ -590,7 +671,7 @@ class Coordinator:
             channel = guild.get_channel(int(row["discord_id"]))
             if channel is None:
                 continue  # Never recreate a deleted/disabled channel.
-            overwrites = private_overwrites(guild)
+            overwrites = self.channel_overwrites(pid, guild, archived=True)
             name = channel.name if channel.name.startswith("archiv-") else ("archiv-" + channel.name)[:95]
             if channel.overwrites != overwrites or channel.name != name:
                 if budget[0] <= 0:
@@ -600,7 +681,8 @@ class Coordinator:
                 current = next((row for row in latest["factions"] if row["id"] == faction["id"]), None)
                 if current and active(current):
                     raise Refused("desired_state_changed")
-                await channel.edit(name=name, overwrites=overwrites, reason="DNP Fraktion deaktiviert; Historie bleibt")
+                await channel.edit(name=name, overwrites=self.channel_overwrites(pid, guild, archived=True),
+                    reason="DNP Fraktion deaktiviert; Historie bleibt")
 
     @staticmethod
     def deletion_referenced(latest, registry, fid, rid):
@@ -817,9 +899,11 @@ class Coordinator:
                         # Leaving Discord is not proof of leaving the in-game faction.
                         await asyncio.to_thread(store.defer, job, "discord_member_unavailable")
                         continue
-                (_, _, _), latest = await self.current(pid, store)
+                (guild, policy, protected), latest = await self.current(pid, store)
                 if latest["generation"] != snapshot["generation"]:
                     return
+                if not safe_role(role, guild, policy, protected, owned):
+                    raise Refused("tracked_role_now_protected")
                 wanted = (rid, uid) in targets
                 has_role = any(str(row.id) == rid for row in member.roles)
                 if wanted and not has_role:
@@ -827,6 +911,12 @@ class Coordinator:
                         break
                     budget[0] -= 1
                     await asyncio.to_thread(store.grant, rid, uid, True)
+                    (guild, policy, protected), latest = await self.current(pid, store)
+                    if latest["generation"] != snapshot["generation"]:
+                        return
+                    role = guild.get_role(int(rid))
+                    if not safe_role(role, guild, policy, protected, owned):
+                        raise Refused("tracked_role_now_protected")
                     await member.add_roles(role, atomic=True, reason="DNP bestätigte Fraktionsmitgliedschaft")
                 elif not wanted and has_role:
                     if budget[0] <= 0:

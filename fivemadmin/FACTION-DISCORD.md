@@ -1,6 +1,6 @@
 # Fraktionsrollen und private Bereiche – Testbuild 06.11.2026
 
-Paketbuild `2026-11-06-support-v2.3.1`, Koordinator `faction-discord.2`.
+Paketbuild `2026-11-06-support-v2.3.2`, Koordinator `faction-discord.3`.
 Vorbereitet und isoliert geprüft; **nicht auf dem NAS-Bot aktiviert und kein
 echter Discord-/Ingame-Test**. Die vorhandene Support-Zentrale bleibt erhalten.
 
@@ -26,7 +26,7 @@ keine Vergabe von Ingame-Admin- oder Server-Editor-Rechten.
    sichern. Zusammengehörigen neuen Cog, AP-Bridge und Fraktionscode aus demselben
    Updatepaket verwenden. Keine alten Profil-SQLite-Dateien überschreiben.
 2. Betreiber lädt den vollständigen Cog regulär neu. `[p]ap version` muss
-   `2026-11-06-support-v2.3.1` zeigen. `[p]` ist euer vorhandenes Bot-Präfix.
+   `2026-11-06-support-v2.3.2` zeigen. `[p]` ist euer vorhandenes Bot-Präfix.
 3. Bot-Owner bindet ein ausdrückliches Profil an die richtige Guild:
    `[p]ap profile bind live DNP Live`. Schlüssel nur über die vorhandene
    Umgebungsvariablen-Konfiguration zuordnen; keine Schlüssel in Chat posten.
@@ -116,10 +116,48 @@ die nicht als aktuelle Mitglieder im bestätigten Bestand stehen, und sämtliche
 anderen Rollen bleiben unangetastet. Bereits vor der Einführung falsch vergebene
 Rollen solcher Nichtmitglieder müssen separat geprüft werden.
 
-Private Kanäle verwenden ein eigenes vollständiges Überschreibungsschema:
-`@everyone` sieht/verbindet nicht, die zugeordnete Fraktionsrolle und der Bot
-erhalten Zugriff. Fremde Rollen aus einer öffentlichen Kategorie werden nicht
-geerbt. Discord-Administratoren umgehen Kanalüberschreibungen nach Discord-Regeln.
+Private Text- und Sprachkanäle verwenden ein eigenes vollständiges
+Überschreibungsschema: `@everyone` sieht/verbindet nicht. Nur die zugeordnete
+Fraktionsrolle, die ausdrücklich konfigurierte Verwaltung und der technisch
+benötigte Bot erhalten Zugriff. Andere Fraktionen und gewöhnliche Spieler
+erhalten keinen Zugang. Fremde Rollen aus einer öffentlichen Kategorie werden
+nicht geerbt; diese vorhandene Kategorie selbst wird nicht verändert.
+Discord-Administratoren umgehen Kanalüberschreibungen nach Discord-Regeln.
+
+Für Live ist Marcels Verwaltungsrolle `1497218321660248165` der Standard, wenn
+noch keine eigene Verwaltungsrollen-Liste gespeichert ist. Der Name kann sich
+ändern; maßgeblich bleibt ausschließlich die Rollen-ID. Fehlt diese Rolle in
+der gebundenen Guild, pausiert der Abgleich mit `management_role_unavailable`;
+es wird keine Ersatzrolle erstellt und keine Rolle nach Namen übernommen.
+Dev übernimmt diese Live-ID nicht: Dort eine eigene Test-Verwaltungsrolle angeben.
+Eine ausdrücklich gespeicherte leere Liste bleibt leer.
+
+Nur ein Discord-Administrator der gebundenen Guild kann die Verwaltungsrollen
+über den Bot ändern:
+
+- `[p]ap factiondiscord live allowmanagement ROLLEN_ID` ergänzt eine bestätigte
+  vorhandene Rolle; für Dev entsprechend `dev` verwenden.
+- `[p]ap factiondiscord live denymanagement ROLLEN_ID` entfernt sie. Wird die
+  voreingestellte Live-ID entfernt, wird ausdrücklich eine leere Liste gespeichert;
+  der Standard kommt beim nächsten Start nicht zurück.
+- `[p]ap factiondiscord live status` zeigt auch die Verwaltungsrollen-IDs.
+
+Höchstens 32 Verwaltungsrollen je Profil; `@everyone`, Integrationsrollen,
+ungültige IDs oder doppelte Einträge werden abgelehnt. Es werden keine Rollen
+automatisch aus Support-/Panelrechten abgeleitet. Server-Editoren können diese
+Verwaltungsrollen nicht über das Spiel ändern. Verwaltungsrollen werden niemals
+als Fraktionsmitgliedschaft vergeben, entfernt, umbenannt oder bei einer
+Fraktionsauflösung gelöscht. Sie können über der Botrolle stehen, weil der Bot
+ihre Mitgliedschaft und Guild-Rechte nicht verwaltet.
+
+Bei deaktivierten/aufgelösten Fraktionen verlieren Fraktionsmitglieder den
+Kanalzugriff. Die Verwaltung behält lesenden Archivzugriff auf Text/Verlauf;
+Schreiben sowie Betreten/Sprechen im archivierten Voice bleiben für sie gesperrt.
+Discord-Administratoren behalten ihren nativen Vollzugriff. Der Bot gleicht auch
+bereits erstellte eigene Kategorien und Kanäle nach einer Verwaltungsänderung ab.
+Vor jeder Kanaländerung werden die aktuellen vertrauenswürdigen Einstellungen
+erneut ausgewertet; veraltete Rechte werden nicht aus einer wartenden Anfrage
+zurückgeschrieben.
 Eigene Kanäle werden bei Abschaltung oder vollständiger Auflösung archiviert/
 geschlossen; der Verlauf wird nicht gelöscht. Eine einfache Deaktivierung oder
 der Modus **Aus** löscht die Rolle nicht. Erst eine vom Server ausdrücklich und

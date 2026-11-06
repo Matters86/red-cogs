@@ -22,6 +22,7 @@ def actual_method(name, extra=None):
            "db": None, "READ_ACTIONS": {"read"}, "commands": types.SimpleNamespace(Context=object),
            "discord": harness.fake_discord,
            "faction_discord_id": harness.fd.snowflake,
+           "faction_discord_management_ids": harness.fd.management_role_ids,
            "faction_discord_safe_role": harness.fd.safe_role,
            "FactionDiscordRefused": harness.fd.Refused}
     env.update(extra or {})
@@ -117,7 +118,7 @@ class SourcePreservation(unittest.TestCase):
     def test_build_constant(self):
         build = next(node for node in TREE.body if isinstance(node, ast.Assign) and
                      any(isinstance(item, ast.Name) and item.id == "PANEL_BUILD" for item in node.targets))
-        self.assertEqual(build.value.value, "2026-11-06-support-v2.3.1")
+        self.assertEqual(build.value.value, "2026-11-06-support-v2.3.2")
 
     def test_unrelated_cog_functions_preserved(self):
         before = Path(__file__).resolve().parents[3] / "before" / "fivemadmin" / "adminpanel.py"
@@ -128,8 +129,67 @@ class SourcePreservation(unittest.TestCase):
         old = {node.name: ast.dump(node, include_attributes=False) for node in old_class.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
         new = {node.name: ast.dump(node, include_attributes=False) for node in CLASS.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
         changed = {name for name in old if old[name] != new.get(name)}
-        self.assertEqual(changed, set())
+        self.assertEqual(changed, {"ap_factiondiscord"})
         self.assertEqual(set(new) - set(old), set())
+
+
+class ManagementCommands(unittest.IsolatedAsyncioTestCase):
+    loop_factory = harness.OfflineLoop
+
+    async def asyncSetUp(self):
+        self.messages = []
+        self.guild = harness.Guild()
+        self.manager = harness.Role(int(harness.fd.DEFAULT_LIVE_MANAGEMENT_ROLE_ID), "Verwaltung", position=150)
+        self.guild.roles.append(self.manager)
+        self.records = {"live": {"faction_discord": {}}}
+        self.saved = []
+        async def get():
+            return copy.deepcopy(self.records)
+        async def put(value):
+            self.records = copy.deepcopy(value)
+            self.saved.append(value)
+        async def mapping():
+            return {}
+        config = types.SimpleNamespace(server_profiles=types.SimpleNamespace(__call__=get, set=put))
+        class Field:
+            __call__ = staticmethod(get)
+            set = staticmethod(put)
+        config.server_profiles = Field()
+        config.guild = lambda guild: types.SimpleNamespace(role_map=mapping)
+        profiles = types.SimpleNamespace(select=lambda pid, gid: types.SimpleNamespace(id=pid), raw=copy.deepcopy(self.records))
+        async def refresh():
+            profiles.raw = copy.deepcopy(self.records)
+        async def send(value):
+            self.messages.append(value)
+        self.ctx = types.SimpleNamespace(guild=self.guild, author=types.SimpleNamespace(guild_permissions=harness.Permissions(administrator=True)), send=send)
+        self.obj = types.SimpleNamespace(profiles=profiles, config=config, _profile_config_lock=asyncio.Lock(),
+            _refresh_profiles=refresh, faction_discord=types.SimpleNamespace(catalogs={}))
+        self.method = actual_method("ap_factiondiscord")
+
+    async def test_admin_remove_default_stores_explicit_empty_then_add_by_id(self):
+        await self.method(self.obj, self.ctx, "live", "denymanagement", value=str(self.manager.id))
+        self.assertEqual(self.records["live"]["faction_discord"]["management_role_ids"], [])
+        self.manager.name = "Umbenannt"
+        await self.method(self.obj, self.ctx, "live", "allowmanagement", value=str(self.manager.id))
+        self.assertEqual(self.records["live"]["faction_discord"]["management_role_ids"], [str(self.manager.id)])
+
+    async def test_nonadmin_management_configuration_denied(self):
+        self.ctx.author.guild_permissions = harness.Permissions(administrator=False)
+        await self.method(self.obj, self.ctx, "live", "allowmanagement", value=str(self.manager.id))
+        self.assertEqual(self.saved, [])
+        self.assertIn("Nur Discord-Administratoren", self.messages[-1])
+
+    async def test_default_management_cannot_be_allowlisted_faction_role(self):
+        await self.method(self.obj, self.ctx, "live", "allowrole", value=str(self.manager.id))
+        self.assertEqual(self.saved, [])
+        self.assertIn("geschützt", self.messages[-1])
+
+    async def test_management_unknown_role_and_invalid_policy_not_written(self):
+        await self.method(self.obj, self.ctx, "live", "allowmanagement", value="10000000000123456")
+        self.assertEqual(self.saved, [])
+        self.records["live"]["faction_discord"]["management_role_ids"] = "invalid"
+        await self.method(self.obj, self.ctx, "live", "denymanagement", value=str(self.manager.id))
+        self.assertEqual(self.saved, [])
 
 
 if __name__ == "__main__":

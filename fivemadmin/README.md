@@ -2,7 +2,7 @@
 
 ## Fraktions-Discord vom 06.11.2026 – vorbereiteter Testbuild
 
-Aktueller Paketstand: `2026-11-06-support-v2.3.1`. Ohne individuelle Ausnahme sind
+Aktueller Paketstand: `2026-11-06-support-v2.3.2`. Ohne individuelle Ausnahme sind
 Rollen sowie private Text- und Sprachkanäle je Fraktion standardmäßig aktiv.
 Die Auswahl bleibt unter **Editor-Tablet → Fraktionen → Discord**. Ebenso ist ein
 gültig gebundenes Dev-/Live-Profil standardmäßig eingeschaltet; eine ausdrücklich
@@ -89,3 +89,19 @@ Fehlgeschlagene Fotolöschungen bleiben ohne Nutzerzuordnung für einen erneuten
 ## Versionshistorie und Details
 
 Die vollständigen bisherigen Einrichtungs-, Release- und Abnahmehinweise stehen unverändert im [CHANGELOG.md](CHANGELOG.md). Aktuelle Fraktionsfunktionen (standardmäßig aktiv bei gültiger Einrichtung): [FACTION-DISCORD.md](FACTION-DISCORD.md).
+
+### Private Fraktionskanäle – Verwaltungszugriff
+
+Fraktions-Text und Voice sind ausschließlich für ihre jeweilige Fraktionsrolle,
+die Verwaltung und Discord-Administratoren sichtbar; der Bot behält den für den
+Abgleich nötigen Zugriff. Live verwendet ohne eigene Ausnahme die stabile
+Verwaltungsrollen-ID `1497218321660248165`, unabhängig vom Rollennamen. Andere
+Fraktionen sowie öffentliche Kategorie-Freigaben erhalten dadurch keinen Zugriff.
+Archive sind für die Verwaltung nur lesbar; Fraktionszugriff wird dort entfernt.
+
+Discord-Administratoren pflegen die Verwaltung mit
+`[p]ap factiondiscord live allowmanagement ROLLEN_ID` bzw.
+`[p]ap factiondiscord live denymanagement ROLLEN_ID`. Dev benötigt seine eigene
+Testrolle. Fehlende Rollen werden nicht nach Namen ersetzt. Die Verwaltungsrolle
+ist vor Fraktionsvergabe und Fraktionslöschung geschützt. Details: FACTION-DISCORD.md.
+Source-Testbuild; echter NAS-/Discord-Abgleich bleibt zu prüfen.

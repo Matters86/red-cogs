@@ -1,3 +1,15 @@
+## 2026-11-06-support-v2.3.2 · Private Fraktionsbereiche
+
+- Text/Voice nur eigene Fraktion, ausdrücklich konfigurierte Verwaltung und
+  Discord-Administratoren; keine fremden Kategorie-Freigaben übernehmen.
+- Live-Standard für Verwaltungsrolle: ID1497218321660248165, bleibt bei Umbenennung
+  gültig. Dev erhält eine eigene Testzuordnung; bewusst leere Einstellungen bleiben.
+- Verwaltungsrollen nur durch Discord-Administratoren konfigurierbar; vom
+  Fraktions-Rollenabgleich und der Rollenlöschung ausgeschlossen.
+- Bereits erstellte eigene Kategorien/Kanäle werden abgeglichen; Archive für die
+  Verwaltung nur lesbar. Aktuelle Rechte erneut vor wartenden Änderungen prüfen.
+- Isoliert geprüfter Source-Testbuild; kein tatsächlicher Discord-/Live-Eingriff.
+
 ## 06.11.2026 – Support v2.3.1 (Standard aktiv, Löschung bei Auflösung)
 
 - Gültig gebundene und getrennte Dev-/Live-Profile sind ohne individuellen
