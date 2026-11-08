@@ -1,3 +1,17 @@
+## 2026-11-08-support-v2.3.3 · Automatische Fraktionskategorien
+
+- Staatliche Fraktionen unter **DNP · Behörden**, Crime unter **DNP · Crime-Fraktionen**;
+  private Text-/Sprachkanäle weiterhin nur eigene Fraktionsrolle, Verwaltung und
+  Discord-Administratoren. Keine pauschalen Behörden-/Crime-Mitgliedsrechte.
+- Eigene Kategorien mit getrennten dauerhaften IDs; unklare Erstellungen bleiben
+  gesperrt. Vorhandene explizite Kategorien, alte Sammelkategorie und Verlauf bleiben.
+- Medien/sonstige Kategorien verwenden weiter **DNP · Fraktionen**. Kein
+  Übernehmen nach Namen und kein Löschen oder Umbenennen fremder Kategorien.
+- Discord-Admin kann die zwei neuen Kategoriearten bei unklarem Erstellungsbeleg
+  anhand einer ausdrücklich im Audit bestätigten ID zuordnen. Botrechte bleiben
+  Rollen/Kanäle verwalten, ohne neue Administratorberechtigung.
+- Nur vorbereiteter, isoliert getesteter Cog; keine tatsächliche Bot-/Discord-Aktion.
+
 ## 2026-11-06-support-v2.3.2 · Private Fraktionsbereiche
 
 - Text/Voice nur eigene Fraktion, ausdrücklich konfigurierte Verwaltung und

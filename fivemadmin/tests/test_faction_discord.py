@@ -905,6 +905,148 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
             fd.normalize_snapshot(value)
 
 
+
+    async def test_group_categories_created_once_private_and_replayed(self):
+        police, crew = faction(6), faction(8)
+        crew['category']='crime'
+        value=snapshot(factions=[police,crew])
+        await self.submit(value)
+        await self.engine.tick('live');await self.engine.tick('live')
+        self.assertEqual({c.name for c in self.guild.categories},{'DNP · Behörden','DNP · Crime-Fraktionen'})
+        state=self.store.resource(0,'category_state');crime=self.store.resource(0,'category_crime')
+        self.assertNotEqual(state['discord_id'],crime['discord_id'])
+        self.assertIsNone(self.store.resource(0,'category'))
+        roles={fid:self.guild.get_role(int(self.store.resource(fid,'role')['discord_id']))for fid in (6,8)}
+        for fid,category in ((6,state),(8,crime)):
+            group=self.guild.get_channel(int(category['discord_id']))
+            self.assertEqual(set(group.overwrites),{self.guild.default_role,self.guild.me})
+            self.assertFalse(group.overwrites[self.guild.default_role].flags['view_channel'])
+            self.assertFalse(group.overwrites[self.guild.default_role].flags['connect'])
+            for kind in ('text','voice'):
+                channel=self.guild.get_channel(int(self.store.resource(fid,kind)['discord_id']))
+                self.assertEqual(channel.category_id,group.id)
+                self.assertEqual(set(channel.overwrites),{self.guild.default_role,self.guild.me,roles[fid]})
+        calls=len(self.guild.create_calls)
+        self.engine=fd.Coordinator(self.cog)
+        await self.engine.sync('live',value);await self.engine.tick('live')
+        self.assertEqual(len(self.guild.create_calls),calls)
+
+    async def test_group_uncertain_category_never_created_again_or_adopted_by_name(self):
+        value=snapshot();await self.submit(value)
+        original=self.engine.transport.channel
+        async def uncertain(guild,kind,name,overwrites,category=None):
+            result=await original(guild,kind,name,overwrites,category)
+            if kind=='category':raise TimeoutError('artificial lost category result')
+            return result
+        self.engine.transport.channel=uncertain
+        await self.engine.tick('live')
+        self.assertEqual(self.store.resource(0,'category_state')['phase'],'held')
+        count=len(self.guild.create_calls)
+        self.store.retry_reset();await self.engine.tick('live')
+        self.assertEqual(len(self.guild.create_calls),count)
+        self.engine=fd.Coordinator(self.cog);await self.engine.sync('live',value)
+        self.store.retry_reset();await self.engine.tick('live')
+        self.assertEqual(len(self.guild.create_calls),count)
+        self.assertEqual(len(self.guild.categories),1)
+
+    async def test_legacy_category_and_children_migrate_without_deletion_or_recreation(self):
+        legacy=CategoryChannel(10000000000700001,'DNP · Fraktionen',overwrites={self.guild.default_role:Overwrite(view_channel=True)})
+        self.guild.channels.append(legacy);self.store.put_resource(0,'category',legacy.id,'ready')
+        old=[]
+        for kind,cls in (('text',TextChannel),('voice',VoiceChannel)):
+            channel=cls(10000000000700002+len(old),'old',category=legacy)
+            old.append(channel);self.guild.channels.append(channel);self.store.put_resource(6,kind,channel.id,'ready')
+        await self.submit(snapshot());await self.engine.tick('live')
+        new=self.store.resource(0,'category_state')
+        self.assertEqual(self.store.resource(0,'category')['discord_id'],str(legacy.id))
+        self.assertEqual(legacy.name,'DNP · Fraktionen')
+        self.assertEqual(len(self.guild.channels),4)
+        self.assertTrue(all(c.category_id==int(new['discord_id'])for c in old))
+        self.assertFalse(legacy.overwrites[self.guild.default_role].flags['view_channel'])
+        self.assertEqual([kind for kind,_ in self.guild.create_calls],['role','CategoryChannel'])
+
+    async def test_media_and_unknown_categories_share_conservative_legacy_fallback(self):
+        values=[]
+        for fid,kind in ((6,'state'),(8,'crime'),(9,'media'),(10,'unknown')):
+            row=faction(fid);row['category']=kind;values.append(row)
+        await self.submit(snapshot(factions=values))
+        for _ in range(4):await self.engine.tick('live')
+        self.assertEqual({c.name for c in self.guild.categories},{'DNP · Behörden','DNP · Crime-Fraktionen','DNP · Fraktionen'})
+        legacy=self.store.resource(0,'category')['discord_id']
+        for fid in (9,10):
+            channel=self.guild.get_channel(int(self.store.resource(fid,'text')['discord_id']))
+            self.assertEqual(channel.category_id,int(legacy))
+
+    async def test_group_selection_uses_snapshot_category_not_police_name(self):
+        row=faction(6);row['category']='crime'
+        await self.submit(snapshot(factions=[row]));await self.engine.tick('live')
+        self.assertIsNone(self.store.resource(0,'category_state'))
+        self.assertEqual(self.guild.categories[0].name,'DNP · Crime-Fraktionen')
+
+    async def test_authoritative_category_change_moves_same_channels_preserving_old_group(self):
+        await self.submit(snapshot());await self.engine.tick('live')
+        old=self.store.resource(0,'category_state')['discord_id']
+        channel_ids={kind:self.store.resource(6,kind)['discord_id']for kind in ('text','voice')}
+        row=faction(6);row['category']='crime'
+        await self.submit(snapshot(2,factions=[row]));await self.engine.tick('live')
+        new=self.store.resource(0,'category_crime')['discord_id']
+        self.assertNotEqual(old,new)
+        self.assertEqual(self.store.resource(0,'category_state')['discord_id'],old)
+        for kind,did in channel_ids.items():
+            self.assertEqual(self.store.resource(6,kind)['discord_id'],did)
+            self.assertEqual(self.guild.get_channel(int(did)).category_id,int(new))
+
+    async def test_same_named_foreign_category_is_never_adopted_or_edited(self):
+        foreign=CategoryChannel(10000000000700001,'DNP · Behörden',overwrites={self.guild.default_role:Overwrite(view_channel=True)})
+        self.guild.channels.append(foreign)
+        await self.submit(snapshot());await self.engine.tick('live')
+        self.assertNotEqual(self.store.resource(0,'category_state')['discord_id'],str(foreign.id))
+        self.assertEqual(foreign.edits,[])
+        self.assertTrue(foreign.overwrites[self.guild.default_role].flags['view_channel'])
+
+    async def test_group_archives_refresh_all_owned_management_access(self):
+        manager=Role(10000000000400001,'Verwaltung',position=150)
+        self.guild.roles.append(manager);self.policy['management_role_ids']=[str(manager.id)]
+        police,crew=faction(6),faction(8);crew['category']='crime'
+        await self.submit(snapshot(factions=[police,crew]));await self.engine.tick('live');await self.engine.tick('live')
+        self.assertTrue(all(manager in c.overwrites for c in self.guild.categories))
+        self.policy['management_role_ids']=[]
+        police['enabled']=False;crew['enabled']=False
+        await self.submit(snapshot(2,factions=[police,crew]));await self.engine.tick('live');await self.engine.tick('live')
+        self.assertTrue(all(manager not in c.overwrites for c in self.guild.channels))
+        for c in self.guild.channels:
+            self.assertEqual(set(c.overwrites),{self.guild.default_role,self.guild.me})
+            self.assertFalse(c.overwrites[self.guild.default_role].flags['view_channel'])
+
+
+
+    async def test_missing_unused_legacy_category_does_not_block_state_migration(self):
+        old='10000000000700001'
+        self.store.put_resource(0,'category',old,'ready')
+        await self.submit(snapshot());await self.engine.tick('live')
+        self.assertEqual(self.store.resource(0,'category')['discord_id'],old)
+        self.assertEqual(self.store.resource(0,'category')['phase'],'ready')
+        self.assertEqual(self.guild.categories[0].name,'DNP · Behörden')
+        self.assertEqual(self.store.statuses()[0]['phase'],'synced')
+
+    async def test_missing_crime_binding_blocks_only_selected_crime_group(self):
+        old='10000000000700001'
+        self.store.put_resource(0,'category_crime',old,'ready')
+        police,crew,external=faction(6),faction(8),faction(9)
+        crew['category']='crime'
+        selected=CategoryChannel(10000000000700002,'Selected existing')
+        self.guild.channels.append(selected);self.policy['allow_category_ids']=[str(selected.id)]
+        external['config'].update(categoryMode='existing',categoryId=str(selected.id))
+        await self.submit(snapshot(factions=[police,crew,external]))
+        for _ in range(3):await self.engine.tick('live')
+        self.assertIsNotNone(self.store.resource(6,'text'))
+        self.assertIsNotNone(self.store.resource(9,'text'))
+        self.assertIsNone(self.store.resource(8,'text'))
+        self.assertEqual(self.store.resource(0,'category_crime')['discord_id'],old)
+        self.assertEqual(selected.edits,[])
+        self.assertFalse(any(c.name=='DNP · Crime-Fraktionen'for c in self.guild.categories))
+
+
 class ManagementVisibilityTests(unittest.IsolatedAsyncioTestCase):
     loop_factory = OfflineLoop
     asyncSetUp = CoordinatorTests.asyncSetUp

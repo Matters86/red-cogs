@@ -1,9 +1,16 @@
 # FiveM-Adminpanel
 
-## Fraktions-Discord vom 06.11.2026 – vorbereiteter Testbuild
+## Fraktions-Discord vom 08.11.2026 – vorbereiteter Testbuild
 
-Aktueller Paketstand: `2026-11-06-support-v2.3.2`. Ohne individuelle Ausnahme sind
+Aktueller Paketstand: `2026-11-08-support-v2.3.3`. Ohne individuelle Ausnahme sind
 Rollen sowie private Text- und Sprachkanäle je Fraktion standardmäßig aktiv.
+Automatische Bereiche werden nach der bestätigten Fraktionskategorie unter
+**DNP · Behörden** oder **DNP · Crime-Fraktionen** angelegt. Medien/sonstige
+Kategorien behalten **DNP · Fraktionen**; ausdrücklich gewählte Kategorien bleiben.
+Alte eigene Kategorien und Kanalhistorie werden weder gelöscht noch nach Namen
+übernommen. Neue Kategorien verwenden dieselben privaten Verwaltungs-/Botrechte.
+Der FiveM-Teil bleibt auf Dev aus; Live benötigt ausdrücklich
+`set fraktion_discord_enabled 1` und `adminpanel_profile live`.
 Die Auswahl bleibt unter **Editor-Tablet → Fraktionen → Discord**. Ebenso ist ein
 gültig gebundenes Dev-/Live-Profil standardmäßig eingeschaltet; eine ausdrücklich
 gespeicherte Abschaltung bleibt erhalten. `legacy`, falsche Guild-Zuordnung,

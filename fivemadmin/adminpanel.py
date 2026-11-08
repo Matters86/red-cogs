@@ -52,7 +52,7 @@ from .faction_discord import Coordinator as FactionDiscord, Refused as FactionDi
 log = logging.getLogger("red.adminpanel")
 
 # This identifies the loaded Python module independently of a later source copy.
-PANEL_BUILD = "2026-11-06-support-v2.3.2"
+PANEL_BUILD = "2026-11-08-support-v2.3.3"
 try:
     with open(__file__, "rb") as _module_source:
         LOADED_MODULE_SHA256 = hashlib.sha256(_module_source.read()).hexdigest()
@@ -1850,7 +1850,7 @@ class AdminPanel(commands.Cog):
         ap factiondiscord live allowrole|denyrole|protect|unprotect <Rollen-ID>
         ap factiondiscord live allowcategory|denycategory <Kategorie-ID>
         ap factiondiscord live allowmanagement|denymanagement <Rollen-ID>
-        ap factiondiscord live resolve <Fraktions-ID> <role|text|voice|category> <ID>
+        ap factiondiscord live resolve <Fraktions-ID> <role|text|voice|category|category_state|category_crime> <ID>
         """
         if ctx.guild is None or not bool(getattr(ctx.author.guild_permissions, "administrator", False)):
             return await ctx.send("Nur Discord-Administratoren dieser Guild dürfen die Fraktionsanbindung konfigurieren.")
@@ -1883,12 +1883,14 @@ class AdminPanel(commands.Cog):
                 guild, policy, protected = await self.faction_discord.policy(profile_id)
                 store = await self.faction_discord.store(profile_id)
                 row = await asyncio.to_thread(store.resource, fid, kind)
-                if kind not in ("role", "text", "voice", "category") or fid < 0 or (kind == "category") != (fid == 0):
+                category_kinds = ("category", "category_state", "category_crime")
+                if kind not in ("role", "text", "voice") + category_kinds or fid < 0 or (kind in category_kinds) != (fid == 0):
                     raise FactionDiscordRefused("invalid_resource")
                 if row is None or row["phase"] != "held" or (row["discord_id"] and row["discord_id"] != did):
                     raise FactionDiscordRefused("no_held_creation")
                 obj = guild.get_role(int(did)) if kind == "role" else guild.get_channel(int(did))
-                types = {"text": discord.TextChannel, "voice": discord.VoiceChannel, "category": discord.CategoryChannel}
+                types = {"text": discord.TextChannel, "voice": discord.VoiceChannel,
+                         **{name: discord.CategoryChannel for name in category_kinds}}
                 if kind == "role":
                     if not faction_discord_safe_role(obj, guild, policy, protected, owned=True) or obj.permissions.value != 0:
                         raise FactionDiscordRefused("role_not_safe")
@@ -1900,7 +1902,7 @@ class AdminPanel(commands.Cog):
                 self.faction_discord.catalogs.pop(profile_id, None)
                 return await ctx.send("Die ausdrücklich gewählte ID wurde dem offenen Erstellungsbeleg zugeordnet. Bitte nur das im Discord-Audit bestätigte Objekt verwenden; es wird beim nächsten Abgleich privat abgesichert.")
             except (ValueError, FactionDiscordRefused):
-                return await ctx.send("Zuordnung abgelehnt. Syntax: ap factiondiscord <Profil> resolve <Fraktions-ID> <role|text|voice|category> <Discord-ID>. Nur offene Erstellungsbelege und passende sichere Objekte sind zulässig.")
+                return await ctx.send("Zuordnung abgelehnt. Syntax: ap factiondiscord <Profil> resolve <Fraktions-ID> <role|text|voice|category|category_state|category_crime> <Discord-ID>. Nur offene Erstellungsbelege und passende sichere Objekte sind zulässig.")
         async with self._profile_config_lock:
             records = await self.config.server_profiles()
             records = dict(records) if isinstance(records, dict) else {}

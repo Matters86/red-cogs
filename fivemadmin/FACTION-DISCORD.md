@@ -1,6 +1,6 @@
-# Fraktionsrollen und private Bereiche – Testbuild 06.11.2026
+# Fraktionsrollen und private Bereiche – Testbuild 08.11.2026
 
-Paketbuild `2026-11-06-support-v2.3.2`, Koordinator `faction-discord.3`.
+Paketbuild `2026-11-08-support-v2.3.3`, Koordinator `faction-discord.4`.
 Vorbereitet und isoliert geprüft; **nicht auf dem NAS-Bot aktiviert und kein
 echter Discord-/Ingame-Test**. Die vorhandene Support-Zentrale bleibt erhalten.
 
@@ -12,7 +12,17 @@ Ein Server-Editor wählt je Fraktion:
 - Aus, automatisch eine Rolle mit dem Fraktionsnamen anlegen oder eine vom
   Discord-Administrator zuvor freigegebene bestehende Rolle verwenden.
 - Privaten Textkanal und/oder Sprachkanal erstellen.
-- Die eigene Kategorie `DNP · Fraktionen` oder eine zuvor freigegebene Kategorie.
+- Automatische Kategorie **DNP · Behörden** für `state`, **DNP · Crime-Fraktionen**
+  für `crime`. `media` und andere Kategorien verwenden weiterhin **DNP · Fraktionen**.
+  Eine ausdrücklich gewählte, zuvor freigegebene Kategorie bleibt unverändert.
+
+Die Gruppen stammen ausschließlich aus der vollständigen bestätigten Serverquelle,
+nicht aus Rollen-/Fraktionsnamen. Für die zwei neuen Gruppen werden getrennte
+Erstellungsbelege und IDs gespeichert. Eine alte eigene Sammelkategorie bleibt
+bestehen; ihre bisherigen eigenen Text-/Sprachkanäle behalten ihre IDs und ihren
+Verlauf und werden beim bestätigten Abgleich in die passende Gruppe verschoben.
+Nicht beobachtbare unbenutzte alte Kategorien werden nicht neu erstellt. Eine
+fehlende tatsächlich ausgewählte Gruppe bleibt dagegen zur Prüfung angehalten.
 
 Normale Mitglieder und Fraktionsleiter erhalten dadurch kein Editorrecht.
 Ohne individuell gespeicherte Ausnahme starten State- und Crime-Fraktionen mit
@@ -26,14 +36,17 @@ keine Vergabe von Ingame-Admin- oder Server-Editor-Rechten.
    sichern. Zusammengehörigen neuen Cog, AP-Bridge und Fraktionscode aus demselben
    Updatepaket verwenden. Keine alten Profil-SQLite-Dateien überschreiben.
 2. Betreiber lädt den vollständigen Cog regulär neu. `[p]ap version` muss
-   `2026-11-06-support-v2.3.2` zeigen. `[p]` ist euer vorhandenes Bot-Präfix.
+   `2026-11-08-support-v2.3.3` zeigen. `[p]` ist euer vorhandenes Bot-Präfix.
 3. Bot-Owner bindet ein ausdrückliches Profil an die richtige Guild:
    `[p]ap profile bind live DNP Live`. Schlüssel nur über die vorhandene
    Umgebungsvariablen-Konfiguration zuordnen; keine Schlüssel in Chat posten.
    Das bestehende `legacy` bleibt für Discord-Schreibaktionen gesperrt.
-4. Für Dev eine **andere Test-Guild** und eigenes `dev`-Profil verwenden. Ein
-   gemeinsamer Discord-Server für Dev und Live wird abgelehnt. Gespeicherte
-   Profil-Guild-Zuordnungen werden nicht automatisch umgebogen.
+4. Der FiveM-Teil bleibt auf **Dev ausgeschaltet** (`set fraktion_discord_enabled 0`).
+   Auf Live ausdrücklich `set fraktion_discord_enabled 1` und das vorhandene
+   `adminpanel_profile live` verwenden. Schlüssel-/Guildzuordnungen unverändert
+   erhalten; keine komplette Dev-server.cfg oder Profildatenbank nach Live kopieren.
+   Die bisherigen getrennten Bot-Profile bleiben erhalten, aber Dev sendet keine
+   Fraktionsaufträge. Eine gespeicherte Profil-Guildzuordnung wird nicht umgebogen.
 5. Der Bot benötigt **Rollen verwalten** und **Kanäle verwalten**. Seine höchste
    Rolle muss über allen verwendeten Fraktionsrollen stehen. Administratorrecht
    wird für den Bot nicht verlangt.
@@ -91,7 +104,12 @@ die genaue ID zuordnen:
 
 `[p]ap factiondiscord live resolve FRAKTIONS_ID role|text|voice OBJEKT_ID`
 
-Für die eigene Kategorie lautet die Fraktions-ID `0`, Typ `category`.
+Für eigene Kategorien lautet die Fraktions-ID `0`: `category_state` für
+**DNP · Behörden**, `category_crime` für **DNP · Crime-Fraktionen**, `category` für
+die bestehende Sammelkategorie. Beispiel nur nach Auditbestätigung eines bereits
+unklaren Erstellungsbelegs:
+`[p]ap factiondiscord live resolve 0 category_state KATEGORIE_ID`.
+Kein neuer Erstellungsversuch bei einem unklaren Beleg und keine Übernahme nach Namen.
 Nur offene Erstellungsbelege und passende sichere Objekte werden akzeptiert;
 keine automatische Übernahme nach Namen. **Keine fremden vorhandenen Kanäle
 zuordnen**: Der Abgleich ersetzt bei eigenen Kanälen ausdrücklich alle

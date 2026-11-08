@@ -118,10 +118,10 @@ class SourcePreservation(unittest.TestCase):
     def test_build_constant(self):
         build = next(node for node in TREE.body if isinstance(node, ast.Assign) and
                      any(isinstance(item, ast.Name) and item.id == "PANEL_BUILD" for item in node.targets))
-        self.assertEqual(build.value.value, "2026-11-06-support-v2.3.2")
+        self.assertEqual(build.value.value, "2026-11-08-support-v2.3.3")
 
     def test_unrelated_cog_functions_preserved(self):
-        before = Path(__file__).resolve().parents[3] / "before" / "fivemadmin" / "adminpanel.py"
+        before = Path(__file__).resolve().parents[3] / "preimage" / "fivemadmin" / "adminpanel.py"
         if not before.exists():
             self.skipTest("Preimage belongs to workspace delivery verification, not installed Cog.")
         original = ast.parse(before.read_text(encoding="utf-8"))
@@ -190,6 +190,43 @@ class ManagementCommands(unittest.IsolatedAsyncioTestCase):
         self.records["live"]["faction_discord"]["management_role_ids"] = "invalid"
         await self.method(self.obj, self.ctx, "live", "denymanagement", value=str(self.manager.id))
         self.assertEqual(self.saved, [])
+
+
+
+class GroupResolveCommands(unittest.IsolatedAsyncioTestCase):
+    loop_factory=harness.OfflineLoop
+    async def asyncSetUp(self):
+        await harness.CoordinatorTests.asyncSetUp(self)
+        self.cog.faction_discord=self.engine
+        self.messages=[]
+        async def send(message):self.messages.append(message)
+        self.ctx=types.SimpleNamespace(guild=self.guild,author=types.SimpleNamespace(guild_permissions=harness.Permissions(administrator=True)),send=send)
+        self.cog.profiles.select=lambda pid,gid:self.cog.profiles.items.get(pid)if gid==self.guild.id else None
+        self.method=actual_method('ap_factiondiscord')
+    async def asyncTearDown(self):await harness.CoordinatorTests.asyncTearDown(self)
+    async def test_exact_new_category_keys_resolve_only_held_intents_by_id(self):
+        for kind in ('category_state','category_crime'):
+            channel=harness.CategoryChannel(self.guild.serial+1,kind);self.guild.serial+=1;self.guild.channels.append(channel)
+            self.store.put_resource(0,kind,None,'held','create_result_unknown')
+            await self.method(self.cog,self.ctx,'live','resolve',value='0 '+kind+' '+str(channel.id))
+            self.assertEqual(self.store.resource(0,kind)['discord_id'],str(channel.id))
+            self.assertEqual(self.store.resource(0,kind)['phase'],'ready')
+            self.assertEqual(channel.edits,[])
+    async def test_new_category_resolve_requires_admin_zero_fid_correct_type_and_held(self):
+        channel=harness.CategoryChannel(self.guild.serial+1,'Behörden');self.guild.channels.append(channel)
+        self.store.put_resource(0,'category_state',None,'held')
+        self.ctx.author.guild_permissions=harness.Permissions(administrator=False)
+        await self.method(self.cog,self.ctx,'live','resolve',value='0 category_state '+str(channel.id))
+        self.assertEqual(self.store.resource(0,'category_state')['phase'],'held')
+        self.ctx.author.guild_permissions=harness.Permissions(administrator=True)
+        await self.method(self.cog,self.ctx,'live','resolve',value='6 category_state '+str(channel.id))
+        self.assertEqual(self.store.resource(0,'category_state')['phase'],'held')
+        wrong=harness.TextChannel(channel.id+1,'Not category');self.guild.channels.append(wrong)
+        await self.method(self.cog,self.ctx,'live','resolve',value='0 category_state '+str(wrong.id))
+        self.assertEqual(self.store.resource(0,'category_state')['phase'],'held')
+        self.store.put_resource(0,'category_state',str(channel.id),'ready')
+        await self.method(self.cog,self.ctx,'live','resolve',value='0 category_state '+str(wrong.id))
+        self.assertEqual(self.store.resource(0,'category_state')['discord_id'],str(channel.id))
 
 
 if __name__ == "__main__":

@@ -17,9 +17,12 @@ from contextlib import contextmanager
 import discord
 from .faction_discord_transport import SingleAttemptCreates
 
-BUILD = "faction-discord.3"
+BUILD = "faction-discord.4"
 DEFAULT_LIVE_MANAGEMENT_ROLE_ID = "1497218321660248165"
 MAX_FACTIONS, MAX_MEMBERS, MAX_PAIRS = 128, 4096, 16384
+OWNED_CATEGORY_KINDS = ("category", "category_state", "category_crime")
+AUTO_CATEGORIES = {"state": ("category_state", "DNP · Behörden"),
+                   "crime": ("category_crime", "DNP · Crime-Fraktionen")}
 SNOWFLAKE = re.compile(r"[1-9][0-9]{16,19}\Z")
 ELEVATED = (
     "administrator", "manage_guild", "manage_roles", "manage_channels",
@@ -293,6 +296,12 @@ class Store:
 
 def active(faction):
     return faction["enabled"] and not faction["deleted"] and faction["config"]["mode"] != "off"
+
+
+def automatic_category(faction):
+    # Only the authoritative complete snapshot category selects a group.
+    # Media/unknown categories retain the existing separate common fallback.
+    return AUTO_CATEGORIES.get(faction["category"], ("category", "DNP · Fraktionen"))
 
 
 def failure_code(exc):
@@ -592,9 +601,36 @@ class Coordinator:
             await role.edit(name=faction["label"], reason="DNP Fraktion umbenannt")
         return role
 
+    async def refresh_owned_category_acls(self, pid, store, budget, faction=None):
+        # Three fixed durable ownership keys only. Never inspect/adopt by name,
+        # delete the legacy category, or alter explicitly selected categories.
+        for kind in OWNED_CATEGORY_KINDS:
+            row = await asyncio.to_thread(store.resource, 0, kind)
+            if not row or row["phase"] != "ready" or not row["discord_id"]:
+                continue
+            (guild, _, _), _ = await self.current(pid, store, faction)
+            category = guild.get_channel(int(row["discord_id"]))
+            if category is None:
+                continue  # No cache observation: never recreate/adopt an unused binding.
+            if not isinstance(category, discord.CategoryChannel):
+                raise Refused("owned_category_type_mismatch")
+            if category.overwrites != self.channel_overwrites(pid, guild):
+                if budget[0] <= 0:
+                    raise Refused("pending_budget")
+                budget[0] -= 1
+                (guild, _, _), _ = await self.current(pid, store, faction)
+                category = guild.get_channel(int(row["discord_id"]))
+                if category is None:
+                    continue
+                if not isinstance(category, discord.CategoryChannel):
+                    raise Refused("owned_category_type_mismatch")
+                await category.edit(overwrites=self.channel_overwrites(pid, guild),
+                    reason="DNP Fraktionskategorie: Verwaltung aktualisiert")
+
     async def channels(self, pid, store, faction, role, budget):
         (guild, policy, _), _ = await self.current(pid, store, faction)
         cfg = faction["config"]
+        await self.refresh_owned_category_acls(pid, store, budget, faction)
         category = None
         if cfg["textEnabled"] or cfg["voiceEnabled"]:
             if cfg["categoryMode"] == "existing":
@@ -604,8 +640,9 @@ class Coordinator:
                 if not isinstance(category, discord.CategoryChannel):
                     raise Refused("category_missing")
             else:
-                did = await self.create(pid, store, None, "category", lambda: self.transport.channel(
-                    guild, "category", "DNP · Fraktionen", self.channel_overwrites(pid, guild)), budget, check_faction=faction)
+                category_kind, category_name = automatic_category(faction)
+                did = await self.create(pid, store, None, category_kind, lambda: self.transport.channel(
+                    guild, "category", category_name, self.channel_overwrites(pid, guild)), budget, check_faction=faction)
                 category = guild.get_channel(int(did))
                 if not isinstance(category, discord.CategoryChannel):
                     raise Refused("owned_category_missing")
@@ -654,16 +691,7 @@ class Coordinator:
 
     async def archive(self, pid, store, faction, budget):
         (guild, _, _), _ = await self.current(pid, store)
-        own_category = await asyncio.to_thread(store.resource, 0, "category")
-        if own_category and own_category["phase"] == "ready" and own_category["discord_id"]:
-            category = guild.get_channel(int(own_category["discord_id"]))
-            if isinstance(category, discord.CategoryChannel) and category.overwrites != self.channel_overwrites(pid, guild):
-                if budget[0] <= 0:
-                    raise Refused("pending_budget")
-                budget[0] -= 1
-                await self.current(pid, store)
-                await category.edit(overwrites=self.channel_overwrites(pid, guild),
-                    reason="DNP Fraktionskategorie: Verwaltung aktualisiert")
+        await self.refresh_owned_category_acls(pid, store, budget)
         for kind in ("text", "voice"):
             row = await asyncio.to_thread(store.resource, faction["id"], kind)
             if not row or not row["discord_id"]:
