@@ -4,6 +4,7 @@ autorole, levels, serverstats: erlaubte Tagesgeschäft-POSTs, Ablehnung von Eins
 import asyncio
 import re
 from urllib.parse import unquote_plus
+from unittest.mock import patch
 
 from aiohttp.test_utils import TestClient, TestServer
 from multidict import MultiDict
@@ -123,9 +124,14 @@ async def tickets_changelog():
     async with gc.tickets() as tickets:
         tickets["987654"] = {"num": 99, "owner_id": 13, "status": "open", "created_at": "2026-09-01T10:00:00+00:00"}
     t = await page(client, LENA, "/cogs/tickets?guild=1000")
-    assert "Kanal fehlt" in t and "existiert nicht mehr" in t
-    st, loc = await post(client, LENA, "tickets", {"csrf_token": tok, "guild": "1000", "form": "ticket_close",
-                                                    "channel_id": "987654"})
+    assert "Kanal derzeit nicht geladen" in t and "bestätigter Löschung" in t
+    async def confirmed_missing(cid):
+        assert cid == 987654
+        raise T.L.not_found()
+    # Ein Cache-Miss allein darf keine Ticketdaten löschen; Discord bestätigt 404.
+    with patch.object(g, "fetch_channel", confirmed_missing, create=True):
+        st, loc = await post(client, LENA, "tickets", {"csrf_token": tok, "guild": "1000", "form": "ticket_close",
+                                                        "channel_id": "987654"})
     assert "ok=Ticket #99: Kanal existiert nicht mehr – Eintrag entfernt" in loc, loc
     assert "987654" not in await gc.tickets()
     # Ansehen darf nicht schließen, Bearbeiten schon

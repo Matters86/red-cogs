@@ -38,6 +38,17 @@ Red-Instanz im System-Temp an und löscht sie am Ende wieder.
 
 | Suite | prüft |
 |---|---|
+| `project_management_models_test.py` | Projekte/Aufgaben, stabile Checklisten, Fristen, Meilensteine, Fortschritt und formelsicherer CSV-Export |
+| `project_management_core_test.py` | Team-/Zuweisungsrechte, Arbeitsstatus, Verknüpfungen, Kommentare, Erinnerungen und Datenschutz |
+| `project_management_discord_test.py` | Native Aufgabenmasken, Zuweisung, Status/Checklisten und bestätigte Löschaktionen |
+| `project_management_web_test.py` | Projektübersicht, Aufgabenboard, Rollen-/Servergrenzen, Formulare, Export und Kalenderverknüpfung |
+| `teamcalendar_models_test.py` | Eindeutige lokale Zeiten mit Sommerzeitprüfung, Terminvalidierung und RFC5545-Kalenderexport |
+| `teamcalendar_core_test.py` | Gemeinsame Teamverwaltung, aktuelle Rechte, Zusagen, Board-Wiederherstellung und Erinnerungen |
+| `teamcalendar_discord_test.py` | Dauerhafte Discord-Buttons, Formulare, Rollenentzug und bestätigte Terminaktionen |
+| `teamcalendar_web_test.py` | Agenda und Monatsansicht, Rollen-/Servergrenzen, Entwürfe und geschützter Kalenderexport |
+| `ticket_naming_test.py` | Wählbare Ticketnamen aus Grund, Nutzer und Nummer, Länge und Vorlagenvalidierung vor dem Speichern |
+| `ticket_permissions_test.py` | Getrennte Support-Teams, aktuelle Rollenrechte und erneute Berechtigungsprüfung bei Discord-Aktionen |
+| `ticket_dashboard_access_test.py` | Teambezogene Sichtbarkeit und Aktionen im Dashboard, sichere Transcript-Zugriffe |
 | `ticket_support_test.py` | Sichere Schnellantworten mit bearbeitbarer Vorschau, Priorität und Team-Antwortuhr mit Pausen/Offline-Prüfung |
 | `my_tasks_test.py` | Persönliche Aufgaben, server- und modulweise Rechte, Termine, Fehlerisolation und lesender Zugriff |
 | `setup_wizard_test.py` | Einrichtungsentwurf, erneute Rollen-/Kanalprüfung, explizite Übernahme und Wiederherstellung bei Fehlern |

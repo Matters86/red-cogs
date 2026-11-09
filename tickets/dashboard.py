@@ -8,9 +8,9 @@ Drei Aufgaben:
 Aufbau mit dem UI-Baukasten von WebCore (``request.app["webcore"].ui``): Reiter
 Übersicht · Panels · Einstellungen · Texte · Transcripts – kein eigenes CSS.
 
-Rechte: Einzelne Tickets schließen und deren 24-Stunden-Timer steuern ist Tagesgeschäft und geht mit der
-WebCore-Stufe „Bedienen“; alle anderen Formulare (Einstellungen, Panels, Team-Zuordnung) brauchen
-„Bearbeiten“ – das prüft WebCore zentral anhand von ``register_page(operate_forms=…)``.
+Rechte: Ticket-Aktionen brauchen WebCore „Bedienen“ und das zuständige Ticket-Team;
+Einstellungen, Panels und die Team-Zuordnung je Grund brauchen „Bearbeiten“. WebCore
+prüft die Seitenstufe zentral, dieser Handler prüft zusätzlich die einzelnen Ticket-Datensätze.
 """
 
 from __future__ import annotations
@@ -20,12 +20,15 @@ import secrets
 import time
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from urllib.parse import quote_plus
 
+import discord
 from aiohttp import web
 
 from .strings import LANGUAGES, OVERRIDABLE_KEYS, STRINGS, t
 from .support import MAX_REPLY, support_due
+from .naming import name_format, parse_name_settings, ticket_base_name
 
 
 def _esc(value) -> str:
@@ -72,7 +75,60 @@ def _selected_guild(guilds, request):
         for g in guilds:
             if g.id == int(gid):
                 return g
+    if gid is not None:
+        return None
     return guilds[0] if guilds else None
+
+
+async def _dashboard_actor(cog, request, guild):
+    webcore = request.app["webcore"]
+    getter = getattr(webcore, "current_user", None) or webcore._get_user
+    user = await getter(request) or {}
+    uid = int(user.get("id") or 0)
+    member = guild.get_member(uid) if uid else None
+    if member is None and uid:
+        try:
+            member = await guild.fetch_member(uid)
+        except Exception:
+            member = None
+    if member is None and uid in (getattr(cog.bot, "owner_ids", None) or set()):
+        member = _DashboardCloser(uid, user.get("name") or "Bot-Owner")
+    return member
+
+
+def _can_read_transcript(cog, member, conf, transcript):
+    record = cog._transcript_record(conf, transcript)
+    return cog._is_admin(member, conf) if record is None else cog._can_view_record(member, conf, record)
+
+
+def _scoped_conf(cog, member, conf):
+    scoped = dict(conf)
+    scoped["tickets"] = {cid: record for cid, record in (conf.get("tickets") or {}).items()
+                         if cog._can_view_record(member, conf, record)}
+    scoped["transcripts"] = [tr for tr in conf.get("transcripts", [])
+                             if _can_read_transcript(cog, member, conf, tr)]
+    opened, closed, claims, durations = set(), set(), {}, []
+    for cid, record in scoped["tickets"].items():
+        key = str(record.get("num") or f"channel-{cid}")
+        opened.add(key)
+        if record.get("status") == "closed":
+            closed.add(key)
+            try:
+                start = datetime.fromisoformat(record["created_at"])
+                end = datetime.fromisoformat(record["closed_at"])
+                durations.append(max(0, int((end - start).total_seconds())))
+            except (ValueError, TypeError, KeyError):
+                pass
+        if record.get("claimed_by"):
+            uid = str(record["claimed_by"])
+            claims[uid] = claims.get(uid, 0) + 1
+    for tr in scoped["transcripts"]:
+        key = str(tr.get("num"))
+        opened.add(key)
+        closed.add(key)
+    scoped["stats"] = {"opened": len(opened), "closed": len(closed), "claims": claims,
+                       "duration_sum": sum(durations), "duration_count": len(durations)}
+    return scoped
 
 
 _TYPE_LABEL = {"category": "Eigener Kanal", "thread": "Privater Thread", "forum": "Forum-Beitrag"}
@@ -94,12 +150,19 @@ async def _render(cog, request):
     guilds = await _visible_guilds(cog, request)
     guild = _selected_guild(guilds, request)
     if guild is None:
+        if request.query.get("guild") is not None:
+            raise web.HTTPNotFound(text="Server nicht gefunden")
         return {"title": "Tickets", "content": ui.card(body=ui.empty("bi-hdd-network", "Keine Server verfügbar."))}
 
     conf = await cog.config.guild(guild).all()
+    actor = await _dashboard_actor(cog, request, guild)
+    denied_channels = {str(cid) for cid, record in conf.get("tickets", {}).items()
+                       if not cog._can_view_record(actor, conf, record)}
+    conf = _scoped_conf(cog, actor, conf)
+    conf["panels"] = [panel for panel in conf.get("panels", []) if str(panel.get("channel_id")) not in denied_channels]
     csrf = request.get("webcore_csrf", "")
     role_items = _role_items(guild)
-    text_items = [(c.id, f"#{c.name}") for c in guild.text_channels]
+    text_items = [(c.id, f"#{c.name}") for c in guild.text_channels if str(c.id) not in denied_channels]
     cat_items = [(c.id, c.name) for c in guild.categories]
     forum_items = [(c.id, f"#{c.name}") for c in getattr(guild, "forums", [])]
 
@@ -112,12 +175,14 @@ async def _render(cog, request):
                 "title": "Tickets · Panel bearbeiten",
                 "content": _render_panel_editor(ui, guild, panel, text_items, role_items, cat_items, csrf),
             }
+        raise web.HTTPNotFound(text="Panel nicht gefunden")
 
     stats = conf.get("stats") or {}
     tickets = conf.get("tickets") or {}
     open_now = sum(1 for r in tickets.values() if r.get("status") == "open")
     closed = int(stats.get("closed", 0))
-    avg = int(stats.get("duration_sum", 0)) // closed if closed else 0
+    duration_count = stats.get("duration_count", closed)
+    avg = int(stats.get("duration_sum", 0)) // duration_count if duration_count else 0
     panels = conf.get("panels", [])
     transcripts = conf.get("transcripts", [])
 
@@ -127,7 +192,7 @@ async def _render(cog, request):
         "wer Tickets sieht und bearbeitet, wo sie entstehen und wie die Panels aussehen.",
     ) + ui.stats([
         ("Offen", open_now, "bi-envelope-open", None, "ok" if open_now else None),
-        ("Geöffnet gesamt", int(stats.get("opened", 0)), "bi-inbox", None, None),
+        ("Erfasste Tickets", int(stats.get("opened", 0)), "bi-inbox", "Für dich sichtbare Tickets und Verläufe", None),
         ("Geschlossen", closed, "bi-archive", None, None),
         ("Ø Laufzeit", _fmt_duration(avg), "bi-stopwatch", None, None),
         ("Panels", len(panels), "bi-window-stack", None, None),
@@ -138,9 +203,9 @@ async def _render(cog, request):
     reply_preview = await _reply_preview_card(cog, request, ui, guild, int(viewer.get("id") or 0), csrf)
     body = (
         ui.tab("uebersicht", "Übersicht", "bi-speedometer2", reply_preview + await _render_overview(
-            ui, cog, guild, conf, csrf, viewer_id=int(viewer.get("id") or 0), view=request.query.get("view", "all")))
+            ui, cog, guild, conf, csrf, viewer_id=int(viewer.get("id") or 0), view=request.query.get("view", "all"), viewer_actor=actor))
         + ui.tab("panels", "Panels", "bi-window-stack", _render_panels(ui, guild, conf, text_items, csrf), count=len(panels))
-        + _render_settings(ui, guild, conf, role_items, text_items, cat_items, forum_items, csrf)
+        + _render_settings(ui, cog, guild, conf, role_items, text_items, cat_items, forum_items, csrf)
         + ui.tab("schnellantworten", "Schnellantworten", "bi-chat-left-text", _reply_settings(ui, guild, conf, csrf))
         + ui.tab("transcripts", "Transcripts", "bi-journal-text", _render_transcripts(ui, guild, conf), count=len(transcripts))
     )
@@ -152,7 +217,7 @@ def _setup_checks(guild, conf) -> list[tuple[str, str]]:
     out = []
     ttype = conf.get("ticket_type", "category")
     if not conf.get("support_roles") and not conf.get("admin_roles"):
-        out.append(("warn", "Es ist keine <b>Support- oder Admin-Rolle</b> eingetragen – nur Server-Verwalter können Tickets übernehmen."))
+        out.append(("warn", "Es ist keine globale <b>Support- oder Admin-Rolle</b> eingetragen – Tickets ohne eigenes Team können nur Administratoren sowie Server- und Bot-Owner übernehmen."))
     if ttype == "thread" and not conf.get("thread_base"):
         out.append(("bad", "Ticket-Typ <b>Privater Thread</b>, aber kein <b>Basis-Kanal</b> gesetzt – Tickets können nicht erstellt werden."))
     if ttype == "forum" and not conf.get("forum_channel"):
@@ -166,7 +231,7 @@ def _setup_checks(guild, conf) -> list[tuple[str, str]]:
     return out
 
 
-async def _render_overview(ui, cog, guild, conf, csrf, *, viewer_id=0, view="all") -> str:
+async def _render_overview(ui, cog, guild, conf, csrf, *, viewer_id=0, view="all", viewer_actor=None) -> str:
     checks = _setup_checks(guild, conf)
     if checks:
         check_html = "".join(ui.callout(text, tone=tone) for tone, text in checks)
@@ -182,7 +247,7 @@ async def _render_overview(ui, cog, guild, conf, csrf, *, viewer_id=0, view="all
         member = guild.get_member(int(uid)) if str(uid).isdigit() else None
         name = member.display_name if member else f"ID {uid}"
         rows.append(ui.row(_esc(name), f">{int(count)}"))
-    claim_card = ui.card("Übernahmen je Team-Mitglied", ui.table(["Mitglied", ">Übernahmen"], rows,
+    claim_card = ui.card("Zugewiesene sichtbare Tickets", ui.table(["Mitglied", ">Tickets"], rows,
                          empty_text="Noch keine Übernahmen."), icon="bi-person-check")
 
     recent = list(reversed(conf.get("transcripts", [])))[:5]
@@ -199,7 +264,8 @@ async def _render_overview(ui, cog, guild, conf, csrf, *, viewer_id=0, view="all
         ("all", "Alle offenen Tickets"), ("mine", "Meine Tickets"), ("unassigned", "Nicht zugewiesen"),
         ("user", "Wartet auf Nutzer"), ("team", "Wartet auf Team"),
     ], view, autosubmit=True)), method="get", csrf="", hidden={"guild": guild.id})
-    return setup + filters + _render_open_tickets(ui, cog, guild, conf, csrf, viewer_id=viewer_id, view=view) + ui.columns(claim_card, recent_card)
+    return setup + filters + _render_open_tickets(ui, cog, guild, conf, csrf, viewer_id=viewer_id,
+                                                view=view, viewer_actor=viewer_actor) + ui.columns(claim_card, recent_card)
 
 
 def _fmt_iso(value) -> str:
@@ -210,7 +276,7 @@ def _fmt_iso(value) -> str:
         return "—"
 
 
-def _render_open_tickets(ui, cog, guild, conf, csrf, *, viewer_id=0, view="all") -> str:
+def _render_open_tickets(ui, cog, guild, conf, csrf, *, viewer_id=0, view="all", viewer_actor=None) -> str:
     """Offene Tickets mit Schließen und Timer-Steuerung (Tagesgeschäft)."""
     open_items = sorted(((cid, r) for cid, r in (conf.get("tickets") or {}).items() if r.get("status") == "open"),
                         key=lambda kv: kv[1].get("num") or 0)
@@ -229,11 +295,11 @@ def _render_open_tickets(ui, cog, guild, conf, csrf, *, viewer_id=0, view="all")
         claimer = guild.get_member(rec.get("claimed_by")) if rec.get("claimed_by") else None
         claimed = (ui.badge(claimer.display_name, "ok") if claimer is not None
                    else (ui.badge("übernommen", "ok") if rec.get("claimed_by") else ui.badge("frei", "warn")))
-        where = f"#{ch.name}" if ch is not None else "Kanal fehlt"
+        where = f"#{ch.name}" if ch is not None else "Kanal derzeit nicht geladen"
         confirm = (f"Ticket #{num} schließen? Das Transcript wird gespeichert und "
                    + ("der Kanal gelöscht." if conf.get("delete_on_close") else "das Ticket archiviert.")
                    if ch is not None else
-                   f"Der Kanal von Ticket #{num} existiert nicht mehr – Eintrag aus der Liste entfernen?")
+                   f"Ticket #{num} prüfen und schließen? Nur bei bestätigter Löschung wird der verwaiste Eintrag entfernt.")
         close = ui.form(
             "/cogs/tickets",
             ui.button("Schließen", icon="bi-lock", kind="danger", small=True),
@@ -257,7 +323,11 @@ def _render_open_tickets(ui, cog, guild, conf, csrf, *, viewer_id=0, view="all")
             due_status = "Antwortzeit startet mit dem nächsten bestätigten Anliegen"
         waiting = ui.badge("Wartet auf Nutzer" if rec.get("waiting_for") == "user" else "Wartet auf Team", "info")
         reply = ""
-        if ch is not None:
+        can_manage = cog._is_staff(viewer_actor or guild.get_member(viewer_id) or (
+            _DashboardCloser(viewer_id, "Bot-Owner") if viewer_id in getattr(cog.bot, "owner_ids", set()) else None), conf, rec)
+        if not can_manage:
+            close = ""
+        if ch is not None and can_manage:
             priority += ui.form("/cogs/tickets", ui.select("priority", [("normal", "Normal"), ("urgent", "Dringend")], rec.get("priority", "normal"))
                 + ui.button("Priorität setzen", small=True), csrf=csrf, hidden={"form": "ticket_priority", "guild": guild.id, "channel_id": cid}, operate=True)
             if conf.get("quick_replies"):
@@ -297,7 +367,8 @@ def _render_open_tickets(ui, cog, guild, conf, csrf, *, viewer_id=0, view="all")
             claimed + assignment,
             waiting + f"<div class='wc-cell-sub'>{due_status}</div>" + priority,
             timer_status,
-            f"><div class='wc-row-actions'>{reply}{timer_action}{close}</div>",
+            f"><div class='wc-row-actions'>{reply}{timer_action}{close}</div>" if can_manage
+            else "><span class='wc-muted'>Nur lesen für dieses Ticket</span>",
         ))
     more = ""
     if len(open_items) > 100:
@@ -371,7 +442,7 @@ def _render_panels(ui, guild, conf, text_items, csrf) -> str:
     return table + create
 
 
-def _render_settings(ui, guild, conf, role_items, text_items, cat_items, forum_items, csrf) -> str:
+def _render_settings(ui, cog, guild, conf, role_items, text_items, cat_items, forum_items, csrf) -> str:
     lang_items = list(LANGUAGES.items())
     ttype = conf.get("ticket_type", "category")
 
@@ -383,23 +454,39 @@ def _render_settings(ui, guild, conf, role_items, text_items, cat_items, forum_i
             ("forum", "Forum-Beitrag"),
         ], ttype), help="Wo ein neues Ticket entsteht."),
         ui.field("Max. offene Tickets pro Nutzer", ui.number("max_open", int(conf["max_open"]), min=1, max=25)),
-        ui.field("Kanalname-Vorlage", ui.text_input("name_template", conf["name_template"]),
-                 help="Platzhalter <code>{num}</code> und <code>{user}</code>. Tickets mit Grund heißen automatisch <code>&lt;grund&gt;-&lt;num&gt;</code>."),
+        ui.field("Ticketnamen", ui.select("name_format", [
+            ("legacy", "Bisheriges Verhalten · Grund–Nummer"),
+            ("reason_user_num", "Grund–Nutzer–Nummer · bewerbung-max-12"),
+            ("user_reason_num", "Nutzer–Grund–Nummer · max-bewerbung-12"),
+            ("ticket_num", "Ticket–Nummer · ticket-12"),
+            ("custom", "Eigene Vorlage"),
+        ], name_format(conf)), help="Gilt für neue Ticket-Kanäle, private Threads und Forum-Beiträge. Bestehende Namen bleiben erhalten."),
+        ui.conditional("name_format", ["custom"], ui.field("Eigene Namensvorlage",
+            ui.text_input("name_template", conf["name_template"], attrs={"maxlength": 90}),
+            help="Erlaubt: <code>{reason}</code> Grund, <code>{user}</code> Nutzername, "
+                 "<code>{display}</code> Anzeigename, <code>{num}</code> Ticketnummer und <code>{id}</code> Nutzer-ID. "
+                 "<code>{num}</code> muss enthalten sein. Höchstens 90 Zeichen.")),
+        ui.field("Beispiel für das gespeicherte Format", "<code>" + _esc(cog._channel_name(ticket_base_name(
+            conf, {"label": "Bewerbung"}, 12, SimpleNamespace(name="max", display_name="Max Mustermann", id=123456)))) + "</code>",
+            help="Grund Bewerbung, Nutzer max, Ticket 12. Auswahl und Vorlage werden beim Speichern übernommen."),
     ), icon="bi-gear", desc="Grundverhalten des Ticketsystems.")
 
     team = ui.card("Team & Rollen", ui.grid(
         ui.field("Support-Rollen", ui.select("support_roles", role_items, conf["support_roles"], multiple=True,
-                 placeholder="Rollen suchen …"), help="Sehen alle Tickets, dürfen übernehmen, sperren und schließen."),
+                 placeholder="Rollen suchen …"), help="Standard-Team für Tickets ohne eigene Team-Zuordnung. Ein eigenes Team je Grund ersetzt diese Rollen für das betreffende Ticket."),
         ui.field("Admin-Rollen", ui.select("admin_roles", role_items, conf["admin_roles"], multiple=True,
                  placeholder="Rollen suchen …"), help="Wie Support, zusätzlich Tickets endgültig löschen. Sehen auch Tickets mit eigenem Team."),
         ui.field("Nur-Lesen-Rollen", ui.select("view_roles", role_items, conf["view_roles"], multiple=True,
-                 placeholder="Rollen suchen …"), help="Dürfen mitlesen, aber nicht schreiben (vor allem im Typ „Eigener Kanal“)."),
+                 placeholder="Rollen suchen …"), help="Dürfen alle zuordenbaren Tickets und Verläufe im Team-Dashboard lesen, aber nicht bedienen. Discord-Leserechte gelten vor allem im Typ „Eigener Kanal“."),
         ui.field("Ping-Rollen", ui.select("ping_roles", role_items, conf["ping_roles"], multiple=True,
-                 placeholder="Rollen suchen …"), help="Werden beim Öffnen eines Tickets erwähnt."),
+                 placeholder="Rollen suchen …"), help="Werden beim Öffnen erwähnt, außer in privaten Threads: Dort wird das zuständige Team ohne Rollen-Ping eingeladen."),
         ui.field("Inhaber-Rolle", ui.select("owner_role", [(i, n) for i, n, _c in role_items],
                  conf["owner_role"], none_label="— keine —"),
                  help="Bekommt der Ersteller, solange sein Ticket offen ist.", wide=True),
-    ), icon="bi-people", desc="Pro Grund kannst du im Panel-Editor zusätzlich ein eigenes Team festlegen.")
+    ), icon="bi-people", desc="Pro Grund kannst du im Panel-Editor zusätzlich ein eigenes Team festlegen.") + ui.callout(
+        "Für strikt getrennten Discord-Zugriff je Grund verwende <b>Eigener Kanal</b>. "
+        "Forum-Beiträge übernehmen die Sichtbarkeit des gesamten Forums; „Threads verwalten“ kann auch private Threads sichtbar machen. "
+        "Bot-Aktionen prüfen bei allen Ticket-Typen das zuständige Team.", tone="info")
 
     place = ui.card("Speicherort & Protokoll", ui.grid(
         ui.field("Kategorie für offene Tickets", ui.select("category_open", cat_items, conf["category_open"], none_label="— keine —"),
@@ -505,7 +592,9 @@ async def _reply_preview_card(cog, request, ui, guild, uid, csrf):
     if not draft:
         return ""
     channel = _ticket_channel(guild, cid)
-    actor = guild.get_member(uid) or _DashboardCloser(uid, "Dashboard")
+    actor = await _dashboard_actor(cog, request, guild)
+    if actor is None or actor.id != uid:
+        return ""
     error = await cog._reply_access(guild, channel, actor) if channel is not None else "Ticket nicht gefunden."
     if error:
         return ui.callout(_esc(error), tone="warn")
@@ -559,7 +648,7 @@ def _render_panel_editor(ui, guild, panel, text_items, role_items, cat_items, cs
         + ui.card("Gründe & Fragen", ui.grid(
             ui.field("Gründe (eine Zeile je Grund)", ui.textarea("reasons", _reasons_to_text(panel.get("reasons") or []), rows=5, mono=True),
                      help="Format: <code>Label | Emoji | Beschreibung</code>. Leer = ein einzelner „Ticket öffnen“-Button. "
-                          "Der Grund wird auch zum Kanalnamen (z. B. <code>bewerbung-12</code>).", wide=True),
+                          "Das Format für neue Ticketnamen wählst du unter Einstellungen → Ticketnamen.", wide=True),
             ui.field("Fragen beim Öffnen (max. 5)", ui.textarea("questions", _questions_to_text(panel.get("modal_questions") or []), rows=4, mono=True),
                      help="Format: <code>Frage | Platzhalter | Pflicht (ja/nein) | lang (ja/nein)</code>.", wide=True),
         ), icon="bi-list-ul")
@@ -589,15 +678,17 @@ def _render_reason_routing(ui, guild, panel, role_items, cat_items, csrf) -> str
         blocks.append(ui.card(title, ui.grid(
             ui.field("Team-Rollen", ui.select(f"r_{rid}_support", role_items, r.get("support_roles") or [], multiple=True,
                      placeholder="leer = globale Support-Rollen"),
-                     help="Nur diese Rollen (plus Admin-Rollen) sehen Tickets dieses Grundes."),
+                     help="Dieses Team ersetzt die globalen Support-Rollen für Tickets dieses Grundes. Admins behalten Zugriff."),
             ui.field("Ping-Rollen", ui.select(f"r_{rid}_ping", role_items, r.get("ping_roles") or [], multiple=True,
                      placeholder="leer = globale Ping-Rollen")),
             ui.field("Kategorie", ui.select(f"r_{rid}_cat", cat_items, r.get("category_id"), none_label="— globale Kategorie —"),
                      wide=True),
         ), icon="bi-tag"))
     return (
-        ui.callout("Leer gelassene Felder nutzen die globalen Einstellungen. Mit eigenen Team-Rollen sehen <b>nur</b> diese "
-                   "Rollen (plus die Admin-Rollen) Tickets dieses Grundes – ideal z. B. für Bewerbungen.", tone="info")
+        ui.callout("<b>Gilt für neue Tickets.</b> Bereits offene Tickets behalten ihr bisheriges Team. "
+                   "Leer gelassene Felder nutzen die globalen Einstellungen. Ein eigenes Team ersetzt die globalen Support-Rollen; "
+                   "Admins und ausdrücklich konfigurierte Nur-Lesen-Rollen behalten ihren Zugriff. "
+                   "Für getrennte Discord-Sichtbarkeit verwende den Ticket-Typ <b>Eigener Kanal</b>.", tone="info")
         + ui.form("/cogs/tickets", "".join(blocks) + ui.save_row("Team-Zuordnung speichern"),
                   csrf=csrf, hidden={"form": "panel_routing", "guild": guild.id, "panel_id": panel.get("id")}, savebar=True)
     )
@@ -661,6 +752,15 @@ async def _handle_post(cog, request):
 
     gconf = cog.config.guild(guild)
 
+    ticket_forms = {"ticket_close", "ticket_assign", "ticket_waiting", "ticket_priority",
+                    "ticket_reply_preview", "ticket_reply_send", "ticket_autoclose", "ticket_keepopen"}
+    if form in ticket_forms:
+        conf = await gconf.all()
+        record = (conf.get("tickets") or {}).get(str(data.get("channel_id") or ""))
+        actor = await _dashboard_actor(cog, request, guild)
+        if not record or not cog._is_staff(actor, conf, record):
+            raise web.HTTPFound(f"/cogs/tickets?guild={guild.id}&err=Ticket+nicht+gefunden")
+
     if form == "ticket_close":
         return await _close_from_dashboard(cog, request, guild, data.get("channel_id"))
 
@@ -672,7 +772,7 @@ async def _handle_post(cog, request):
         channel = _ticket_channel(guild, data.get("channel_id"))
         if channel is None:
             raise web.HTTPFound(back + "&err=Ticket+nicht+gefunden")
-        error = await cog._set_waiting(guild, channel, data.get("waiting"), None, check_actor=False)
+        error = await cog._set_waiting(guild, channel, data.get("waiting"), actor, check_actor=True)
         raise web.HTTPFound(back + ("&err=" + quote_plus(error) if error else "&ok=Wartestatus+aktualisiert"))
 
     if form in {"ticket_priority", "ticket_reply_preview", "ticket_reply_send"}:
@@ -681,10 +781,8 @@ async def _handle_post(cog, request):
         channel = _ticket_channel(guild, cid)
         if channel is None:
             raise web.HTTPFound(back + "&err=Ticket+nicht+gefunden")
-        getter = getattr(request.app["webcore"], "current_user", None) or request.app["webcore"]._get_user
-        user = await getter(request) or {}
-        uid = int(user.get("id") or 0)
-        actor = guild.get_member(uid) or _DashboardCloser(uid, user.get("name") or "Dashboard")
+        actor = await _dashboard_actor(cog, request, guild)
+        uid = getattr(actor, "id", 0)
         if form == "ticket_priority":
             error = await cog._set_priority(guild, channel, data.get("priority"), actor)
             raise web.HTTPFound(back + ("&err=" + quote_plus(error) if error else "&ok=Priorität+aktualisiert"))
@@ -745,6 +843,10 @@ async def _handle_post(cog, request):
 
     if form == "settings":
         try:
+            naming_mode, naming_template = parse_name_settings(data, await gconf.all())
+        except ValueError as exc:
+            raise web.HTTPFound(f"/cogs/tickets?guild={guild.id}&err=" + quote_plus(str(exc))) from None
+        try:
             normal = int(data.get("response_target_hours", 24))
             urgent = int(data.get("response_urgent_hours", 4))
             if not 1 <= normal <= 720 or not 1 <= urgent <= 720 or urgent > normal:
@@ -783,7 +885,8 @@ async def _handle_post(cog, request):
             await gconf.max_open.set(max(1, int(data.get("max_open", 1))))
         except (TypeError, ValueError):
             await gconf.max_open.set(1)
-        await gconf.name_template.set((data.get("name_template") or "ticket-{num}").strip()[:90])
+        await gconf.name_template_mode.set(naming_mode)
+        await gconf.name_template.set(naming_template)
         await gconf.close_confirmation.set("close_confirmation" in data)
         await gconf.user_can_close.set("user_can_close" in data)
         await gconf.delete_on_close.set("delete_on_close" in data)
@@ -910,25 +1013,38 @@ async def _close_from_dashboard(cog, request, guild, raw_cid):
     gconf = cog.config.guild(guild)
     conf = await gconf.all()
     record = (conf.get("tickets") or {}).get(cid)
-    if not record:
+    actor = await _dashboard_actor(cog, request, guild)
+    if not record or not cog._is_staff(actor, conf, record):
         raise web.HTTPFound(back + "&err=" + quote_plus("Ticket nicht gefunden"))
     num = record.get("num")
     if record.get("status") != "open":
         raise web.HTTPFound(back + "&err=" + quote_plus(f"Ticket #{num} ist bereits geschlossen"))
     channel = _ticket_channel(guild, cid)
     if channel is None:
-        # Kanal wurde in Discord von Hand gelöscht -> verwaisten Eintrag entfernen.
-        async with gconf.tickets() as tickets:
-            tickets.pop(cid, None)
+        # Threads können nach einem Neustart/Archivieren im Cache fehlen. Nur ein
+        # bestätigtes Discord-404 erlaubt das Entfernen des gespeicherten Tickets.
+        try:
+            channel = await guild.fetch_channel(int(cid))
+        except discord.NotFound:
+            channel = None
+        except (discord.HTTPException, AttributeError):
+            raise web.HTTPFound(back + "&err=" + quote_plus("Ticket-Kanal derzeit nicht erreichbar – bitte erneut versuchen")) from None
+        else:
+            if channel is None or getattr(getattr(channel, "guild", None), "id", None) != guild.id:
+                raise web.HTTPFound(back + "&err=" + quote_plus("Ticket-Kanal derzeit nicht erreichbar – bitte erneut versuchen"))
+    if channel is None:
+        async with cog._lock("close", int(cid)):
+            current_conf = await gconf.all()
+            current = current_conf["tickets"].get(cid)
+            actor = await _dashboard_actor(cog, request, guild)
+            if not current or not cog._is_staff(actor, current_conf, current):
+                raise web.HTTPFound(back + "&err=Ticket+nicht+gefunden")
+            if current.get("status") != "open":
+                raise web.HTTPFound(back + "&err=" + quote_plus(f"Ticket #{num} ist bereits geschlossen"))
+            async with gconf.tickets() as tickets:
+                tickets.pop(cid, None)
         raise web.HTTPFound(back + "&ok=" + quote_plus(f"Ticket #{num}: Kanal existiert nicht mehr – Eintrag entfernt"))
-    webcore = request.app["webcore"]
-    getter = getattr(webcore, "current_user", None) or webcore._get_user
-    user = await getter(request) or {}
-    uid = int(user.get("id") or 0)
-    closer = guild.get_member(uid) if uid else None
-    if closer is None:
-        closer = _DashboardCloser(uid, f"{user.get('name') or 'Dashboard'} (Dashboard)")
-    closed = await cog._close_ticket(guild, channel, record, closer, conf)
+    closed = await cog._close_ticket(guild, channel, record, actor, conf, check_actor=True)
     if not closed:
         raise web.HTTPFound(back + "&err=" + quote_plus(f"Ticket #{num} ist bereits geschlossen"))
     raise web.HTTPFound(back + "&ok=" + quote_plus(f"Ticket #{num} geschlossen"))
@@ -940,6 +1056,10 @@ async def _assign_from_dashboard(cog, request, guild, raw_cid, raw_member_id):
     cid, member_id = str(raw_cid or "").strip(), str(raw_member_id or "").strip()
     conf = await cog.config.guild(guild).all()
     lang = conf["language"]
+    actor = await _dashboard_actor(cog, request, guild)
+    record = conf["tickets"].get(cid)
+    if not record or not cog._is_staff(actor, conf, record):
+        raise web.HTTPFound(back + "&err=Ticket+nicht+gefunden")
     if not cid.isdigit() or (member_id and not member_id.isdigit()):
         raise web.HTTPFound(back + "&err=" + quote_plus(t(lang, "assignment_invalid")))
     channel = _ticket_channel(guild, cid)
@@ -948,12 +1068,7 @@ async def _assign_from_dashboard(cog, request, guild, raw_cid, raw_member_id):
     member = guild.get_member(int(member_id)) if member_id else None
     if member_id and member is None:
         raise web.HTTPFound(back + "&err=" + quote_plus(t(lang, "assignment_invalid")))
-    webcore = request.app["webcore"]
-    getter = getattr(webcore, "current_user", None) or webcore._get_user
-    user = await getter(request) or {}
-    uid = int(user.get("id") or 0)
-    actor = guild.get_member(uid) or _DashboardCloser(uid, user.get("name") or "Dashboard")
-    error = await cog._assign_ticket(guild, channel, member, actor, check_actor=False)
+    error = await cog._assign_ticket(guild, channel, member, actor, check_actor=True)
     raise web.HTTPFound(back + ("&err=" + quote_plus(error) if error
                                else "&ok=" + quote_plus(t(lang, "assignment_done"))))
 
@@ -966,7 +1081,8 @@ async def _autoclose_from_dashboard(cog, request, guild, raw_cid, *, enabled):
         raise web.HTTPFound(back + "&err=" + quote_plus("Ticket nicht gefunden"))
     conf = await cog.config.guild(guild).all()
     record = (conf.get("tickets") or {}).get(cid)
-    if not record:
+    actor = await _dashboard_actor(cog, request, guild)
+    if not record or not cog._is_staff(actor, conf, record):
         raise web.HTTPFound(back + "&err=" + quote_plus("Ticket nicht gefunden"))
     num = record.get("num")
     if record.get("status") != "open":
@@ -974,14 +1090,7 @@ async def _autoclose_from_dashboard(cog, request, guild, raw_cid, *, enabled):
     channel = _ticket_channel(guild, cid)
     if channel is None:
         raise web.HTTPFound(back + "&err=" + quote_plus(f"Ticket #{num}: Kanal nicht gefunden"))
-    webcore = request.app["webcore"]
-    getter = getattr(webcore, "current_user", None) or webcore._get_user
-    user = await getter(request) or {}
-    uid = int(user.get("id") or 0)
-    actor = guild.get_member(uid) if uid else None
-    if actor is None:
-        actor = _DashboardCloser(uid, f"{user.get('name') or 'Dashboard'} (Dashboard)")
-    changed = await cog._set_ticket_autoclose(guild, channel, enabled, actor, conf)
+    changed = await cog._set_ticket_autoclose(guild, channel, enabled, actor, conf, check_actor=True)
     if not changed:
         raise web.HTTPFound(back + "&err=" + quote_plus(f"Ticket #{num} ist bereits geschlossen"))
     result = "24h-Timer gestartet" if enabled else "Timer gestoppt – bleibt offen"
@@ -1067,9 +1176,10 @@ async def _serve_transcript(cog, request):
     num = request.query.get("transcript")
     if guild is None or not num:
         return web.Response(text="Nicht gefunden.", status=404)
-    records = await cog.config.guild(guild).transcripts()
-    record = next((r for r in records if str(r.get("num")) == str(num)), None)
-    if not record:
+    conf = await cog.config.guild(guild).all()
+    record = next((r for r in conf.get("transcripts", []) if str(r.get("num")) == str(num)), None)
+    actor = await _dashboard_actor(cog, request, guild)
+    if not record or not _can_read_transcript(cog, actor, conf, record):
         return web.Response(text="Transcript nicht gefunden.", status=404)
     text = await cog.read_transcript(record)  # gemeinsam mit „Meine Tickets“ (asyncio.to_thread)
     if text is None:

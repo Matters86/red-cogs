@@ -62,7 +62,8 @@ async def tickets_section():
     r = await tk.open_ticket(g, nina, pa, None, {})
     ch6 = r.target
     rec = (await gc.tickets())[str(ch6.id)]
-    await tk._close_ticket(g, ch6, rec, kai, await gc.all())
+    # Historische Testdaten: Kai war damals berechtigt, hat heute keine Support-Rolle.
+    await tk._close_ticket(g, ch6, rec, kai, await gc.all(), check_actor=False)
     # Übernahme-Statistik
     async with gc.stats() as stats:
         stats.setdefault("claims", {}).update({"11": 3, "13": 1})

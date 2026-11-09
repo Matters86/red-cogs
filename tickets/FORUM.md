@@ -16,6 +16,7 @@ umschaltbar und alle Texte sind überschreibbar.
 - Panels mit Buttons oder Dropdown, Modal mit bis zu 5 Fragen
 - Rollen: Support, Admin, View (nur lesen), Ping, Inhaber-Rolle
 - Team-Zuordnung je Grund: eigenes Team, eigene Ping-Rollen, eigene Kategorie pro Ticket-Typ
+- Ticketnamen per Auswahl, z. B. `bewerbung-max-12`, oder eigener Vorlage
 - Übernehmen, Sperren, Schließen, Wiederöffnen, Löschen, Umbenennen, Mitglieder verwalten
 - Limit für offene Tickets pro Nutzer, Schließen-Bestätigung
 - HTML-Transcripts + Statistik im Dashboard
@@ -71,6 +72,26 @@ Nachrichten während eines Bot-Ausfalls werden vor dem Schließen berücksichtig
 Archiv-/Löscheinstellungen gelten wie beim manuellen Schließen. Wieder geöffnete Tickets haben keinen Timer.
 
 **Dashboard:** Tab **Tickets** → Einstellungen, Panels (inkl. Editor und Team-Zuordnung je Grund), Transcripts und Statistik pro Server. In **Offene Tickets** stehen die aktuelle Auto-Close-Frist (UTC) und Aktionen zum Starten/Stoppen des Timers sowie zum sofortigen Schließen bereit (ab WebCore-Stufe **Bedienen**). Mitglieder finden unter **Mein Bereich → Meine Tickets** ihre eigenen Tickets und Verläufe und können dort (gleiche Fragen und Limits wie der Button) ein Ticket öffnen – abschaltbar im Reiter Einstellungen.
+
+**Ticketnamen:** Unter **Einstellungen → Ticketnamen** stehen **Grund–Nutzer–Nummer** (`bewerbung-max-12`),
+**Nutzer–Grund–Nummer**, **Ticket–Nummer**, das bisherige Verhalten und eine eigene Vorlage zur Wahl.
+Platzhalter: `{reason}`, `{user}`, `{display}`, `{num}` und `{id}`; `{num}` ist Pflicht,
+höchstens 90 Zeichen. Das Beispiel zeigt das gespeicherte Format. Bestehende Tickets behalten ihren Namen.
+
+**Getrennte Teams:** Ein eigenes Team je Grund ersetzt für neue Tickets die globalen Support-Rollen.
+Bereits offene Tickets behalten ihr bisheriges Team. Im Team-Dashboard sind Listen, Zählungen,
+Verläufe und Aktionen auf die zugänglichen Tickets begrenzt; **Bedienen** oder **Bearbeiten** in
+WebCore allein reicht nicht für fremde Tickets. Auch ein voller WebCore-Allowlist-Eintrag ersetzt
+keine Ticketrechte. Globale Admin-Rollen, Discord-Administrator, Server-Owner und Bot-Owner behalten
+Zugriff; **Server verwalten** allein macht niemanden zum Ticket-Admin. Explizite Nur-Lesen-Rollen
+sehen zuordenbare Tickets ohne Aktionen. Unbekannte historische Transcripts bleiben Admins vorbehalten.
+Die persönliche Ansicht **Meine Tickets** bleibt auf eigene oder ausdrücklich hinzugefügte Tickets begrenzt.
+
+Für strikt getrennten **Discord-Zugriff** eignet sich **Eigener Kanal**. Forum-Beiträge übernehmen
+die Forum-Sichtbarkeit; **Threads verwalten** kann private Threads zugänglich machen. Die Bot-Aktionen
+prüfen dennoch bei jedem Typ das Ticket-Team. Private Threads laden bis zu 100 aktuelle Team-/Admin-Mitglieder
+ohne Rollen-Pings ein; nicht mögliche Einladungen werden gemeldet. Änderungen an der Team-Zuordnung
+migrieren keine vorhandenen Kanalrechte.
 
 ## Wartestatus, eigene Tickets und Erinnerungen
 

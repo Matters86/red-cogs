@@ -42,7 +42,7 @@ async def collect_items(webcore, request, guild, user, *, now=None):
     levels = await webcore._access_map(user, request)
     items, unavailable = [], []
     sources = {
-        "tickets": acl.VIEW, "raidhelper": acl.VIEW, "scheduler": acl.VIEW,
+        "tickets": acl.VIEW, "raidhelper": acl.VIEW, "scheduler": acl.VIEW, "teamcalendar": acl.VIEW,
         "organigram": acl.OPERATE, "sticky": acl.OPERATE, "poll": acl.OPERATE,
         "guard": acl.OPERATE, "autoroom": acl.EDIT,
     }
@@ -57,8 +57,11 @@ async def collect_items(webcore, request, guild, user, *, now=None):
                 continue
             conf = await cog.config.guild(guild).all()
             if slug == "tickets":
+                member = guild.get_member(uid)
                 for record in (conf.get("tickets") or {}).values():
                     if not isinstance(record, dict) or record.get("status") != "open" or record.get("claimed_by") != uid:
+                        continue
+                    if member is None or not cog._is_staff(member, conf, record):
                         continue
                     due_fn = getattr(cog, "support_due", None)
                     due = due_fn(record, conf, now=now) if due_fn is not None else None
@@ -67,6 +70,39 @@ async def collect_items(webcore, request, guild, user, *, now=None):
                     items.append(WorkItem(slug, "tickets", f"Ticket #{record.get('num', '?')}", detail,
                                           _link(slug, guild.id, view="mine"), due,
                                           record.get("priority") == "urgent"))
+            elif slug == "teamcalendar":
+                member = guild.get_member(uid)
+                if not cog.can_view(member, conf):
+                    continue
+                for ident, task in (conf.get("work_tasks") or {}).items():
+                    if not isinstance(task, dict) or task.get("status") == "done" or uid not in (task.get("assignee_ids") or []):
+                        continue
+                    project = (conf.get("projects") or {}).get(str(task.get("project_id") or "")) or {}
+                    if project.get("status") in {"archived", "completed"}:
+                        continue
+                    detail = {"todo": "Offen", "in_progress": "In Arbeit", "blocked": "Blockiert"}.get(task.get("status"), "Offen")
+                    if project.get("name"):
+                        detail += " · " + str(project["name"])
+                    items.append(WorkItem(slug, "tasks", str(task.get("title") or "Projektaufgabe"), detail,
+                                          _link(slug, guild.id, task=ident), _stamp(task.get("due_ts")),
+                                          task.get("priority") == "urgent"))
+                for ident, record in (conf.get("events") or {}).items():
+                    if not isinstance(record, dict) or record.get("status") != "scheduled":
+                        continue
+                    involved = uid in (record.get("owner_id"), record.get("created_by")) or (
+                        record.get("participants") or {}).get(str(uid)) in {"yes", "maybe"}
+                    due, end = _stamp(record.get("start_ts")), _stamp(record.get("end_ts"))
+                    if not involved or due is None or end is None or end <= now or due > now + timedelta(days=7):
+                        continue
+                    items.append(WorkItem(slug, "events", str(record.get("title") or "Projekttermin"),
+                                          "Projektkalender" + (" · " + str(record["project"]) if record.get("project") else ""),
+                                          _link(slug, guild.id, event=ident), due))
+                if conf.get("board_error") and level >= acl.OPERATE and cog.can_manage(member, conf):
+                    items.append(WorkItem(slug, "problems", "Projektkalender: Übersicht prüfen",
+                                          "Die Discord-Übersicht konnte nicht vollständig aktualisiert werden.", _link(slug, guild.id)))
+                if conf.get("task_board_error") and level >= acl.OPERATE and cog.can_manage_projects(member, conf):
+                    items.append(WorkItem(slug, "problems", "Projektmanagement: Aufgabenübersicht prüfen",
+                                          "Die Discord-Aufgabenübersicht konnte nicht vollständig aktualisiert werden.", _link(slug, guild.id) + "#aufgabenboard"))
             elif slug == "raidhelper":
                 for ident, record in (conf.get("events") or {}).items():
                     if not isinstance(record, dict) or record.get("completed"):
@@ -157,13 +193,13 @@ async def handle_tasks(webcore, request):
     now = datetime.now(timezone.utc)
     items, unavailable = await collect_items(webcore, request, guild, user, now=now)
     kind = request.query.get("kind", "all")
-    kind = kind if kind in ("all", "tickets", "events", "problems", "due") else "all"
+    kind = kind if kind in ("all", "tickets", "tasks", "events", "problems", "due") else "all"
     shown = [item for item in items if kind == "all" or item.kind == kind
              or kind == "due" and item.due is not None and item.due <= now]
     ui = webcore.ui
     filters = ui.form("/tasks", ui.field("Anzeigen", ui.select("kind", [
-        ("all", "Alles"), ("tickets", "Meine Tickets"), ("events", "Termine in den nächsten 7 Tagen"),
-        ("problems", "Fehler und Wiederherstellung prüfen"), ("due", "Antwort oder Termin fällig"),
+        ("all", "Alles"), ("tickets", "Meine Tickets"), ("tasks", "Meine Projektaufgaben"), ("events", "Termine in den nächsten 7 Tagen"),
+        ("problems", "Fehler und Wiederherstellung prüfen"), ("due", "Frist oder Termin fällig"),
     ], kind, autosubmit=True)), method="get", csrf="", hidden={"guild": guild.id})
     rows = []
     for item in shown[:MAX_VISIBLE]:
@@ -182,6 +218,7 @@ async def handle_tasks(webcore, request):
         ))
     counts = ui.stats([
         ("Meine Tickets", sum(item.kind == "tickets" for item in items), "bi-life-preserver", None, None),
+        ("Projektaufgaben", sum(item.kind == "tasks" for item in items), "bi-kanban", None, None),
         ("Termine", sum(item.kind == "events" for item in items), "bi-calendar-event", "nächste 7 Tage", None),
         ("Zu prüfen", sum(item.kind == "problems" for item in items), "bi-exclamation-circle", None, None),
     ])
@@ -189,11 +226,11 @@ async def handle_tasks(webcore, request):
                          + ". Lade die Übersicht erneut, bevor du von einer leeren Liste ausgehst.", tone="warn") if unavailable else "")
     if len(shown) > MAX_VISIBLE:
         warning += ui.callout(f"Die ersten {MAX_VISIBLE} von {len(shown)} Aufgaben werden angezeigt. Bitte einen Filter wählen.", tone="info")
-    content = ui.hero("bi-check2-square", "", "Deine zugewiesenen Tickets, Raid-Termine und geplanten Nachrichten. "
+    content = ui.hero("bi-check2-square", "", "Deine zugewiesenen Tickets und Aufgaben, Projekt- und Raid-Termine sowie geplanten Nachrichten. "
                       "Veröffentlichungs- und Wiederherstellungsprobleme erscheinen entsprechend deinen Modulrechten.",
                       actions=ui.button("Aktualisieren", href=str(request.rel_url), kind="ghost", icon="bi-arrow-clockwise"))
     content += counts + warning + filters + ui.card("Meine Aufgaben", ui.table(
-        ["Modul", "Aufgabe", "Status", "Zeit / Antwortziel", ">"], rows,
+        ["Modul", "Aufgabe", "Status", "Zeit / Frist", ">"], rows,
         empty_text="Hier ist gerade nichts zu erledigen. Erledigte Aufgaben verschwinden automatisch.",
         search=len(rows) > 6, id="my-tasks"), desc="Zeitangaben werden in deiner Browser-Zeitzone angezeigt.")
     response = aiohttp_jinja2.render_template("page.html", request, webcore._page_ctx(

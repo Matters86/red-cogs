@@ -61,7 +61,7 @@ DISCORD_TOKEN = f"{DISCORD_API}/oauth2/token"
 # das verschlüsselte Cookie unbegrenzt – ein einmal abgegriffenes Cookie für immer.
 SESSION_MAX_AGE = 7 * 86400
 # Cache-Buster für /static/webcore.css (bei Theme-Änderungen erhöhen).
-ASSET_VERSION = "11"
+ASSET_VERSION = "13"
 # Rollen mit diesen Rechten darf nur vergeben (per Autorole/Ticket-Inhaberrolle …),
 # wer Owner/Allowlist oder Discord-Administrator ist – sonst könnte sich ein
 # Team-Mitglied mit Dashboard-Rechten selbst hochstufen.

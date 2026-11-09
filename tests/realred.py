@@ -113,7 +113,9 @@ async def main():
     tk._close_ticket_locked = fake_locked
     conf = await tk.config.guild(g).all()
     ch = types.SimpleNamespace(id=100)
-    res = await asyncio.gather(*(tk._close_ticket(g, ch, {"num": 1}, None, conf) for _ in range(3)))
+    # Die Nebenläufigkeitsprüfung verwendet einen tatsächlich berechtigten Schließer.
+    closer = types.SimpleNamespace(id=1)  # Bot-Owner der Testinstanz
+    res = await asyncio.gather(*(tk._close_ticket(g, ch, {"num": 1}, closer, conf) for _ in range(3)))
     assert calls == [1] and sorted(res) == [False, False, True], (calls, res)
     print("tickets: 3x gleichzeitig schließen -> 1x ausgeführt")
     # autorole Job-Guard

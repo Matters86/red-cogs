@@ -134,6 +134,35 @@ def columns(*blocks: str, cols: int = 2) -> str:
     return f"<div class='wc-cols cols-{int(cols)}'>{''.join(blocks)}</div>"
 
 
+def kanban(columns, *, label: str = "Aufgabenboard") -> str:
+    """Statusspalten; ``body`` ist bereits sicheres HTML des aufrufenden Cogs."""
+    parts = []
+    for column in columns:
+        title = esc(column.get("title") or "Status")
+        count = esc(column.get("count", ""))
+        body = column.get("body") or empty("bi-inbox", "Keine Aufgaben")
+        parts.append("<section class='wc-kanban-column'><div class='wc-kanban-head'><h3>" + title
+                     + "</h3><span class='wc-tab-count'>" + count + "</span></div><div class='wc-kanban-body'>" + body + "</div></section>")
+    return "<div class='wc-kanban' aria-label='" + esc(label) + "'>" + "".join(parts) + "</div>"
+
+
+def month_grid(weeks, *, label: str = "Monatskalender") -> str:
+    """Monatsübersicht; ``body`` enthält vom aufrufenden Cog bereits sicheres HTML."""
+    headers = "".join(f"<div role='columnheader'>{day}</div>" for day in ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"))
+    rows = [f"<div class='wc-month-row wc-month-head' role='row'>{headers}</div>"]
+    for week in weeks:
+        cells = []
+        for day in week:
+            body = day.get("body") or ""
+            classes = "wc-month-day"
+            classes += " is-muted" if day.get("muted") else ""
+            classes += " is-today" if day.get("today") else ""
+            classes += " is-empty" if not body else ""
+            cells.append(f"<div class='{classes}' role='cell'><div class='wc-month-date'>{esc(day.get('day', ''))}</div>{body}</div>")
+        rows.append("<div class='wc-month-row' role='row'>" + "".join(cells) + "</div>")
+    return f"<div class='wc-month' role='table' aria-label='{esc(label)}'>" + "".join(rows) + "</div>"
+
+
 # --------------------------------------------------------------------------- #
 #  Formulare
 # --------------------------------------------------------------------------- #

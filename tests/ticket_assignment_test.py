@@ -73,6 +73,7 @@ async def main():
     panel = {"id": "assignment", "title": "Support", "reasons": [], "modal_questions": []}
 
     async def new_ticket():
+        await conf.panels.set([panel])
         result = await cog.open_ticket(guild, owner, panel, None, {})
         assert result.status == "ok"
         return result.target
@@ -126,7 +127,10 @@ async def main():
     async with conf.tickets() as tickets:
         tickets[str(channel.id)]["support_roles"] = [1102]
     assert await cog._assign_ticket(guild, channel, team_member, team_member) is None
-    assert await cog._assign_ticket(guild, channel, None, staff) is None
+    assert await cog._assign_ticket(guild, channel, None, staff)
+    assert await cog._assign_ticket(guild, channel, None, team_member) is None
+    async with conf.tickets() as tickets:
+        tickets[str(channel.id)]["support_roles"] = [1101]
     assert await cog._assign_ticket(guild, guild.get_channel(1001), staff, staff)
     print("Zuweisen/Übergabe/Freigabe: Rechte, Kanalzugriff, Inhaber/Bots, Statistik und sichtbarer Status – OK")
 
@@ -294,11 +298,11 @@ async def main():
         response = await post(11, "")
         assert "ok=" in response.headers["Location"]
         assert (await record(command_channel))["claimed_by"] is None
-        # WebCore-Bedienen kann unabhängig von einer Discord-Supportrolle vergeben werden.
+        # WebCore-Bedienen allein erteilt keine fremden Ticket-Teamrechte.
         await wc.config.role_perms.set({"1000": {"1102": {"tickets": "operate"}}})
         response = await post(12, str(second.id))
-        assert "ok=" in response.headers["Location"]
-        assert (await record(command_channel))["claimed_by"] == second.id
+        assert "err=" in response.headers["Location"]
+        assert (await record(command_channel))["claimed_by"] is None
     finally:
         await client.close()
     print("Dashboard: Bedienen/Ansehen, unabhängige Webrechte, Freigabe und ungültige Ziele – OK")

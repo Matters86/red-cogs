@@ -17,6 +17,7 @@ from .strings import LANGUAGES, OVERRIDABLE_KEYS, t
 from .transcript import build_transcript, redact_user
 from .support import DEFAULT_REPLIES, MAX_REPLY, human_reply, render_reply, reset_response, set_waiting, support_due
 from .replies import PriorityView, ReplyPicker
+from .naming import ticket_base_name
 from .views import (
     CID_ASSIGN,
     CID_AUTOCLOSE,
@@ -103,6 +104,7 @@ class Tickets(commands.Cog):
             user_can_close=True,
             delete_on_close=False,
             name_template="ticket-{num}",
+            name_template_mode="legacy",
             messages={},
             panels=[],
             counter=0,
@@ -326,16 +328,42 @@ class Tickets(commands.Cog):
         return getattr(member, "id", None) in (getattr(self.bot, "owner_ids", None) or set())
 
     def _is_admin(self, member: discord.Member, conf: dict) -> bool:
-        if self._is_bot_owner(member) or member.guild_permissions.manage_guild:
+        guild = getattr(member, "guild", None)
+        if (self._is_bot_owner(member)
+                or getattr(getattr(member, "guild_permissions", None), "administrator", False)
+                or member is not None and getattr(guild, "owner_id", None) == member.id):
             return True
         return self._has_any_role(member, conf.get("admin_roles"))
 
     def _is_staff(self, member: discord.Member, conf: dict, record: dict | None = None) -> bool:
-        """Admin, globale Support-Rolle – oder das für DIESES Ticket zuständige Team
-        (Team-Zuordnung je Grund). Ohne ``record`` zählen nur die globalen Rollen."""
-        if self._is_admin(member, conf) or self._has_any_role(member, conf.get("support_roles")):
+        """Admins oder das gespeicherte Team; globale Rollen sind nur der Standard."""
+        if self._is_admin(member, conf):
             return True
-        return bool(record) and self._has_any_role(member, record.get("support_roles"))
+        roles = record.get("support_roles") if record is not None and "support_roles" in record else conf.get("support_roles")
+        return self._has_any_role(member, roles)
+
+    def _can_view_record(self, member, conf, record) -> bool:
+        """Team-Dashboard: unbekannter Altbestand bleibt ausschließlich für Admins."""
+        if self._is_admin(member, conf):
+            return True
+        return record is not None and (self._is_staff(member, conf, record)
+                                       or self._has_any_role(member, conf.get("view_roles")))
+
+    @staticmethod
+    def _transcript_record(conf, transcript):
+        if "support_roles" in transcript:
+            return transcript
+        return next((record for record in (conf.get("tickets") or {}).values()
+                     if str(record.get("num")) == str(transcript.get("num"))), None)
+
+    def _current_actor(self, guild, actor):
+        if self._is_bot_owner(actor):
+            return actor
+        return guild.get_member(getattr(actor, "id", None))
+
+    def _can_close_record(self, actor, conf, record, *, timer_cancel=False):
+        return self._is_staff(actor, conf, record) or (getattr(actor, "id", None) == record.get("owner_id")
+            and (timer_cancel or conf.get("user_can_close", False)))
 
     def _resolve_roles(self, guild, ids):
         out = []
@@ -345,7 +373,7 @@ class Tickets(commands.Cog):
                 out.append(role)
         return out
 
-    def _overwrites(self, guild, member, conf, support_ids=None):
+    def _overwrites(self, guild, member, conf, support_ids=None, members=None):
         # support_ids: die für dieses Ticket zuständigen Support-Rollen (typ-abhängig).
         # None -> globale Support-Rollen. Admin-Rollen haben immer Zugriff.
         if support_ids is None:
@@ -361,10 +389,14 @@ class Tickets(commands.Cog):
                 attach_files=True, embed_links=True,
             ),
         }
-        for role in self._resolve_roles(guild, support_ids) + self._resolve_roles(guild, conf.get("admin_roles")):
-            ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
         for role in self._resolve_roles(guild, conf.get("view_roles")):
             ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
+        for role in self._resolve_roles(guild, support_ids) + self._resolve_roles(guild, conf.get("admin_roles")):
+            ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+        for uid in members or []:
+            guest = guild.get_member(uid)
+            if guest is not None and guest != member and guest != guild.me:
+                ow[guest] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
         return ow
 
     def _closed_overwrites(self, guild, conf, support_ids=None):
@@ -376,10 +408,10 @@ class Tickets(commands.Cog):
                 view_channel=True, send_messages=True, read_message_history=True, manage_channels=True
             ),
         }
-        for role in self._resolve_roles(guild, support_ids) + self._resolve_roles(guild, conf.get("admin_roles")):
-            ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
         for role in self._resolve_roles(guild, conf.get("view_roles")):
             ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
+        for role in self._resolve_roles(guild, support_ids) + self._resolve_roles(guild, conf.get("admin_roles")):
+            ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
         return ow
 
     def _find_panel(self, conf, panel_id):
@@ -418,11 +450,8 @@ class Tickets(commands.Cog):
         return conf.get("category_open")
 
     def _ticket_base_name(self, conf, reason, num, member):
-        """Kanalname: automatisch nach Typ (<grund>-<num>), sonst globale Vorlage."""
-        label = (reason or {}).get("label") if reason else None
-        if label:
-            return f"{label}-{num}"
-        return _fill(conf.get("name_template") or "ticket-{num}", num=num, user=member.name)
+        """Eine gewählte Vorlage gilt auch für Tickets mit einem ausgewählten Grund."""
+        return ticket_base_name(conf, reason, num, member)
 
     # ----------------------------------------------------------------- #
     #  Panels posten / entfernen (vom Dashboard aufgerufen)
@@ -575,8 +604,14 @@ class Tickets(commands.Cog):
         guild = interaction.guild
         member = interaction.user
         conf = await self.config.guild(guild).all()
-        panel = self._find_panel(conf, panel_id) or {}
-        lang = panel.get("lang") or conf["language"]
+        panel = self._find_panel(conf, panel_id)
+        lang = (panel or {}).get("lang") or conf["language"]
+        if panel is None or (reason_id not in (None, "", "_") and self._find_reason(panel, reason_id) is None):
+            if not interaction.response.is_done():
+                await interaction.response.send_message(t(lang, "create_failed"), ephemeral=True)
+            else:
+                await interaction.followup.send(t(lang, "create_failed"), ephemeral=True)
+            return
         reason = self._find_reason(panel, reason_id)
 
         if not interaction.response.is_done():
@@ -603,6 +638,14 @@ class Tickets(commands.Cog):
         """
         async with self._lock("open", guild.id, member.id):
             conf = await self.config.guild(guild).all()
+            fresh_panel = self._find_panel(conf, panel.get("id"))
+            if fresh_panel is None:
+                return OpenResult("failed", None, int(conf["max_open"]))
+            reason_id = (reason or {}).get("id")
+            fresh_reason = self._find_reason(fresh_panel, reason_id)
+            if fresh_panel.get("reasons") and fresh_reason is None or reason_id and fresh_reason is None:
+                return OpenResult("failed", None, int(conf["max_open"]))
+            panel, reason = fresh_panel, fresh_reason
             if self.open_blocked(conf, member.id):
                 return OpenResult("max_open", None, int(conf["max_open"]))
             try:
@@ -691,14 +734,33 @@ class Tickets(commands.Cog):
                     invitable=False,
                     reason=f"Ticket #{num} ({member})",
                 )
-                try:
-                    await target.add_user(member)
-                except discord.HTTPException:
-                    pass
-                mentions = " ".join(r.mention for r in (ping_roles + support_roles)) or None
+                await target.add_user(member)
+                # Rollen-Erwähnungen können private Thread-Mitglieder hinzufügen.
+                # Nur das gespeicherte Team explizit einladen, niemals Ping-Rollen.
+                invited = [person for person in guild.members if not getattr(person, "bot", False)
+                           and person.id != member.id
+                           and self._is_staff(person, conf, {"support_roles": eff_support})
+                           and base.permissions_for(person).view_channel
+                           and base.permissions_for(person).send_messages_in_threads]
+                missing_invites = max(0, len(invited) - 100)
+                for person in invited[:100]:
+                    try:
+                        await target.add_user(person)
+                    except discord.HTTPException:
+                        missing_invites += 1
+                if missing_invites:
+                    log.warning("Ticket %s: %s Teammitglieder konnten nicht zum privaten Thread hinzugefügt werden",
+                                target.id, missing_invites)
                 opening_msg = await target.send(
-                    content=mentions, embed=embed, view=controls, allowed_mentions=PING_ALLOWED
+                    embed=embed, view=controls, allowed_mentions=discord.AllowedMentions.none()
                 )
+                if missing_invites:
+                    try:
+                        await target.send("Nicht alle zuständigen Teammitglieder konnten hinzugefügt werden. "
+                                          "Ein Administrator sollte den Thread-Zugriff prüfen.",
+                                          allowed_mentions=discord.AllowedMentions.none())
+                    except discord.HTTPException:
+                        log.warning("Ticket %s: Zugriffshinweis konnte nicht gesendet werden", target.id)
 
             else:  # category
                 name = self._channel_name(base_name)
@@ -714,9 +776,19 @@ class Tickets(commands.Cog):
                 )
         except discord.Forbidden:
             log.warning("Fehlende Rechte beim Erstellen eines Tickets (Guild %s)", guild.id)
+            if target is not None:
+                try:
+                    await target.delete(reason="Unvollständige Ticket-Erstellung")
+                except discord.HTTPException:
+                    log.error("Unvollständiges Ticket %s konnte nicht entfernt werden", target.id)
             return None
         except discord.HTTPException:
             log.exception("Ticket-Erstellung fehlgeschlagen (Guild %s)", guild.id)
+            if target is not None:
+                try:
+                    await target.delete(reason="Unvollständige Ticket-Erstellung")
+                except discord.HTTPException:
+                    log.error("Unvollständiges Ticket %s konnte nicht entfernt werden", target.id)
             return None
 
         # Inhaber-Rolle vergeben
@@ -838,13 +910,17 @@ class Tickets(commands.Cog):
         key = ("autoclose_ack" if enabled else "keep_open_ack") if changed else "already_closed"
         await interaction.followup.send(t(lang, key), ephemeral=True)
 
-    async def _set_ticket_autoclose(self, guild, channel, enabled, actor, conf) -> bool:
+    async def _set_ticket_autoclose(self, guild, channel, enabled, actor, conf, *, check_actor=True) -> bool:
         """Start/Abbruch aus Discord und Dashboard, mit derselben Sperre wie Schließen."""
         async with self._lock("close", channel.id):
+            conf = await self.config.guild(guild).all()
+            actor = self._current_actor(guild, actor)
             now = datetime.now(timezone.utc)
             async with self.config.guild(guild).tickets() as tickets:
                 record = tickets.get(str(channel.id))
                 if not record or record.get("status") != "open":
+                    return False
+                if check_actor and not self._can_close_record(actor, conf, record, timer_cancel=not enabled):
                     return False
                 record["auto_close_at"] = (now + INACTIVITY_TIMEOUT).isoformat() if enabled else None
                 record["auto_close_started_at"] = now.isoformat() if enabled else None
@@ -903,6 +979,7 @@ class Tickets(commands.Cog):
             record = conf["tickets"].get(str(channel.id))
             if not record:
                 return t(lang, "not_a_ticket")
+            actor = self._current_actor(guild, actor)
             if check_actor and not self._is_staff(actor, conf, record):
                 return t(lang, "no_permission")
             if record.get("status") != "open":
@@ -917,6 +994,7 @@ class Tickets(commands.Cog):
     async def _reply_access(self, guild, channel, actor):
         if await self.bot.cog_disabled_in_guild(self, guild):
             return "Das Ticketsystem ist auf diesem Server deaktiviert."
+        actor = self._current_actor(guild, actor)
         conf = await self.config.guild(guild).all()
         record = conf["tickets"].get(str(channel.id))
         if not record:
@@ -930,6 +1008,13 @@ class Tickets(commands.Cog):
             if not (permissions.view_channel and permissions.read_message_history
                     and (permissions.send_messages_in_threads if isinstance(channel, discord.Thread) else permissions.send_messages)):
                 return "Du musst dieses Ticket lesen und darin schreiben dürfen."
+            if (isinstance(channel, discord.Thread)
+                    and getattr(channel, "type", None) == discord.ChannelType.private_thread
+                    and not permissions.manage_threads):
+                try:
+                    await channel.fetch_member(actor.id)
+                except discord.HTTPException:
+                    return "Du musst Mitglied dieses privaten Ticket-Threads sein."
         return None
 
     async def _prepare_reply(self, guild, channel, actor, reply_id):
@@ -1175,13 +1260,15 @@ class Tickets(commands.Cog):
         if conf["close_confirmation"]:
             async def _confirmed(inter):
                 await inter.response.edit_message(content="…", view=None)
-                await self._close_ticket(guild, channel, record, member, conf)
+                if not await self._close_ticket(guild, channel, record, member, conf):
+                    await inter.followup.send(t(lang, "no_permission"), ephemeral=True)
             await interaction.response.send_message(
                 t(lang, "confirm_close"), view=ConfirmView(_confirmed, lang), ephemeral=True
             )
         else:
             await interaction.response.defer()
-            await self._close_ticket(guild, channel, record, member, conf)
+            if not await self._close_ticket(guild, channel, record, member, conf):
+                await interaction.followup.send(t(lang, "no_permission"), ephemeral=True)
 
     def _can_assign_to(self, guild, channel, record, conf, member) -> bool:
         if (member is None or getattr(member, "guild", None) != guild
@@ -1204,10 +1291,17 @@ class Tickets(commands.Cog):
             record = conf["tickets"].get(str(channel.id))
             if not record:
                 return t(lang, "not_a_ticket")
+            actor = self._current_actor(guild, actor)
             if check_actor and not self._is_staff(actor, conf, record):
                 return t(lang, "no_permission")
             if record.get("status") != "open":
                 return t(lang, "already_closed")
+            if member is not None:
+                if getattr(member, "guild", None) != guild:
+                    return t(lang, "assignment_invalid")
+                member = guild.get_member(getattr(member, "id", None))
+                if member is None:
+                    return t(lang, "assignment_invalid")
             if member is not None and not self._can_assign_to(guild, channel, record, conf, member):
                 return t(lang, "assignment_invalid")
             previous = record.get("claimed_by")
@@ -1299,13 +1393,19 @@ class Tickets(commands.Cog):
             await interaction.response.send_message(t(lang, "no_permission"), ephemeral=True)
             return
         await interaction.response.defer()
-        await self._set_locked(guild, channel, record, conf, lock)
-        await channel.send(t(lang, "locked_by" if lock else "unlocked_by", user=member.mention))
-        async with self.config.guild(guild).tickets() as tickets:
-            if str(channel.id) in tickets:
+        async with self._lock("close", channel.id):
+            conf = await self.config.guild(guild).all()
+            record = conf["tickets"].get(str(channel.id))
+            member = self._current_actor(guild, member)
+            if not record or record.get("status") != "open" or not self._is_staff(member, conf, record):
+                return await interaction.followup.send(t(lang, "no_permission"), ephemeral=True)
+            if not await self._set_locked(guild, channel, record, conf, lock):
+                return await interaction.followup.send(t(lang, "no_permission"), ephemeral=True)
+            async with self.config.guild(guild).tickets() as tickets:
                 tickets[str(channel.id)]["locked"] = lock
-        record["locked"] = lock
-        await self._refresh_controls(guild, channel, record, lang)
+            record["locked"] = lock
+            await self._refresh_controls(guild, channel, record, lang)
+        await channel.send(t(lang, "locked_by" if lock else "unlocked_by", user=member.mention))
 
     async def _set_locked(self, guild, channel, record, conf, lock: bool):
         try:
@@ -1318,7 +1418,8 @@ class Tickets(commands.Cog):
                     ow.send_messages = not lock
                     await channel.set_permissions(owner, overwrite=ow)
         except discord.HTTPException:
-            pass
+            return False
+        return True
 
     async def _deadline_after_history(self, guild, channel, record, deadline, now):
         """Unter der Kanalsperre: Offline-Antworten und laufende Gateway-Nachrichten prüfen."""
@@ -1342,13 +1443,22 @@ class Tickets(commands.Cog):
         # Ein überfälliger Pfad hat ab der letzten Aktivitätsprüfung kein weiteres await.
         return deadline, deferred
 
-    async def _close_ticket(self, guild, channel, record, closer, conf, *, inactivity=False) -> bool:
+    async def _close_ticket(self, guild, channel, record, closer, conf, *, inactivity=False,
+                            check_actor=True, force_delete=False) -> bool:
         """Schließt (bzw. löscht) ein Ticket. Pro Kanal serialisiert; ein bereits
         geschlossenes Ticket wird nicht erneut gezählt/transkribiert."""
         async with self._lock("close", channel.id):
+            conf = await self.config.guild(guild).all()
+            closer = self._current_actor(guild, closer) if not inactivity else closer
             current = await self._get_record(guild, channel.id)
             if current is None:
                 return False
+            if not inactivity and check_actor and not self._can_close_record(closer, conf, current):
+                return False
+            if force_delete:
+                if check_actor and not self._is_admin(closer, conf):
+                    return False
+                conf["delete_on_close"] = True
             if inactivity:
                 now = datetime.now(timezone.utc)
                 deadline = self._timer_time(current.get("auto_close_at"))
@@ -1359,7 +1469,7 @@ class Tickets(commands.Cog):
                     return False
                 current["auto_closed"] = True
             if current.get("status") == "closed":
-                if conf["delete_on_close"]:  # z. B. [p]ticket delete auf archiviertem Ticket
+                if force_delete:  # ausschließlich der ausdrücklich autorisierte Admin-Löschbefehl
                     async with self.config.guild(guild).tickets() as tickets:
                         tickets.pop(str(channel.id), None)
                     try:
@@ -1409,6 +1519,10 @@ class Tickets(commands.Cog):
                     "owner": meta["owner"],
                     "owner_id": record["owner_id"],
                     "members": list(record.get("members") or []),  # per [p]ticket add hinzugefügt
+                    "support_roles": list((record.get("support_roles") if "support_roles" in record
+                                           else conf.get("support_roles")) or []),
+                    "panel_id": record.get("panel_id"), "reason_id": record.get("reason_id"),
+                    "type": record.get("type"),
                     "reason": record.get("reason_label"),
                     "closed": meta["closed"],
                     "file": filename,
@@ -1461,7 +1575,8 @@ class Tickets(commands.Cog):
                 closed_cat = guild.get_channel(conf.get("category_close")) if conf.get("category_close") else None
                 await channel.edit(
                     category=closed_cat if isinstance(closed_cat, discord.CategoryChannel) else channel.category,
-                    overwrites=self._closed_overwrites(guild, conf, support_ids=record.get("support_roles")),
+                    overwrites=self._closed_overwrites(guild, conf, support_ids=(record.get("support_roles") or [])
+                                                       if "support_roles" in record else None),
                     reason=f"Ticket #{record['num']} geschlossen",
                 )
         except discord.HTTPException:
@@ -1475,7 +1590,17 @@ class Tickets(commands.Cog):
                 tickets[str(channel.id)]["auto_close_at"] = None
                 tickets[str(channel.id)]["auto_close_started_at"] = None
 
-    async def _reopen_ticket(self, guild, channel, record, conf):
+    async def _reopen_ticket(self, guild, channel, record, conf, *, actor=None):
+        async with self._lock("close", channel.id):
+            conf = await self.config.guild(guild).all()
+            record = conf["tickets"].get(str(channel.id))
+            if not record or record.get("status") != "closed":
+                return False
+            if actor is not None and not self._is_staff(self._current_actor(guild, actor), conf, record):
+                return False
+            return await self._reopen_ticket_locked(guild, channel, record, conf)
+
+    async def _reopen_ticket_locked(self, guild, channel, record, conf):
         owner = guild.get_member(record["owner_id"])
         owner_role = guild.get_role(conf["owner_role"]) if conf.get("owner_role") else None
         if owner_role is not None and owner is not None:
@@ -1491,10 +1616,12 @@ class Tickets(commands.Cog):
                 open_cat = guild.get_channel(cat_id) if cat_id else None
                 await channel.edit(
                     category=open_cat if isinstance(open_cat, discord.CategoryChannel) else channel.category,
-                    overwrites=self._overwrites(guild, owner or guild.me, conf, support_ids=record.get("support_roles")),
+                    overwrites=self._overwrites(guild, owner or guild.me, conf, support_ids=(record.get("support_roles") or [])
+                                                if "support_roles" in record else None,
+                                                members=record.get("members")),
                 )
         except discord.HTTPException:
-            pass
+            return False
         async with self.config.guild(guild).tickets() as tickets:
             if str(channel.id) in tickets:
                 tickets[str(channel.id)]["status"] = "open"
@@ -1508,6 +1635,7 @@ class Tickets(commands.Cog):
         record = await self._get_record(guild, channel.id)
         if record is not None:
             await self._refresh_controls(guild, channel, record, conf["language"])
+        return True
 
     async def _log(self, guild, conf, text, transcript_file=None):
         chan = guild.get_channel(conf.get("log_channel")) if conf.get("log_channel") else None
@@ -1554,7 +1682,8 @@ class Tickets(commands.Cog):
         if record.get("status") == "closed":
             return await ctx.send(t(lang, "already_closed"))
         await ctx.send("🔒")
-        await self._close_ticket(ctx.guild, ctx.channel, record, ctx.author, conf)
+        if not await self._close_ticket(ctx.guild, ctx.channel, record, ctx.author, conf):
+            await ctx.send(t(lang, "no_permission"))
 
     @ticket.command(name="autoclose")
     async def ticket_autoclose(self, ctx):
@@ -1591,7 +1720,8 @@ class Tickets(commands.Cog):
             return await ctx.send(t(lang, "no_permission"))
         if record.get("status") != "closed":
             return await ctx.send(t(lang, "not_closed"))
-        await self._reopen_ticket(ctx.guild, ctx.channel, record, conf)
+        if not await self._reopen_ticket(ctx.guild, ctx.channel, record, conf, actor=ctx.author):
+            return await ctx.send(t(lang, "no_permission"))
         await ctx.send(t(lang, "reopened_by", user=ctx.author.mention))
 
     @ticket.command(name="waiting")
@@ -1632,95 +1762,125 @@ class Tickets(commands.Cog):
     @ticket.command(name="add")
     async def ticket_add(self, ctx, member: discord.Member):
         """Fügt ein Mitglied zum Ticket hinzu."""
-        conf, record = await self._ctx_record(ctx)
-        lang = conf["language"]
-        if not record:
-            return await ctx.send(t(lang, "not_a_ticket"))
-        if not self._is_staff(ctx.author, conf, record):
-            return await ctx.send(t(lang, "no_permission"))
-        try:
-            if isinstance(ctx.channel, discord.Thread):
-                await ctx.channel.add_user(member)
-            else:
-                await ctx.channel.set_permissions(
-                    member, overwrite=discord.PermissionOverwrite(
-                        view_channel=True, send_messages=True, read_message_history=True
-                    )
-                )
-        except discord.HTTPException:
-            pass
-        async with self.config.guild(ctx.guild).tickets() as tickets:
-            rec = tickets.get(str(ctx.channel.id))
-            if rec is not None and member.id not in (rec.get("members") or []):
-                rec.setdefault("members", []).append(member.id)
-        await ctx.send(t(lang, "member_added", user=member.mention))
+        error = await self._change_member(ctx.guild, ctx.channel, ctx.author, member, add=True)
+        await ctx.send(error or t(await self._lang(ctx.guild), "member_added", user=member.mention))
 
     @ticket.command(name="remove")
     async def ticket_remove(self, ctx, member: discord.Member):
         """Entfernt ein Mitglied aus dem Ticket."""
-        conf, record = await self._ctx_record(ctx)
-        lang = conf["language"]
-        if not record:
-            return await ctx.send(t(lang, "not_a_ticket"))
-        if not self._is_staff(ctx.author, conf, record):
-            return await ctx.send(t(lang, "no_permission"))
-        try:
-            if isinstance(ctx.channel, discord.Thread):
-                await ctx.channel.remove_user(member)
-            else:
-                await ctx.channel.set_permissions(member, overwrite=None)
-        except discord.HTTPException:
-            pass
-        async with self.config.guild(ctx.guild).tickets() as tickets:
-            rec = tickets.get(str(ctx.channel.id))
-            if rec is not None and member.id in (rec.get("members") or []):
-                rec["members"] = [m for m in rec["members"] if m != member.id]
-        await ctx.send(t(lang, "member_removed", user=member.mention))
+        error = await self._change_member(ctx.guild, ctx.channel, ctx.author, member, add=False)
+        await ctx.send(error or t(await self._lang(ctx.guild), "member_removed", user=member.mention))
+
+    async def _change_member(self, guild, channel, actor, member, *, add):
+        async with self._lock("close", channel.id):
+            conf = await self.config.guild(guild).all()
+            lang = conf["language"]
+            record = conf["tickets"].get(str(channel.id))
+            if not record:
+                return t(lang, "not_a_ticket")
+            if not self._is_staff(self._current_actor(guild, actor), conf, record):
+                return t(lang, "no_permission")
+            if record.get("status") != "open":
+                return t(lang, "already_closed")
+            if (getattr(member, "guild", None) != guild or member.id == guild.me.id
+                    or not add and member.id == record.get("owner_id")):
+                return t(lang, "no_permission")
+            try:
+                if isinstance(channel, discord.Thread):
+                    if add:
+                        await channel.add_user(member)
+                    else:
+                        await channel.remove_user(member)
+                else:
+                    await channel.set_permissions(member, overwrite=discord.PermissionOverwrite(
+                        view_channel=True, send_messages=True, read_message_history=True) if add else None)
+            except discord.HTTPException:
+                return "Mitgliedschaft konnte nicht geändert werden. Bitte die Kanalrechte prüfen."
+            async with self.config.guild(guild).tickets() as tickets:
+                rec = tickets[str(channel.id)]
+                rec["members"] = [uid for uid in rec.get("members") or [] if uid != member.id]
+                if add and member.id != rec.get("owner_id"):
+                    rec["members"].append(member.id)
+            return None
 
     @ticket.command(name="rename")
     async def ticket_rename(self, ctx, *, name: str):
         """Benennt das Ticket um."""
-        conf, record = await self._ctx_record(ctx)
-        lang = conf["language"]
-        if not record:
-            return await ctx.send(t(lang, "not_a_ticket"))
-        if not self._is_staff(ctx.author, conf, record):
-            return await ctx.send(t(lang, "no_permission"))
-        new_name = name[:100] if isinstance(ctx.channel, discord.Thread) else self._channel_name(name)
-        try:
-            await ctx.channel.edit(name=new_name)
-        except discord.HTTPException:
-            pass
+        async with self._lock("close", ctx.channel.id):
+            conf, record = await self._ctx_record(ctx)
+            lang = conf["language"]
+            if not record:
+                return await ctx.send(t(lang, "not_a_ticket"))
+            if not self._is_staff(self._current_actor(ctx.guild, ctx.author), conf, record):
+                return await ctx.send(t(lang, "no_permission"))
+            new_name = name[:100] if isinstance(ctx.channel, discord.Thread) else self._channel_name(name)
+            try:
+                await ctx.channel.edit(name=new_name)
+            except discord.HTTPException:
+                return await ctx.send("Ticket konnte nicht umbenannt werden. Bitte die Kanalrechte prüfen.")
         await ctx.send(t(lang, "renamed_to", name=new_name))
 
     @ticket.command(name="owner")
     async def ticket_owner(self, ctx, member: discord.Member):
         """Ändert den Inhaber des Tickets."""
-        conf, record = await self._ctx_record(ctx)
-        lang = conf["language"]
-        if not record:
-            return await ctx.send(t(lang, "not_a_ticket"))
-        if not self._is_staff(ctx.author, conf, record):
-            return await ctx.send(t(lang, "no_permission"))
-        async with self.config.guild(ctx.guild).tickets() as tickets:
-            rec = tickets.get(str(ctx.channel.id))
-            if rec:
-                rec["owner_id"] = member.id
-        if isinstance(ctx.channel, discord.Thread):
+        error = await self._transfer_owner(ctx.guild, ctx.channel, ctx.author, member)
+        await ctx.send(error or t(await self._lang(ctx.guild), "owner_changed", user=member.mention))
+
+    async def _transfer_owner(self, guild, channel, actor, member):
+        async with self._lock("close", channel.id):
+            conf = await self.config.guild(guild).all()
+            lang = conf["language"]
+            record = conf["tickets"].get(str(channel.id))
+            if not record:
+                return t(lang, "not_a_ticket")
+            if not self._is_staff(self._current_actor(guild, actor), conf, record):
+                return t(lang, "no_permission")
+            if record.get("status") != "open":
+                return t(lang, "already_closed")
+            if getattr(member, "guild", None) != guild:
+                return t(lang, "no_permission")
+            member = guild.get_member(getattr(member, "id", None))
+            if member is None or getattr(member, "bot", False):
+                return t(lang, "no_permission")
+            previous = guild.get_member(record.get("owner_id"))
+            if member.id == record.get("owner_id"):
+                return None
+            keep_previous = previous is not None and previous.id in (record.get("members") or [])
             try:
-                await ctx.channel.add_user(member)
+                if isinstance(channel, discord.Thread):
+                    already_joined = True
+                    try:
+                        await channel.fetch_member(member.id)
+                    except discord.NotFound:
+                        already_joined = False
+                    await channel.add_user(member)
+                    if previous is not None and not keep_previous and not self._can_view_record(previous, conf, record):
+                        try:
+                            await channel.remove_user(previous)
+                        except discord.HTTPException:
+                            if not already_joined:
+                                await channel.remove_user(member)
+                            raise
+                else:
+                    overwrites = dict(channel.overwrites)
+                    if previous is not None and not keep_previous:
+                        overwrites.pop(previous, None)
+                    overwrites[member] = discord.PermissionOverwrite(view_channel=True, send_messages=True,
+                        read_message_history=True, attach_files=True, embed_links=True)
+                    await channel.edit(overwrites=overwrites)
             except discord.HTTPException:
-                pass
-        else:
-            try:
-                await ctx.channel.set_permissions(
-                    member, overwrite=discord.PermissionOverwrite(
-                        view_channel=True, send_messages=True, read_message_history=True, attach_files=True
-                    )
-                )
-            except discord.HTTPException:
-                pass
-        await ctx.send(t(lang, "owner_changed", user=member.mention))
+                return "Inhaber nicht geändert. Bitte die Kanalrechte und Thread-Mitgliedschaften prüfen."
+            async with self.config.guild(guild).tickets() as tickets:
+                tickets[str(channel.id)]["owner_id"] = member.id
+            role = guild.get_role(conf.get("owner_role")) if conf.get("owner_role") else None
+            if role is not None:
+                try:
+                    await member.add_roles(role, reason="Ticket-Inhaber geändert")
+                    if previous is not None and self._open_count(await self.config.guild(guild).all(), previous.id) == 0:
+                        await previous.remove_roles(role, reason="Ticket-Inhaber geändert")
+                except discord.HTTPException:
+                    log.warning("Inhaber-Rolle für Ticket %s konnte nicht aktualisiert werden", channel.id)
+            return None
 
     @ticket.command(name="delete")
     async def ticket_delete(self, ctx):
@@ -1732,19 +1892,16 @@ class Tickets(commands.Cog):
         if not self._is_admin(ctx.author, conf):
             return await ctx.send(t(lang, "no_permission"))
         # Transcript trotzdem sichern
-        conf_force = dict(conf)
-        conf_force["delete_on_close"] = True
-        await self._close_ticket(ctx.guild, ctx.channel, record, ctx.author, conf_force)
+        await self._close_ticket(ctx.guild, ctx.channel, record, ctx.author, conf, force_delete=True)
 
     @ticket.command(name="list")
     async def ticket_list(self, ctx, status: str = "open"):
         """Listet Tickets (open/closed/all)."""
         conf, _ = await self._ctx_record(ctx)
-        # Globales Team/Admins sehen alles; ein Team eines Grundes nur "seine" Tickets.
-        full = self._is_staff(ctx.author, conf)
+        full = self._is_admin(ctx.author, conf)
         visible = {
             cid: rec for cid, rec in conf["tickets"].items()
-            if full or self._is_staff(ctx.author, conf, rec)
+            if self._can_view_record(ctx.author, conf, rec)
         }
         if not full and not visible:
             return await ctx.send(t(conf["language"], "no_permission"))

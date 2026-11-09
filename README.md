@@ -33,6 +33,7 @@ Danach `webcore` einrichten (siehe [`webcore/README.md`](webcore/README.md)).
 | [`poll`](poll/) | Mehrsprachige Umfragen: Abstimmung per Button, Live-Ergebnis, Einzel-/Mehrfachauswahl, anonym/öffentlich, Auto-Ende, CSV-Export und Dashboard. |
 | [`raidhelper`](raidhelper/) | Mehrsprachiger Raid-Planer: Anmeldung per Button, Roster, Erinnerungen, Wiederholung, CSV-Export und Dashboard. |
 | [`scheduler`](scheduler/) | Geplante Nachrichten (Text/Embed, Rollen-Ping): einmalig, täglich, Wochentage, monatlich, Intervall – mit Zeitzone/Sommerzeit, Auto-Pause bei Fehlern, Dashboard mit Vorschau und „Jetzt testen“. |
+| [`teamcalendar`](teamcalendar/) | Projektmanagement mit Projektfortschritt, Aufgabenboard, Zuständigkeiten, Fristen, Checklisten, Kommentaren und Meilensteinen. Integrierter Kalender mit Zu-/Absagen, Erinnerungen, Discord-Übersichten und Export. |
 | [`serverstats`](serverstats/) | Server-Statistik ohne Personendaten: Beitritte, Abgänge, Mitglieder, Nachrichten und Voice-Zeit je Kanal – Dashboard „Statistik“ mit Diagrammen (7/30/90 Tage), Top-Kanälen, CSV-Export und `[p]stats`. |
 | [`sticky`](sticky/) | Hält eine Nachricht am unteren Ende eines Kanals fest – mit Webhook-Modus, Platzhaltern und Dashboard. |
 | [`tickets`](tickets/) | Ticketsystem mit Panels, Team- und Mitgliederzuweisung, abbrechbarem 24h-Inaktivitätstimer, bearbeitbaren Schnellantworten, Prioritäten, optionalen pausierbaren Antwortfristen, Transcripts und Dashboard. |

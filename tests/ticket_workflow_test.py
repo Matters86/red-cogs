@@ -38,6 +38,7 @@ async def main():
     histories = {}
 
     async def new_ticket():
+        await gc.panels.set([{"id": "workflow", "title": "Support"}])
         result = await cog.open_ticket(guild, owner, {"id": "workflow", "title": "Support"}, None, {})
         assert result.status == "ok"
         channel = result.target

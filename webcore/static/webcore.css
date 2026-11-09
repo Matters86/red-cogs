@@ -228,6 +228,29 @@ span.wc-lv{display:inline-block;cursor:default;padding:2px 9px;font-weight:600}
 .wc-inline-form label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:.74rem;text-transform:uppercase;letter-spacing:.06em}
 .wc-inline-form select,.wc-toolbar input,.wc-toolbar select{background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:9px;padding:9px 11px;font:inherit;font-size:.9rem;min-width:220px;text-transform:none;letter-spacing:0}
 .wc-toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+/* Gemeinsames Aufgabenboard mit expliziten, tastaturbedienbaren Statusaktionen. */
+.wc-kanban{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;align-items:start}
+.wc-kanban-column{min-width:0;border:1px solid var(--border);border-radius:12px;background:var(--panel-2);padding:12px}
+.wc-kanban-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px}
+.wc-kanban-head h3{font-size:.95rem;margin:0}
+.wc-kanban-body .card-x{padding:12px;margin-bottom:10px;overflow-wrap:anywhere}
+.wc-kanban-body .wc-empty{padding:18px 8px;font-size:.85rem}
+.wc-kanban-body .wc-form-actions{flex-wrap:wrap}
+.wc-kanban-body .wc-input{min-width:0;max-width:100%}
+@media(max-width:1200px){.wc-kanban{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:700px){.wc-kanban{grid-template-columns:minmax(0,1fr)}}
+/* Gemeinsame Monatsübersicht; auf kleinen Bildschirmen als Tagesliste. */
+.wc-month{border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.wc-month-row{display:grid;grid-template-columns:repeat(7,minmax(0,1fr))}
+.wc-month-head{background:var(--panel-2);color:var(--muted);font-size:.8rem;font-weight:600;text-align:center}
+.wc-month-head>div{padding:10px}
+.wc-month-day{min-width:0;min-height:110px;padding:8px;border-top:1px solid var(--border);border-right:1px solid var(--border);overflow-wrap:anywhere}
+.wc-month-day:last-child{border-right:0}
+.wc-month-day.is-muted{background:var(--panel-2);color:var(--muted)}
+.wc-month-day.is-today{box-shadow:inset 0 0 0 2px var(--accent)}
+.wc-month-date{font-size:.8rem;font-weight:600;margin-bottom:7px}
+.wc-month-entry{display:block;padding:6px;margin:4px 0;border:1px solid var(--border);border-radius:7px;background:var(--panel-2);font-size:.78rem;text-decoration:none;overflow-wrap:anywhere}
+@media(max-width:760px){.wc-month-row{display:block}.wc-month-head,.wc-month-day.is-empty{display:none}.wc-month-day{min-height:0;border-right:0;padding:12px}.wc-month-date{font-size:.9rem}.wc-month-entry{font-size:.85rem}}
 .wc-toolbar input{flex:1;min-width:200px}
 .wc-empty{text-align:center;color:var(--muted);padding:28px 10px}
 .wc-empty i{font-size:2rem;display:block;margin-bottom:8px;color:var(--muted-2)}

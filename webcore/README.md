@@ -21,7 +21,7 @@ Dashboard-Seiten zu registrieren. Neue Cogs erscheinen automatisch in der Naviga
   Dashboard-Einstellungen des Servers (Rollen-Rechte, Mein Bereich, Log-Kanal) – als JSON sichern und mit
   Vorschau, Bestätigung und „Rückgängig“ wieder einspielen.
 - Login-Seite, Nutzer-Menü mit Avatar und Rolle, Toast-Meldungen.
-- **Meine Aufgaben:** eigene zugewiesene Tickets, persönliche Event-Anmeldungen und geplante
+- **Meine Aufgaben:** eigene zugewiesene Tickets und Projektaufgaben, persönliche Projekttermine, Event-Anmeldungen und geplante
   Nachrichten sowie anstehende Antwortfristen auf einer Seite. Fehlgeschlagene Veröffentlichungen
   und ausstehende Wiederherstellungen erscheinen mit einem direkten Link zur passenden Funktion.
   Sichtbar sind ausschließlich Quellen, für die der Nutzer auf dem gewählten Server Rechte hat.
@@ -377,6 +377,8 @@ automatisch. Zugriff im Handler: `ui = request.app["webcore"].ui`.
 | `ui.hero(icon, "", text)` | Kopfzeile der Seite: Icon + ein Satz, was die Seite macht |
 | `ui.stats([(label, wert, icon, hinweis, ton)])` | Kennzahlen-Kacheln (`ton`: ok/warn/bad/info) |
 | `ui.tab(key, titel, icon, inhalt, count=n)` | Reiter; mehrere hintereinander ergeben die Reiterleiste |
+| `ui.month_grid(weeks, label="Monat")` | Monatsübersicht mit sieben Tagen je Woche; am Handy als Liste der belegten Tage. Tagesfelder: `day`, sicheres `body`-HTML, optional `muted` und `today`. |
+| `ui.kanban(columns, label="Aufgabenboard")` | Responsive Statusspalten; jede Spalte enthält `title`, `count` und sicheres `body`-HTML. |
 | `ui.card(titel, inhalt, desc=…, icon=…, actions=…)` | Karte mit Überschrift und Kurzbeschreibung |
 | `ui.callout(text, tone=…)`, `ui.empty(icon, titel, text)` | Hinweisbox, leerer Zustand |
 | `ui.form(action, inhalt, csrf=…, hidden={…}, savebar=True)` | Formular inkl. CSRF; `savebar` zeigt bei Änderungen „Speichern/Verwerfen“; `confirm="…"` fragt vor dem Absenden; `enctype=` für Uploads; `operate=True` markiert Tagesgeschäft (bleibt bei „Bedienen“ benutzbar) |

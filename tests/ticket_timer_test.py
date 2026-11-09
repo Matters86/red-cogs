@@ -84,6 +84,7 @@ async def main():
     panel = {"id": "timer", "title": "Support", "reasons": [], "modal_questions": []}
 
     async def new_ticket():
+        await gc.panels.set([panel])
         result = await cog.open_ticket(guild, owner, panel, None, {})
         assert result.status == "ok", result
         return result.target

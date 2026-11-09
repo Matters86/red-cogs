@@ -1,0 +1,12 @@
+{
+    "name": "TeamCalendar",
+    "short": "Projekte, Aufgabenboard und Kalender gemeinsam im Team verwalten.",
+    "description": "Projektmanagement und Kalender für Red mit WebCore-Dashboard und Discord-Bedienung. Projekte mit Fortschritt, Aufgabenboard mit vier Statusspalten, Zuständige, Fristen, Prioritäten, Checklisten, Kommentare, Änderungsverlauf und Meilensteine. Im Standard verwaltet das gesamte eingerichtete Team; optional plant die Verwaltung und zugewiesene Mitglieder bearbeiten den Fortschritt. Bestehende Kalenderdaten bleiben erhalten: Agenda, Monatsansicht, Zu-/Absagen, Erinnerungen, geschützter ICS-Export und Projekt-/Terminverknüpfungen. Aufgaben-CSV für Excel, eigene Aufgaben, bestätigte Veröffentlichung in einem Teamkanal. Versions- und Zeitzonenschutz sowie getrennte Rechte für Tagesgeschäft und Einrichtung.",
+    "tags": ["calendar", "team", "project", "tasks", "kanban", "appointments", "dashboard"],
+    "requirements": ["tzdata"],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Gespeichert werden Termin-Titel, Beschreibung, Projekt, Ort, Beginn/Ende, Status, Erinnerungszeiten und Versandmarkierungen, Personen-IDs und Zu-/Absagen. Zusätzlich speichert der Cog Projekte und Aufgaben mit Beschreibungen, Zuständigen, Fristen, Prioritäten, Checklisten, Kommentaren und den letzten 50 Änderungen sowie Team-/Verwaltungsrollen, Kanal-/Nachrichten-IDs, Zeitzone und Einrichtung. Fehlerhafte Dashboard-Eingaben bleiben kurzzeitig als sitzungs-, nutzer- und servergebundene Entwürfe im Arbeitsspeicher. Red-Datenlöschanfragen entfernen persönliche Zuweisungen, eigene Kommentare, Personenbezüge und Entwürfe; gemeinsame Projekte/Aufgaben und freie Texte bleiben erhalten und können weitere persönliche Angaben enthalten. Die Termin-Aufbewahrungsfrist löscht keine Projekte oder Aufgaben. Bereits in Discord veröffentlichte Inhalte unterliegen zusätzlich Discords eigener Speicherung. ICS-/CSV-Downloads verbleiben bei der herunterladenden Person und werden nicht auf dem Bot gespeichert."
+}

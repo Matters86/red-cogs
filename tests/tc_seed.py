@@ -39,7 +39,7 @@ async def seed(bot, tk, cl, *, entries=12):
     r = await tk.open_ticket(g, kai, pb, pb["reasons"][0], {"Worum geht es?": "Bewerbung als Mod", "Details": ""})
     await r.target.send("Hallo <b>Team</b> & co")
     rec = (await gc.tickets())[str(r.target.id)]
-    await tk._close_ticket(g, r.target, rec, g.get_member(11), await gc.all())
+    await tk._close_ticket(g, r.target, rec, g.get_member(14), await gc.all())
     await tk.open_ticket(g, kai, pa, None, {})
     # Nina: 1 geschlossenes Ticket (Kai hinzugefügt) + 1 offenes
     r = await tk.open_ticket(g, nina, pb, pb["reasons"][1], {"Worum geht es?": "Absturz <script>x</script>"})

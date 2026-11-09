@@ -12,6 +12,7 @@ wahlweise als **eigener Kanal**, **privater Thread** oder **Forum-Beitrag**.
   sich zusätzlich frei überschreiben.
 - **HTML-Transcripts** beim Schließen, im Dashboard lesbar, plus **Statistik**.
 - **Persistente Buttons** – Panels und Steuerleisten funktionieren auch nach einem Bot-Neustart.
+- **Ticketnamen nach Wahl** – etwa `bewerbung-max-12`, weitere Vorlagen oder eigene Platzhalter.
 - **24-Stunden-Timer pro Ticket** – manuell starten, bei neuen Nachrichten zurücksetzen und mit
   „Offen halten“ dauerhaft stoppen; sofortiges Schließen ist jederzeit möglich.
 
@@ -100,16 +101,15 @@ Schließen. Ein wieder geöffnetes Ticket startet ohne Timer.
 Ist `webcore` geladen, erscheint der Tab **Tickets**. Dort lassen sich pro Server einstellen:
 
 - **Einstellungen** – Sprache, Ticket-Typ, alle Rollen, Kategorien/Thread-Basis/Forum,
-  Log-Kanal, Limit, Kanalname-Vorlage, Bestätigungen sowie eigene Texte (überschreiben die
+  Log-Kanal, Limit, Ticketnamen, Bestätigungen sowie eigene Texte (überschreiben die
   Sprachpakete; Platzhalter `{num}` und `{user}` in Titel und Begrüßungstext).
 - **Panels** – bestehende Panels auflisten, bearbeiten, löschen und neue erstellen (inkl. Gründe
   und Modal-Fragen); das Panel wird direkt in den gewählten Kanal gepostet, Änderungen
   aktualisieren die bestehende Nachricht.
 - **Team-Zuordnung je Grund** (im Panel-Editor) – jeder Grund kann eigene Team-Rollen,
-  Ping-Rollen und eine eigene Kategorie bekommen. Tickets dieses Typs sehen dann nur dieses Team
-  plus die Admin-Rollen; das Team darf sie auch übernehmen, sperren und schließen. Leer = globale
-  Einstellungen. Tickets mit Grund heißen automatisch `<grund>-<nummer>` (Umlaute werden zu
-  ae/oe/ue/ss).
+  Ping-Rollen und eine eigene Kategorie bekommen. Das Team ersetzt für diese Tickets die globalen
+  Support-Rollen; Admins behalten Zugriff. Leer = globale Einstellungen. **Gilt für neue Tickets:**
+  Bereits offene Tickets behalten das beim Erstellen gespeicherte Team.
 - **Offene Tickets** (Übersicht) – Nummer, Inhaber, Grund, Öffnungszeit, Zuständigkeit und aktuelle
   Auto-Close-Frist (UTC). Die Mitgliederauswahl mit **Zuweisen** ändert die Zuständigkeit;
   **24h-Timer starten** und **Offen halten** steuern den Timer;
@@ -117,18 +117,57 @@ Ist `webcore` geladen, erscheint der Tab **Tickets**. Dort lassen sich pro Serve
   Bestätigung wirkt wie der Button im Ticket (Transcript, Log, Inhaber-Rolle entfernen, archivieren bzw.
   löschen). Existiert der Kanal nicht mehr, entfernt „Schließen“ nur den verwaisten Eintrag.
 - **Transcripts** – gespeicherte Ticket-Verläufe als eigene Seite öffnen.
-- **Statistik** – offene/geschlossene Tickets, Ø Laufzeit und Übernahmen je Support-Mitglied.
+- **Statistik** – sichtbare offene/geschlossene Tickets, Ø Laufzeit und Zuweisungen je Teammitglied.
+
+### Ticketnamen
+
+Unter **Einstellungen → Ticketnamen** wählst du das Format für neue Kanäle, private Threads und
+Forum-Beiträge. **Grund–Nutzer–Nummer** ergibt beispielsweise `bewerbung-max-12`.
+
+| Auswahl | Beispiel |
+|---|---|
+| Bisheriges Verhalten (Standard) | `bewerbung-12`; ohne Grund gilt die bisherige Vorlage |
+| Grund–Nutzer–Nummer | `bewerbung-max-12` |
+| Nutzer–Grund–Nummer | `max-bewerbung-12` |
+| Ticket–Nummer | `ticket-12` |
+| Eigene Vorlage | z. B. `{reason}-{display}-{num}` |
+
+Die eigene Vorlage erlaubt `{reason}` (Grund), `{user}` (Nutzername), `{display}` (Anzeigename),
+`{num}` (Ticketnummer) und `{id}` (Nutzer-ID). Sie darf höchstens 90 Zeichen enthalten und muss
+`{num}` enthalten. Discord-taugliche Namen werden automatisch erzeugt, etwa mit ae/oe/ue/ss
+für Umlaute. Eine gespeicherte Beispielansicht zeigt das Ergebnis. Änderungen benennen bestehende
+Tickets nicht um; dafür gibt es weiterhin `[p]ticket rename`.
 
 ### Rechte im Dashboard
 
 | WebCore-Stufe | Darf |
 |---|---|
-| Ansehen | alles ansehen, Transcripts öffnen |
-| **Bedienen** | zusätzlich **Tickets zuweisen/freigeben/schließen und deren Timer starten/stoppen** (Tagesgeschäft) |
+| Ansehen | zugängliche Tickets und Transcripts lesen |
+| **Bedienen** | zusätzlich eigene Team-Tickets zuweisen/freigeben/schließen, Timer und Wartestatus steuern, Priorität ändern und Schnellantworten senden |
 | Bearbeiten | zusätzlich Einstellungen, Rollen (Support/Admin/Inhaber …), Texte, Panels anlegen/bearbeiten/löschen und die Team-Zuordnung je Grund |
 
 Panels und Team-Zuordnung gelten als Einrichtung des Ticketsystems (Rollen, Fragen, Eingangskanäle) und
 brauchen deshalb *Bearbeiten*.
+
+Die WebCore-Stufe allein gewährt keinen Zugriff auf Ticketinhalte oder Ticket-Aktionen. Dafür gilt
+das im jeweiligen Ticket gespeicherte Team. Ein Bewerbungsteam sieht und bedient beispielsweise
+seine Bewerbungen, während das globale Support-Team ohne weitere Berechtigung keinen Zugriff hat.
+Das gilt auch für direkt aufgerufene Transcripts und manipulierte Formularanfragen. Ein voller
+WebCore-Allowlist-Zugriff ersetzt die Ticketrechte ebenfalls nicht. Einrichtung mit **Bearbeiten**
+ist unabhängig davon möglich. Im Team-Dashboard werden nur sichtbare Tickets und Verläufe gezählt.
+
+Globale Ausnahmen sind die konfigurierten **Admin-Rollen**, Discord-**Administrator**, Server-Owner
+und Bot-Owner. **Server verwalten** allein gewährt keine Ticketverwaltung. Explizite **Nur-Lesen-Rollen**
+dürfen alle zuordenbaren Tickets und Verläufe lesen; ohne zuständige Teamrolle erscheinen keine
+Bedienelemente. Sehr alte Transcripts ohne gespeichertes oder zuordenbares Team bleiben Admins
+vorbehalten. Eigentümer und hinzugefügte Mitglieder nutzen unabhängig davon **Meine Tickets**.
+
+Für strikt je Grund getrennten **Discord-Zugriff** verwende **Eigener Kanal**. Forum-Beiträge
+übernehmen die Sichtbarkeit des gesamten Forums; Discords **Threads verwalten** kann auch private
+Threads zugänglich machen. Die Bot-Aktionen prüfen bei allen drei Typen das zuständige Team.
+In privaten Threads lädt der Bot bis zu 100 aktuelle Team-/Admin-Mitglieder ohne Rollen-Pings ein.
+Fehlende Einladungen oder größere Teams werden gemeldet; eine spätere Zuweisung kann das zuständige
+Mitglied hinzufügen. Nur-Lesen-Rollen im Dashboard ändern diese Discord-Grenzen nicht.
 
 ### Mitglieder-Bereich: „Meine Tickets“
 
