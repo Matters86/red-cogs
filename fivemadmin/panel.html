@@ -2754,7 +2754,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
   }
   function actionClass(a) { return a.status === "pending" && (a.profile_queue_hold === true || a.profile_queue_hold === 1) || a.result_review_required === true || a.result_review_required === 1 ? "pending" : esc(a.status); }
   var TYPE_DE = {
-    teleport: "Teleport", teleport_coords: "TP Koordinaten", car_to_garage: "Einparken", repair_vehicle: "Fahrzeug reparieren",
+    teleport: "Teleport", teleport_coords: "TP Koordinaten", car_to_garage: "Einparken", repair_vehicle: "Fahrzeug reparieren", recover_vehicle: "Leasingfahrzeug zurückholen", store_lease_vehicle: "Leasingfahrzeug einparken",
     get_vehicles: "Fahrzeuge", heal: "Heal", revive: "Revive", kick: "Kick",
     announce: "Ansage", money: "Geld", get_stats: "Statistik",
     give_item: "Item geben", remove_item: "Item nehmen", get_inventory: "Inventar",
@@ -2785,6 +2785,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
       return t + ' <span class="arrow">→</span> ' + dispTarget(p.to_citizenid || p.to_spieler);  // Discord-Befehl nutzt to_spieler
     if (a.action_type === "teleport_coords")
       return t + ' <span class="arrow">→</span> ' + esc(p.x) + ", " + esc(p.y) + ", " + esc(p.z);
+    if (a.action_type === "recover_vehicle" || a.action_type === "store_lease_vehicle") return t + " · ID " + esc(p.vehicle_id) + " · Vertrag " + esc(p.contract_id) + " · Ziel " + esc(p.target_garage);
     if (a.action_type === "repair_vehicle") return t + " · vollständige Reparatur · ID " + esc(p.vehicle_id);
     if (a.action_type === "car_to_garage")
       return t + ' <span class="arrow">→</span> ' + esc(p.garage || "?");
@@ -3668,7 +3669,7 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
     var context={session:sessionEpoch,access:accessEpoch,profile:profileGeneration};
     function current(permission){return state===supportState&&state.vehicleCaseEpoch===sequence&&state.vehicleReport===report&&can(permission)&&context.session===sessionEpoch&&context.access===accessEpoch&&context.profile===profileGeneration;}
     var identity=Number.isInteger(v.id)&&v.id>0&&v.id<=2147483647&&typeof v.plate==="string"&&v.plate.trim().length>0&&v.plate.length<=15;
-    var outside=v.state===0,stored=v.state===1,impounded=v.state===2;
+    var outside=v.state===0,stored=v.state===1,impounded=v.state===2,leased=v.holder?.kind==="lease";
     var controls=document.createElement("div");controls.className="case-form-actions";controls.style.marginTop="18px";
     var authorized=false;
     function add(permission,action,label,question,params,enabled,attribute){
@@ -3681,14 +3682,41 @@ table.t{font-variant-numeric:tabular-nums}table.t th{letter-spacing:.045em;font-
         createAction(action,v.plate,params,"vehicle-msg");
       });controls.append(button);
     }
-    var target=v.plate+" (#"+v.id+")";
-    add("car_to_garage","car_to_garage",stored?"Bereits eingeparkt":v.holder?.kind==="faction"?"In Fraktionsgarage einparken":"Einparken",target+" in die zugehörige passende Garage einparken? Das Fahrzeug muss leer stehen und der Motor aus sein.",{garage:"",vehicle_id:v.id,expected_plate:v.plate},outside,"data-vehicle-park");
-    add("repair_vehicle","repair_vehicle","Reparieren · auch Wracks",target+" am vorhandenen Fahrzeug vollständig reparieren? Alle müssen aussteigen und der Motor muss aus sein.",{vehicle_id:v.id,expected_plate:v.plate},outside,"data-vehicle-repair");
+    var target=v.plate+" (#"+v.id+")",runtime=report.runtime||{},caps=report.capabilities||{};
+    function confirmedCapability(name,store){
+      var c=caps[name],expectedGarage=v.garage==null?false:v.garage;
+      if(!leased||!outside||v.holder.link_confirmed!==true||!v.lease||v.lease.status!=="active"||!c
+          ||c.schema!==1||c.supported!==true||c.available!==true||c.code!=="ready"
+          ||c.vehicleId!==v.id||c.contractId!==v.holder.contract_id||c.contractVersion!==v.lease.version
+          ||!Number.isInteger(c.contractId)||c.contractId<1||!Number.isInteger(c.contractVersion)||c.contractVersion<1
+          ||v.holder.reference!=="lease_"+c.contractId||typeof v.model!=="string"||!v.model||v.model.length>50
+          ||c.currentGarage!==expectedGarage||typeof c.targetGarage!=="string"||!c.targetGarage||c.targetGarage.length>100)return null;
+      if(store){if(runtime.code!=="current_observation"||runtime.count!==1||!Number.isInteger(c.netId)||c.netId<1
+          ||!Number.isInteger(c.bucket)||c.bucket<0||runtime.net_id!==c.netId||runtime.bucket!==c.bucket)return null;}
+      else if(runtime.code!=="not_observed"||runtime.count!==0)return null;
+      return c;
+    }
+    function leaseParams(c){return{vehicle_id:v.id,expected_owner:v.holder.reference,expected_model:v.model,
+      expected_plate:v.plate,expected_state:0,expected_garage:c.currentGarage,contract_id:c.contractId,
+      contract_version:c.contractVersion,target_garage:c.targetGarage,confirmed:true};}
+    var present=confirmedCapability("store_lease_vehicle",true),missing=confirmedCapability("recover_vehicle",false);
+    if(leased){
+      var parking=present?leaseParams(present):{};
+      if(present){parking.net_id=present.netId;parking.expected_bucket=present.bucket;}
+      add("car_to_garage","store_lease_vehicle",stored?"Bereits eingeparkt":"Leasingfahrzeug einparken",
+        target+" (Vertrag "+v.holder.contract_id+") als vorhandenes Fahrzeug in "+(present?present.targetGarage:"")+" einlagern? Alle müssen aussteigen und der Motor muss aus sein. Die bestätigte Dimension bleibt bis zur Einlagerung erhalten; kein Teleport, Ersatzfahrzeug oder Reparatur.",parking,!!present,"data-vehicle-park");
+      add("recover_vehicle","recover_vehicle","Vermisstes Leasingfahrzeug zurückholen",
+        target+" (Vertrag "+v.holder.contract_id+") als denselben vorhandenen Datensatz in "+(missing?missing.targetGarage:"")+" zurückholen? Der Server muss das Fahrzeug in allen Dimensionen als abwesend bestätigen. Kein Ersatzfahrzeug, keine Reparatur und keine Änderung des Vertrags oder Besitzers.",missing?leaseParams(missing):{},!!missing,"data-vehicle-recover");
+    }else{
+      add("car_to_garage","car_to_garage",stored?"Bereits eingeparkt":v.holder?.kind==="faction"?"In Fraktionsgarage einparken":"Einparken",target+" in die zugehörige passende Garage einparken? Das Fahrzeug muss leer stehen und der Motor aus sein.",{garage:"",vehicle_id:v.id,expected_plate:v.plate},outside,"data-vehicle-park");
+    }
+    add("repair_vehicle","repair_vehicle","Reparieren · vorhandenes Fahrzeug",target+" am vorhandenen Fahrzeug vollständig reparieren? Alle müssen aussteigen und der Motor muss aus sein.",{vehicle_id:v.id,expected_plate:v.plate},outside&&runtime.code!=="not_observed","data-vehicle-repair");
     if(authorized)card.append(controls);
     var note=document.createElement("p");note.className="case-footnote";
-    note.textContent=!identity?"Die Fahrzeugauswahl ist nicht eindeutig bestätigt. Bitte erneut suchen.":!authorized?"Für Einparken und Reparieren fehlen die entsprechenden Berechtigungen.":stored?"Das Fahrzeug ist bereits eingeparkt. Für eine Reparatur zuerst regulär ausparken; anschließend die Akte neu öffnen.":impounded?"Das Fahrzeug liegt im Impound. Zuerst über das zuständige Depot freigeben und abholen; diese Aktionen umgehen keine Beschlagnahme.":outside?"Einparken und Reparieren gelten auch für Fraktionsfahrzeuge. Das vorhandene Fahrzeug muss leer stehen, der Motor aus sein. Beim Einparken wird seine passende Garage bestimmt.":"Der Fahrzeugstatus ist nicht bestätigt. Bitte die Akte erneut laden.";
+    note.textContent=!identity?"Die Fahrzeugauswahl ist nicht eindeutig bestätigt. Bitte erneut suchen.":!authorized?"Für diese Fahrzeugaktionen fehlen die entsprechenden Berechtigungen.":stored?"Das Fahrzeug ist bereits eingeparkt. Für eine Reparatur zuerst regulär ausparken; anschließend die Akte neu öffnen.":impounded?"Das Fahrzeug liegt im Impound. Zuerst über das zuständige Depot freigeben und abholen; diese Aktionen umgehen keine Beschlagnahme.":leased?present?"Vorhandenes Leasingfahrzeug bestätigt. Einparken verwendet den zuständigen Leasingdienst und die bestätigte Dimension; keine Neuerschaffung oder Reparatur.":missing?(can("recover_vehicle")?"Kein Weltfahrzeug beobachtet und der Leasingdienst bestätigt die Rückholfunktion. Nur ausdrücklich zurückholen und anschließend die Fahrzeugakte neu laden.":"Der Leasingdienst bestätigt die Rückholfunktion; dafür fehlt dir das eigene Recht zum Zurückholen vermisster Leasingfahrzeuge."):"Leasing-Einparken oder Rückholung derzeit nicht bestätigt. Aktuelle Bridge und Leasingdienst sowie die Akte prüfen; keine Ersatzaktion oder Vertragsumschreibung verwenden.":outside?"Einparken kann auch einen fehlenden registrierten Datensatz einlagern. Reparieren benötigt ein vorhandenes Fahrzeug. Die passende Garage wird vom zuständigen Fahrzeugdienst geprüft.":"Der Fahrzeugstatus ist nicht bestätigt. Bitte die Akte erneut laden.";
     card.append(note);
   }
+
   function openVehicleRecord(id) {
     var state=supportState,vehicle=(state.vehicleSearch?.vehicles||[]).find(function(v){return v.id===id;});
     if(!vehicle)return;

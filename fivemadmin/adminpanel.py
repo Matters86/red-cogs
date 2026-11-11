@@ -52,7 +52,7 @@ from .faction_discord import Coordinator as FactionDiscord, Refused as FactionDi
 log = logging.getLogger("red.adminpanel")
 
 # This identifies the loaded Python module independently of a later source copy.
-PANEL_BUILD = "2026-11-08-support-v2.3.3"
+PANEL_BUILD = "2026-11-11-recovery-v2.3.4"
 try:
     with open(__file__, "rb") as _module_source:
         LOADED_MODULE_SHA256 = hashlib.sha256(_module_source.read()).hexdigest()
@@ -92,7 +92,7 @@ DEFAULT_ITEM_MAX = int(os.environ.get("ADMINPANEL_ITEM_MAX", "100"))
 # (die "damit könnte man Schaden anrichten"-Menge).
 SENSITIVE_ACTIONS = {
     "money", "give_item", "remove_item", "park_all",
-    "set_job", "set_gang", "ban", "repair_vehicle",
+    "set_job", "set_gang", "ban", "repair_vehicle", "recover_vehicle", "store_lease_vehicle",
 }
 
 # ------------------------------------------------------------------
@@ -102,7 +102,7 @@ SENSITIVE_ACTIONS = {
 _SUPPORT = {"view_players", "teleport", "heal", "revive", "car_to_garage", "view_inventory", "message",
             "support_cases", "support_vehicles", "support_diagnostics"}
 _MODERATOR = _SUPPORT | {"kick", "ban", "announce", "view_logs", "notes", "setjob"}
-_ADMIN = _MODERATOR | {"money", "items", "view_stats", "park_all", "audit", "repair_vehicle"}
+_ADMIN = _MODERATOR | {"money", "items", "view_stats", "park_all", "audit", "repair_vehicle", "recover_vehicle"}
 
 PRESETS = {
     "support": _SUPPORT,
@@ -122,6 +122,8 @@ ACTION_PERMISSION = {
     "car_to_garage": "car_to_garage",
     "get_vehicles": "car_to_garage",
     "repair_vehicle": "repair_vehicle",
+    "recover_vehicle": "recover_vehicle",
+    "store_lease_vehicle": "car_to_garage",
     "heal": "heal",
     "revive": "revive",
     "kick": "kick",
@@ -320,6 +322,38 @@ def repair_action_params(target, params):
             or not "".join(target.split()) or "".join(target.upper().split()) != "".join(expected.upper().split())):
         raise ValueError("repair_plate_invalid")
     return {"vehicle_id": vehicle_id, "expected_plate": expected}
+
+
+def lease_vehicle_action_params(target, params, *, store=False):
+    """Explicit bound leasing action; the game domain remains authoritative."""
+    required = {"vehicle_id", "expected_owner", "expected_model", "expected_plate",
+                "expected_state", "expected_garage", "contract_id", "contract_version",
+                "target_garage", "confirmed"}
+    if store:
+        required |= {"net_id", "expected_bucket"}
+    if not isinstance(params, dict) or set(params) != required or params.get("confirmed") is not True:
+        raise ValueError("leasing_action_confirmation_invalid")
+    for key in ("vehicle_id", "contract_id", "contract_version"):
+        if type(params[key]) is not int or not 1 <= params[key] <= 2147483647:
+            raise ValueError("leasing_action_identity_invalid")
+    def text(value, minimum, maximum):
+        return (isinstance(value, str) and minimum <= len(value) <= maximum
+                and not any(ord(c) < 32 or ord(c) == 127 for c in value))
+    def norm(value):
+        return "".join(value.upper().split())
+    if (params["expected_owner"] != "lease_" + str(params["contract_id"])
+            or not text(params["expected_model"], 1, 50)
+            or re.fullmatch(r"[A-Za-z0-9_-]+", params["expected_model"]) is None
+            or not text(target, 1, 15) or not text(params["expected_plate"], 1, 15)
+            or not norm(target) or norm(target) != norm(params["expected_plate"])
+            or type(params["expected_state"]) is not int or params["expected_state"] != 0
+            or not (params["expected_garage"] is False or text(params["expected_garage"], 0, 100))
+            or not text(params["target_garage"], 1, 100)):
+        raise ValueError("leasing_action_preimage_invalid")
+    if store and (type(params["net_id"]) is not int or not 1 <= params["net_id"] <= 2147483647
+                  or type(params["expected_bucket"]) is not int or not 0 <= params["expected_bucket"] <= 2147483647):
+        raise ValueError("leasing_action_world_identity_invalid")
+    return {key: params[key] for key in sorted(required)}
 
 
 def parking_action_params(target, params):
@@ -1071,6 +1105,12 @@ class AdminPanel(commands.Cog):
                 return web.json_response({"error": "support_target_must_be_star"}, status=400)
             try:
                 params = support_action_params(action_type, params, request["profile"]["id"])
+            except ValueError as exc:
+                return web.json_response({"error": str(exc)}, status=400)
+
+        if action_type in {"recover_vehicle", "store_lease_vehicle"}:
+            try:
+                params = lease_vehicle_action_params(target, params, store=action_type == "store_lease_vehicle")
             except ValueError as exc:
                 return web.json_response({"error": str(exc)}, status=400)
 

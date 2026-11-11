@@ -70,6 +70,7 @@ PRESET_ORDER = [p for p in PRESET_INFO if p in PRESETS] + [p for p in PRESETS if
 
 ACTION_LABEL = {
     "teleport": "Teleport", "teleport_coords": "Teleport (Koordinaten)", "car_to_garage": "Einparken",
+    "recover_vehicle": "Leasingfahrzeug zurückholen", "store_lease_vehicle": "Leasingfahrzeug einparken",
     "repair_vehicle": "Fahrzeug reparieren", "get_vehicles": "Fahrzeuge abfragen", "heal": "Heilen", "revive": "Wiederbeleben", "kick": "Kick",
     "announce": "Ansage", "money": "Geld", "give_item": "Item geben", "remove_item": "Item nehmen",
     "get_inventory": "Inventar abfragen", "get_stats": "Statistik", "search_player": "Spielersuche",

@@ -1,3 +1,10 @@
+## 2026-11-11-recovery-v2.3.4 · Explizite Leasing-Rückholung
+
+- Fahrzeugakte: bestätigtes vorhandenes Leasingfahrzeug über seinen zuständigen Dienst einlagern, auch in einer anderen Dimension. Keine Teleportation und kein Ersatzspawn.
+- Eigener bestätigter Rückholweg für nach Prüfung tatsächlich abwesende aktive Leasingfahrzeuge; vorhandene Fahrzeug-/Vertragsidentität bleibt bestehen. Neue Fähigkeit nur bei bestätigter aktueller Bridge und Leasingprovider.
+- Neues eigenes Recht recover_vehicle im Adminstandard; bestehende Park-/Reparaturrechte und individuelle Rechtezuweisungen unverändert. Alte Bridges bieten die neuen Wege nicht blind an.
+- Frischer Abschluss und historischer Beleg werden getrennt angezeigt. Keine automatische Wiederholung unklarer Aufträge, keine Profil-/Keyänderung und kein tatsächlicher Bot-/Servereingriff durch diesen Quellbuild.
+
 ## 2026-11-08-support-v2.3.3 · Automatische Fraktionskategorien
 
 - Staatliche Fraktionen unter **DNP · Behörden**, Crime unter **DNP · Crime-Fraktionen**;
