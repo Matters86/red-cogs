@@ -23,6 +23,7 @@ from .views import (
     CID_CLASS,
     CID_LEAVE,
     CID_SPEC,
+    CID_SPEC_CONFIRM,
     CID_STATUS,
     STATUS_BUTTONS,
     build_signup_view,
@@ -642,6 +643,12 @@ class RaidHelper(commands.Cog):
                 event_id = cid.split(":", 2)[2]
                 class_id = (data.get("values") or [None])[0]
                 await self._on_class(interaction, event_id, class_id)
+            elif cid.startswith(CID_SPEC_CONFIRM + ":"):
+                parts = cid.split(":")
+                if len(parts) != 5:
+                    return
+                _, _, event_id, class_id, spec_id = parts
+                await self._apply_signup(interaction, event_id, class_id, spec_id, ephemeral_edit=True)
             elif cid.startswith(CID_SPEC):
                 _, _, event_id, class_id = cid.split(":", 3)
                 spec_id = (data.get("values") or [None])[0]
@@ -846,7 +853,7 @@ class RaidHelper(commands.Cog):
             await self._respond(interaction, t(lang, key, **kwargs), ephemeral_edit)
 
         await self.set_signup(interaction.guild, event_id, interaction.user,
-                              class_id=class_id, spec_id=spec_id, respond=respond)
+                              class_id=class_id, spec_id=spec_id, validate=True, respond=respond)
 
     async def _apply_status(self, interaction, event_id, status):
         lang = await self._lang(interaction.guild)

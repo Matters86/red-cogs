@@ -8,7 +8,7 @@ Organisatoren legen ein Event an, der Bot postet ein **Embed mit Live-Roster** i
 
 - **Anmeldung per Klick** – Klassen-Dropdown + Spec-Auswahl, dazu Bank, Spät, Vielleicht und Abwesend.
 - **Live-Roster** im Embed, nach Rolle gruppiert, mit fortlaufender Nummerierung.
-- **Spec-Gedächtnis** – die zuletzt gewählte Spezialisierung je Spiel und Klasse wird pro Nutzer gemerkt.
+- **Spec-Gedächtnis** – die zuletzt gewählte Spezialisierung je Spiel und Klasse wird pro Nutzer gemerkt. Die Vorauswahl lässt sich direkt mit „Spec bestätigen“ übernehmen; für einen Wechsel genügt die Auswahl im Dropdown.
 - **Limits** für das gesamte Event und pro Rolle.
 - **Anmeldeschluss** – standardmäßig der Event-Start, Anmeldung danach automatisch zu.
 - **Erinnerungen** 60 und 15 Minuten vor Start im Kanal, optional zusätzlich per DM an Angemeldete.

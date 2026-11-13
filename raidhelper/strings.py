@@ -54,6 +54,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "btn_leave": "Abmelden",
         "select_class_placeholder": "Klasse wählen …",
         "select_spec_placeholder": "Spec wählen …",
+        "btn_confirm_spec": "{spec} bestätigen",
         # Interaktions-Antworten (ephemer)
         "pick_spec": "Wähle deine Spezialisierung für **{cls}**:",
         "signed": "✅ Angemeldet als **{spec} {cls}** ({role}).",
@@ -173,6 +174,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "btn_leave": "Leave",
         "select_class_placeholder": "Pick a class …",
         "select_spec_placeholder": "Pick a spec …",
+        "btn_confirm_spec": "Confirm {spec}",
         "pick_spec": "Choose your specialization for **{cls}**:",
         "signed": "✅ Signed up as **{spec} {cls}** ({role}).",
         "spec_changed": "🔄 Spec changed to **{spec} {cls}**.",

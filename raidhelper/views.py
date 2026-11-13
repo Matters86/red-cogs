@@ -9,6 +9,7 @@ custom_id-Schema::
 
     rh:cls:<event_id>            (Select, value = class_id)
     rh:spec:<event_id>:<class>  (Select, value = spec_id)   – ephemer
+    rh:confirm:<event_id>:<class>:<spec> (Button)          – ephemer
     rh:st:<event_id>:<status>   (Button: bench|late|tentative|absence)
     rh:leave:<event_id>         (Button)
 """
@@ -22,6 +23,7 @@ from .strings import role_name, t
 
 CID_CLASS = "rh:cls"
 CID_SPEC = "rh:spec"
+CID_SPEC_CONFIRM = "rh:confirm"
 CID_STATUS = "rh:st"
 CID_LEAVE = "rh:leave"
 
@@ -97,7 +99,8 @@ def build_spec_view(event_id: str, class_id: str, game_id: str, lang: str,
 
     Jede Spec-Option erhält ihr eigenes Spec-Icon (Schlüssel ``"<class>:<spec>"``).
     ``default_spec`` wählt – falls gesetzt – die passende Option vor (gemerkte
-    Spec); ein Wechsel bleibt möglich.
+    Spec); ein Wechsel bleibt möglich. Die gemerkte Spec lässt sich zusätzlich
+    per Button bestätigen, ohne die vorausgewählte Option ändern zu müssen.
     """
     view = discord.ui.View(timeout=180)
     options = []
@@ -124,4 +127,14 @@ def build_spec_view(event_id: str, class_id: str, game_id: str, lang: str,
             max_values=1,
         )
     )
+    # Ein vorausgewählter Select-Wert löst im Discord-Client nicht zuverlässig
+    # erneut eine Auswahl aus. Der Button bestätigt genau die angezeigte Spec.
+    selected = next((opt for opt in options[:25] if opt.default), None)
+    if selected is not None:
+        view.add_item(discord.ui.Button(
+            style=discord.ButtonStyle.success,
+            label=t(lang, "btn_confirm_spec", spec=selected.label),
+            custom_id=f"{CID_SPEC_CONFIRM}:{event_id}:{class_id}:{selected.value}",
+            row=1,
+        ))
     return view

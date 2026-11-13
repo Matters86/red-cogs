@@ -67,6 +67,7 @@ Red-Instanz im System-Temp an und löscht sie am Ende wieder.
 | `live_test.py` | Posten/Bearbeiten/Löschen aus den Dashboards mit Discord-Limits und fehlenden Rechten (tickets, poll, raidhelper, sticky, changelog, autorole, organigram, guard, autoroom) |
 | `rc_functest.py` | raidhelper: Events im Dashboard anlegen/bearbeiten, Validierung, Entwurf nach Fehler, Rechte, `raid`-Befehle |
 | `rm_functest.py` | raidhelper: Mitgliederseite `/me/raids` (Sichtbarkeit nach Kanal, Anmelden/Abmelden, Ablehnungen, Discord-Update) |
+| `raid_spec_test.py` | raidhelper: gemerkte Spec direkt bestätigen, Dropdownwechsel, veraltete Auswahl und aktuelle Anmeldelimits |
 | `pr_test.py` | poll + autorole: Mitgliederseiten `/me/umfragen` und `/me/rollen` (gleiche Logik wie Buttons, Hierarchie, Fehler) |
 | `tc_functest.py` | tickets + changelog: „Meine Tickets“ (eigene und hinzugefügte Tickets/Transcripts, keine fremden) und öffentliche Changelog-API |
 | `ticket_timer_test.py` | tickets: 24h ab Start/letzter menschlicher Nachricht, Abbruch und Rechte, Neustart/Downtime, fehlende Leserechte, veraltete Timer und paralleles Schließen, Wiederöffnen |

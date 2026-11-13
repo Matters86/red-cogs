@@ -30,6 +30,7 @@ SUITES = [
     ("live_test", "Posten aus den Dashboards mit Discord-Limits (tickets, poll, raidhelper, sticky, changelog, autorole, organigram, guard, autoroom)"),
     ("rc_functest", "raidhelper: Events im Dashboard anlegen/bearbeiten, Validierung, Rechte, raid-Befehle"),
     ("rm_functest", "raidhelper: Mitgliederseite /me/raids (Sichtbarkeit, Anmelden, Ablehnungen)"),
+    ("raid_spec_test", "raidhelper: gemerkte Specs bestätigen, Specwechsel und aktuelle Anmelderegeln"),
     ("pr_test", "poll + autorole: Mitgliederseiten /me/umfragen und /me/rollen"),
     ("tc_functest", "tickets + changelog: „Meine Tickets“ und öffentliche Changelog-API"),
     ("ticket_timer_test", "tickets: 24h-Inaktivitätstimer, Abbruch, Neustart/Downtime, Rechte und Nebenläufigkeit"),
