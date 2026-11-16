@@ -11,6 +11,7 @@ import discord
 from redbot.core import Config, commands
 
 from .providers import ProviderError, StreamAPI
+from .presence import parse_activity, source_from_stream
 
 log = logging.getLogger("red.red-cogs.streamer")
 PROVIDERS = ("twitch", "youtube")
@@ -46,7 +47,8 @@ class Streamer(commands.Cog):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=928461730552, force_registration=True)
         self.config.register_global(twitch_client_id="", twitch_client_secret="", youtube_api_key="", youtube_state={})
-        self.config.register_guild(enabled=True, channel_id=None, title_filter="", sources={}, state={}, last_error="")
+        self.config.register_guild(enabled=True, channel_id=None, title_filter="", watched_role_id=None,
+                                   sources={}, state={}, last_error="")
         self.api = StreamAPI(self._credentials, clock=lambda: self._now(),
                              youtube_state_get=self.config.youtube_state,
                              youtube_state_set=self.config.youtube_state.set)
@@ -57,6 +59,8 @@ class Streamer(commands.Cog):
         self._task = None
         self._poll_tasks = set()
         self._unloading = False
+        self._presence_connected = True
+        self._disconnected_shards = set()
 
     def _now(self):
         return time.time()
@@ -96,7 +100,7 @@ class Streamer(commands.Cog):
         channel = guild.get_channel(int(cid)) if cid else None
         return channel if isinstance(channel, discord.TextChannel) else None
 
-    async def configure(self, guild, *, channel_id=None, title_filter=None, enabled=None):
+    async def configure(self, guild, *, channel_id=None, title_filter=None, enabled=None, watched_role_id=None):
         if title_filter is not None and len(str(title_filter).strip()) > 100:
             raise ValueError("Der Titelfilter darf höchstens 100 Zeichen enthalten.")
         if channel_id is not None:
@@ -107,6 +111,16 @@ class Streamer(commands.Cog):
             if not self.can_post(channel):
                 raise ValueError("Bitte einen Kanal dieses Servers wählen, in dem der Bot ansehen, senden, "
                                  "Links einbetten und den Nachrichtenverlauf lesen darf.")
+        role_id = None
+        if watched_role_id is not None:
+            try:
+                role_id = int(watched_role_id)
+            except (TypeError, ValueError):
+                raise ValueError("Bitte eine gültige Rolle dieses Servers auswählen.") from None
+            if role_id:
+                role = guild.get_role(role_id)
+                if role is None or role.is_default():
+                    raise ValueError("Bitte eine Rolle dieses Servers wählen; @everyone kann nicht beobachtet werden.")
         async with self._lock(guild):
             conf = self.config.guild(guild)
             if channel_id is not None:
@@ -115,7 +129,112 @@ class Streamer(commands.Cog):
                 await conf.title_filter.set(str(title_filter).strip())
             if enabled is not None:
                 await conf.enabled.set(bool(enabled))
+            if watched_role_id is not None:
+                await conf.watched_role_id.set(role_id or None)
         await self.cleanup_guild(guild)
+        self._wake.set()
+
+    def role_watch_status(self, guild, conf=None):
+        """Gateway-Daten nur lesen; keine Discord-Mitgliederdaten dauerhaft speichern."""
+        conf = conf or {}
+        role_id = conf.get("watched_role_id")
+        status = {"role_id": role_id, "role_name": "", "members": 0, "live": 0,
+                  "ready": True, "warning": "", "sources": {}, "streams": {}}
+        if not role_id:
+            return status
+        role = guild.get_role(int(role_id))
+        if role is None:
+            status["warning"] = "Die beobachtete Rolle existiert nicht mehr. Bitte eine andere Rolle auswählen."
+            return status
+        status["role_name"] = role.name
+        members = [m for m in role.members if not getattr(m, "bot", False)]
+        status["members"] = len(members)
+        intents = getattr(self.bot, "intents", None)
+        if not getattr(intents, "presences", False) or not getattr(intents, "members", False):
+            status.update(ready=False, warning="Die Rollenbeobachtung benötigt Presence Intent und Server Members Intent. "
+                          "Beide im Discord Developer Portal und beim Bot-Start aktivieren; danach den Bot neu starten.")
+            return status
+        if (not self._presence_connected or not getattr(self.bot, "is_ready", lambda: True)()
+                or getattr(guild, "shard_id", None) in self._disconnected_shards
+                or getattr(guild, "unavailable", False)):
+            status.update(ready=False, warning="Discord ist noch nicht verbunden. Vorhandene Rollen-Ankündigungen bleiben bis zur nächsten sicheren Prüfung erhalten.")
+            return status
+        if not getattr(guild, "chunked", True):
+            status.update(ready=False, warning="Die Mitgliederliste wird noch geladen. Rollenstreams werden geprüft, sobald sie vollständig verfügbar ist.")
+            return status
+        for member in members:
+            for activity in getattr(member, "activities", ()):
+                stream = parse_activity(activity)
+                if stream is None:
+                    continue
+                key = stream["source_key"]
+                previous = status["streams"].get(key)
+                if previous and (matches_title(previous[0]["title"], conf.get("title_filter"))
+                                 or not matches_title(stream["title"], conf.get("title_filter"))):
+                    continue
+                status["sources"][key] = source_from_stream(stream)
+                status["streams"][key] = [stream]
+        status["live"] = len(status["sources"])
+        return status
+
+    @staticmethod
+    def _streaming_signature(member):
+        return sorted((a.name or "", a.url or "") for a in getattr(member, "activities", ())
+                      if isinstance(a, discord.Streaming))
+
+    @commands.Cog.listener()
+    async def on_presence_update(self, before, after):
+        if self._unloading or self._streaming_signature(before) == self._streaming_signature(after):
+            return
+        role_id = await self.config.guild(after.guild).watched_role_id()
+        if role_id and any(r.id == role_id for m in (before, after) for r in m.roles):
+            self._wake.set()
+
+    @commands.Cog.listener()
+    async def on_member_update(self, before, after):
+        role_id = await self.config.guild(after.guild).watched_role_id()
+        if role_id and ({r.id for r in before.roles} ^ {r.id for r in after.roles}) & {role_id}:
+            self._wake.set()
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member):
+        role_id = await self.config.guild(member.guild).watched_role_id()
+        if role_id and any(r.id == role_id for r in member.roles):
+            self._wake.set()
+
+    @commands.Cog.listener()
+    async def on_guild_role_delete(self, role):
+        if await self.config.guild(role.guild).watched_role_id() == role.id:
+            self._wake.set()
+
+    @commands.Cog.listener()
+    async def on_disconnect(self):
+        self._presence_connected = False
+
+    @commands.Cog.listener()
+    async def on_resumed(self):
+        self._presence_connected = True
+        self._wake.set()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        self._presence_connected = True
+        self._disconnected_shards.clear()
+        self._wake.set()
+
+    @commands.Cog.listener()
+    async def on_shard_disconnect(self, shard_id):
+        self._disconnected_shards.add(shard_id)
+
+    @commands.Cog.listener()
+    async def on_shard_resumed(self, shard_id):
+        self._disconnected_shards.discard(shard_id)
+        self._presence_connected = True
+        self._wake.set()
+
+    @commands.Cog.listener()
+    async def on_shard_ready(self, shard_id):
+        self._disconnected_shards.discard(shard_id)
         self._wake.set()
 
     async def add_source(self, guild, provider, raw):
@@ -284,7 +403,15 @@ class Streamer(commands.Cog):
         for key, record in state.items():
             record.setdefault("source_key", key.rsplit("/", 1)[0])
             record["stream"].setdefault("source_key", record["source_key"])
-        sources = conf["sources"]
+        sources = dict(conf["sources"])
+        role_status = self.role_watch_status(guild, conf)
+        sources.update(role_status["sources"])
+        snapshots = dict(snapshots, discord=role_status["streams"] if role_status["ready"] else None)
+        # Unbekannte Gateway-Daten behalten, solange dieselbe Rolle eingerichtet ist.
+        for record in state.values():
+            if (record["source_key"].startswith("discord:") and not role_status["ready"]
+                    and record.get("watch_role_id") == conf.get("watched_role_id")):
+                sources.setdefault(record["source_key"], {"enabled": True})
         active = bool(conf["enabled"]) and not await self.bot.cog_disabled_in_guild(self, guild)
         target = self._target(guild, conf)
         desired = {}
@@ -299,25 +426,71 @@ class Streamer(commands.Cog):
                     if matches_title(stream.get("title"), conf["title_filter"]):
                         desired[f"{source_key}/{stream['id']}"] = stream
 
+        # Dieselbe öffentliche Stream-URL nur einmal ankündigen: bestehende Meldungen
+        # bevorzugen, unabhängig davon, ob sie über Rolle oder Plattform-API gefunden wurden.
+        def origin(record):
+            return "discord" if record["source_key"].startswith("discord:") else record["provider"]
+
+        def api_source_for(stream):
+            key = stream["source_key"]
+            if key.startswith("discord:youtube:"):
+                identifier = key[len("discord:youtube:"):]
+                canonical = "youtube:" + identifier
+                if canonical in conf["sources"]:
+                    return canonical
+                if identifier.startswith("@"):
+                    for api_key, source in conf["sources"].items():
+                        if source.get("provider") == "youtube" and identifier in (source.get("handles") or []):
+                            return api_key
+            return key
+
+        unknown_records = [r for r in state.values()
+                           if snapshots.get(origin(r)) is None and r["source_key"] in sources
+                           and sources[r["source_key"]].get("enabled", True)
+                           and active and target is not None and r.get("channel_id") == target.id
+                           and matches_title(r["stream"].get("title"), conf["title_filter"])]
+        unknown_urls = {r["stream"].get("url") for r in unknown_records}
+        api_active = {s["source_key"] for s in desired.values() if not s["source_key"].startswith("discord:")}
+        api_active.update(r["source_key"] for r in unknown_records if origin(r) != "discord")
+        desired = {key: stream for key, stream in desired.items()
+                   if not (stream["source_key"].startswith("discord:")
+                           and api_source_for(stream) in api_active)}
+        by_url = {}
+        for key, stream in desired.items():
+            url = stream["url"]
+            if url in unknown_urls and key not in state:
+                continue
+            previous = by_url.get(url)
+            if previous is None or (key in state and state[key].get("message_id")
+                                     and not state.get(previous, {}).get("message_id")):
+                by_url[url] = key
+        desired = {key: desired[key] for key in by_url.values()}
+
         errors = []
         blocked_sources = set()
+        blocked_urls = set()
         for key, record in list(state.items()):
             source_key = record["source_key"]
             source = sources.get(source_key)
             explicit_remove = (not active or not source or not source.get("enabled", True)
                                or target is None or record.get("channel_id") != target.id
-                               or not matches_title(record["stream"].get("title"), conf["title_filter"]))
-            authoritative = snapshots.get(record["provider"]) is not None
+                               or not matches_title(record["stream"].get("title"), conf["title_filter"])
+                               or (source_key.startswith("discord:")
+                                   and record.get("watch_role_id") != conf.get("watched_role_id")))
+            authoritative = snapshots.get(origin(record)) is not None
             if explicit_remove or (authoritative and key not in desired):
                 if await self._delete_message(guild, record):
                     state.pop(key, None)
                 else:
                     errors.append(record["error"])
                     blocked_sources.add(source_key)
+                    blocked_sources.add(api_source_for(record["stream"]))
+                    blocked_urls.add(record["stream"].get("url"))
                 await gc.state.set(state)
 
         for key, stream in desired.items():
-            if stream["source_key"] in blocked_sources:
+            if (stream["source_key"] in blocked_sources or api_source_for(stream) in blocked_sources
+                    or stream["url"] in blocked_urls):
                 continue
             record = state.get(key)
             fresh = record is None
@@ -328,6 +501,10 @@ class Streamer(commands.Cog):
                 state[key] = record
                 # Eine Absicht vor dem Senden sichern; bei Abbruch kann die Meldung wiedergefunden werden.
                 await gc.state.set(state)
+            if stream["source_key"].startswith("discord:"):
+                record["watch_role_id"] = conf.get("watched_role_id")
+                if record["stream"].get("started_at"):
+                    stream = dict(stream, started_at=record["stream"]["started_at"])
             await self._ensure_message(guild, target, record, stream, fresh=fresh,
                                        persist=lambda: gc.state.set(state))
             if record.get("error"):
@@ -485,6 +662,24 @@ class Streamer(commands.Cog):
             return await ctx.send(str(exc), allowed_mentions=discord.AllowedMentions.none())
         await ctx.send(f"Kanal hinzugefügt: **{discord.utils.escape_markdown(source['name'])}** (`{source['key']}`).",
                        allowed_mentions=discord.AllowedMentions.none())
+
+    @streamer.command(name="role")
+    async def streamer_role(self, ctx, rolle: discord.Role = None):
+        """Mitglieder dieser Rolle über ihren Discord-Streamingstatus beobachten; ohne Rolle ausschalten."""
+        try:
+            await self.configure(ctx.guild, watched_role_id=rolle.id if rolle else 0)
+        except ValueError as exc:
+            return await ctx.send(str(exc))
+        if rolle is None:
+            message = "Rollenbeobachtung ausgeschaltet. Manuell eingetragene Kanäle bleiben aktiv."
+        else:
+            conf = await self.config.guild(ctx.guild).all()
+            status = self.role_watch_status(ctx.guild, conf)
+            message = (f"Rollenbeobachtung für {rolle.mention} aktiviert. Mitglieder werden bei Discord-Status „Streamt …“ "
+                       "angekündigt; der Titelfilter gilt auch hier.")
+            if status["warning"]:
+                message += "\n" + status["warning"]
+        await ctx.send(message, allowed_mentions=discord.AllowedMentions.none())
 
     @streamer.command(name="remove")
     async def streamer_remove(self, ctx, *, kennung: str):

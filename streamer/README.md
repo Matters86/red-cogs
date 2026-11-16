@@ -2,7 +2,9 @@
 
 Eine Übersicht, in der nur **aktive Twitch- und YouTube-Streams** stehen: Der Bot kündigt
 beobachtete Kanäle in einem Discord-Kanal mit Titel, Vorschaubild und Stream-Link an und
-löscht seine Meldungen nach dem Stream wieder.
+löscht seine Meldungen nach dem Stream wieder. Streamer können **automatisch über eine
+Discord-Rolle und ihren öffentlichen Streamingstatus** erkannt werden. Alternativ lassen
+sich feste Twitch-/YouTube-Kanäle über deren APIs beobachten. Beide Wege sind kombinierbar.
 
 Optional muss der Titel einen bestimmten Text enthalten, etwa **DNP**. Dabei wird die
 Groß-/Kleinschreibung ignoriert. `DNP`, `dnp` und `#DNP` passen zum Filter `DNP`.
@@ -12,6 +14,8 @@ einfacher Teiltext, kein regulärer Ausdruck und keine Liste mehrerer Begriffe.
 ## Funktionen
 
 - Twitch und YouTube gemeinsam in einem Zielkanal pro Server.
+- Automatische Erkennung aller Mitglieder einer gewählten Discord-Rolle, ohne jeden Kanal
+  einzeln einzutragen. Dafür werden keine Twitch- oder YouTube-Zugangsdaten benötigt.
 - Quellen als Twitch-Name/-Kanal-URL oder YouTube-@Handle/Kanal-ID/Kanal-URL hinzufügen.
 - Ankündigungen werden aktualisiert und bei Stream-Ende entfernt; es gibt keine „war live“-Historie im Kanal.
 - Der Titelfilter wird auch während eines Streams geprüft: Passt der Titel nicht mehr, verschwindet
@@ -41,18 +45,51 @@ Quelle in einem der beiden Cogs pausieren oder entfernen, damit keine doppelten 
 
 ## Schnellstart im Dashboard
 
-1. Als Bot-Owner **WebCore → Streamer → Zugang** öffnen und Twitch und/oder YouTube einrichten.
-2. Unter **Einstellungen** den Discord-Zielkanal wählen. Optional bei **Titel muss enthalten**
-   beispielsweise `DNP` eintragen. Speichern.
-3. In der **Übersicht** Plattform und Streamer-Kanal auswählen und hinzufügen.
-4. **Jetzt prüfen** verwenden. Bei einem passenden Live-Stream erscheint die Ankündigung automatisch.
+1. Unter **WebCore → Streamer → Einstellungen** den Discord-Zielkanal wählen.
+2. Bei **Streamer automatisch über Rolle erkennen** beispielsweise eure Rolle `Streamer`
+   auswählen. Optional bei **Titel muss enthalten** `DNP` eintragen. Speichern.
+3. Die Discord-Intents für die Rollen-Erkennung aktivieren (siehe unten). Mitglieder dieser
+   Rolle müssen ihre Twitch-/YouTube-Streamingaktivität in Discord anzeigen lassen.
+4. Die **Übersicht → Automatisch über Rolle** zeigt die Bereitschaft und die aktuell erkannten
+   Streams. Die passenden Ankündigungen erscheinen im Zielkanal.
 5. Unter **WebCore → Zugriff & Rollen → Streamer** den zuständigen Teamrollen Rechte geben.
+
+**Zusätzliche feste Kanäle:** Als Bot-Owner den gewünschten API-Zugang im Reiter **Zugang**
+einrichten. Danach in der Übersicht unter **Zusätzliche API-Kanäle** Plattform und Kanal
+eintragen. Diese Kanäle werden auch dann geprüft, wenn niemand ihren Streamingstatus in
+Discord anzeigt. API-Kanäle und Rollen-Erkennung nutzen denselben Zielkanal und Titelfilter.
 
 Der Bot braucht im Zielkanal **Kanal ansehen**, **Nachrichten senden**, **Links einbetten** und
 **Nachrichtenverlauf lesen**. Für das Löschen seiner eigenen Ankündigungen benötigt er nicht
 das Recht „Nachrichten verwalten“. Andere Nachrichten im Kanal bleiben erhalten.
 
-## Twitch-Zugang
+## Automatisch über eine Discord-Rolle
+
+Die Rollen-Erkennung verwendet den von Discord übermittelten **öffentlichen Streamingstatus**.
+Das Mitglied muss die gewählte Rolle besitzen und eine unterstützte Twitch-/YouTube-URL in
+seiner Streamingaktivität anzeigen. Ein manuelles Hinzufügen dieses Kanals ist dafür nicht nötig.
+Wenn der Streamingstatus endet oder die Rolle entfernt wird, wird die zugehörige Meldung gelöscht.
+Der Titelfilter gilt auch hier und verwendet den Titel, den Discord in der Streamingaktivität liefert.
+
+Eine Discord-Bildschirmfreigabe bzw. **„Go Live“ in einem Sprachkanal allein reicht nicht**:
+Das ist kein öffentlicher Twitch-/YouTube-Streamingstatus. Auch ein versteckter Aktivitätsstatus
+kann nicht erkannt werden.
+
+Der Bot benötigt dafür beide Gateway-Intents:
+
+1. Im **Discord Developer Portal → Anwendung → Bot → Privileged Gateway Intents** sowohl
+   **Presence Intent** als auch **Server Members Intent** einschalten.
+2. Sicherstellen, dass die Red-Instanz auch mit beiden Intents gestartet wird. Falls Red sie
+   beim Start deaktiviert, diese Startkonfiguration entsprechend ändern.
+3. Den Bot nach der Änderung neu starten. Im Dashboard wird angezeigt, wenn Intents oder
+   der Mitglieder-Cache noch fehlen.
+
+Der Cog schaltet keine botweiten Intents selbst um. Im Rollenmodus sind **keine API-Schlüssel**
+erforderlich; dadurch gelten die unten beschriebenen YouTube-API-Suchintervalle für diesen Weg nicht.
+Die Rolle wird nur beobachtet, nicht automatisch vom Bot vergeben. Mit einer leeren Rollenauswahl
+oder `[p]streamer role` lässt sich die automatische Erkennung wieder ausschalten.
+
+## Optionaler Twitch-API-Zugang
 
 In der [Twitch Developer Console](https://dev.twitch.tv/console/apps) eine Anwendung registrieren.
 Als OAuth-Redirect-URL kann für diese Server-Anbindung `http://localhost` verwendet werden.
@@ -63,7 +100,7 @@ für öffentliche Streamdaten; die einzelnen Streamer müssen sich nicht beim Bo
 Twitch-Streams werden normalerweise etwa jede Minute geprüft. API-Ausfälle oder Rate-Limits
 können das Intervall verlängern.
 
-## YouTube-Zugang und Prüfintervall
+## Optionaler YouTube-API-Zugang und Prüfintervall
 
 In einem [Google-Cloud-Projekt die YouTube Data API v3 aktivieren](https://console.cloud.google.com/apis/library/youtube.googleapis.com),
 einen API-Key erstellen und auf diese API einschränken. Den Key im Reiter **Zugang** speichern.
@@ -91,6 +128,7 @@ als API-Problem angezeigt und löst keine falsche Offline-Bereinigung aus.
 | Befehl | Beschreibung | Rechte |
 |---|---|---|
 | `[p]streamer setup #kanal` | Zielkanal für Stream-Ankündigungen setzen. | Serververwaltung |
+| `[p]streamer role [@rolle]` | Streamingstatus aller Mitglieder dieser Rolle beobachten; ohne Rolle ausschalten. | Serververwaltung |
 | `[p]streamer add twitch <name-oder-url>` | Twitch-Kanal hinzufügen. | Serververwaltung |
 | `[p]streamer add youtube <@handle-kanal-id-oder-url>` | YouTube-Kanal hinzufügen. | Serververwaltung |
 | `[p]streamer list` | Quellen mit ihren Schlüsseln auflisten. | Serververwaltung |
@@ -109,8 +147,7 @@ Beispiel:
 ```text
 [p]streamer setup #aktive-streams
 [p]streamer filter DNP
-[p]streamer add twitch deinkanal
-[p]streamer add youtube @euerkanal
+[p]streamer role @Streamer
 [p]streamer check
 ```
 
@@ -120,7 +157,7 @@ Beispiel:
 |---|---|
 | Ansehen | Quellen, Ankündigungen und Verbindungsstatus lesen. |
 | Bedienen | Zusätzlich aktuell prüfen sowie einzelne Quellen pausieren/fortsetzen. |
-| Bearbeiten | Zusätzlich Quellen hinzufügen/entfernen, Zielkanal und Filter ändern. |
+| Bearbeiten | Zusätzlich Quellen hinzufügen/entfernen, beobachtete Rolle, Zielkanal und Filter ändern. |
 | Bot-Owner | Zusätzlich botweite Twitch- und YouTube-Zugangsdaten speichern. |
 
 Gespeicherte Zugangsdaten werden nicht im HTML ausgegeben. Die Passwortfelder sind immer leer
@@ -129,7 +166,9 @@ und Client-Secret zusammen eintragen.
 
 ## Daten
 
-Gespeichert werden pro Server die ausgewählten öffentlichen Twitch-/YouTube-Kanäle, Einstellungen,
-öffentliche Live-Metadaten und die IDs der vom Bot verwalteten Discord-Nachrichten. Botweit werden
+Gespeichert werden pro Server die gewählte Rollen-ID, ausgewählte öffentliche Twitch-/YouTube-Kanäle,
+Einstellungen, öffentliche Live-Metadaten und die IDs der vom Bot verwalteten Discord-Nachrichten. Die
+Rollen-Erkennung wertet die aktuellen Discord-Aktivitäten im Speicher aus; Discord-Mitglieder-IDs und
+Discord-Anzeigenamen werden dafür nicht in den Ankündigungsdaten gespeichert. Botweit werden
 API-Zugangsdaten sowie der YouTube-Suchverbrauch gespeichert. Der Cog erstellt keine
 Discord-Nutzerprofile und verknüpft keine Discord-Mitglieder mit Streaming-Konten.

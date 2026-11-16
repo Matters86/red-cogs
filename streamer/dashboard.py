@@ -6,7 +6,7 @@ noch als Formularentwurf gespeichert.
 from __future__ import annotations
 
 from html import escape
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
 from aiohttp import web
 
@@ -63,9 +63,19 @@ async def dashboard_handler(cog, request):
                 raw = str(data.get("channel_id") or "")
                 if not raw.isdigit():
                     raise ValueError("Bitte einen Zielkanal auswählen.")
-                await cog.configure(guild, channel_id=int(raw),
-                                    title_filter=str(data.get("title_filter") or ""),
-                                    enabled=bool(data.get("enabled")))
+                values = {"channel_id": int(raw), "title_filter": str(data.get("title_filter") or ""),
+                          "enabled": bool(data.get("enabled"))}
+                # Alte, noch geöffnete Formulare ändern die neue Rollenoption nicht.
+                if "watched_role_id" in data:
+                    role_raw = str(data.get("watched_role_id") or "").strip()
+                    if role_raw and not role_raw.isdigit():
+                        raise ValueError("Bitte eine gültige Rolle dieses Servers wählen.")
+                    role_id = int(role_raw or 0)
+                    role = guild.get_role(role_id) if role_id else None
+                    if role_id and (role is None or role.is_default()):
+                        raise ValueError("Bitte eine gültige Rolle dieses Servers wählen; @everyone ist nicht möglich.")
+                    values["watched_role_id"] = role_id
+                await cog.configure(guild, **values)
                 message = "Einstellungen gespeichert."
             elif kind == "add":
                 provider = str(data.get("provider") or "")
@@ -118,6 +128,21 @@ def _source_url(source):
     return ""
 
 
+def _role_source_url(source):
+    # Rollenstreams können YouTube-Video-URLs statt Kanal-IDs enthalten.
+    # Nur Links zu den unterstützten Plattformen in die Oberfläche übernehmen.
+    value = str(source.get("url") or "")
+    try:
+        url = urlsplit(value)
+        if (url.scheme == "https" and url.hostname in {
+                "twitch.tv", "www.twitch.tv", "youtube.com", "www.youtube.com", "youtu.be"}
+                and not url.username and not url.password and url.port in (None, 443)):
+            return value
+    except ValueError:
+        pass
+    return ""
+
+
 def _stream_url(stream):
     if stream.get("provider") == "youtube":
         return "https://www.youtube.com/watch?v=" + quote(str(stream.get("id") or ""), safe="")
@@ -156,17 +181,20 @@ async def _render(cog, request, guilds):
     full = await _owner(cog, wc, request)
     csrf = request.get("webcore_csrf", "")
     sources, state = conf.get("sources") or {}, conf.get("state") or {}
+    role_watch = cog.role_watch_status(guild, conf)
+    role_sources = role_watch.get("sources") or {}
     messages = [record for record in state.values() if record.get("message_id")]
     check = ui.form(BASE, ui.button("Jetzt prüfen", icon="bi-arrow-repeat", kind="ghost"),
                     csrf=csrf, hidden={"form": "check", "guild": guild.id}, operate=True) if operate else ""
-    head = ui.hero("bi-broadcast", "", "Hier bleiben nur aktive <b>Twitch- und YouTube-Streams</b> sichtbar. "
-                   "Der Bot entfernt seine Ankündigung, sobald der Stream endet oder der Titel nicht mehr passt.",
+    head = ui.hero("bi-broadcast", "", "Zeige aktive <b>Twitch- und YouTube-Streams</b> automatisch über eine Discord-Rolle "
+                   "oder über eingetragene Kanäle. Ankündigungen verschwinden beim Stream-Ende oder wenn der Titel nicht mehr passt.",
                    actions=check)
     if not request.get("wc_switcher"):
         head += ui.form(BASE, ui.field("Server", ui.select("guild", [(g.id, g.name) for g in guilds],
                                                          guild.id, autosubmit=True)), csrf="", method="get")
     head += ui.stats([
-        ("Quellen", len(sources), "bi-person-video3", f"{sum(s.get('enabled', True) for s in sources.values())} aktiv", None),
+        ("Quellen", len(set(sources) | set(role_sources)), "bi-person-video3",
+         f"{len(sources)} API-Kanäle · {len(role_sources)} über Rolle", None),
         ("Ankündigungen", len(messages), "bi-broadcast", "Vom Bot verwaltete Nachrichten", None),
         ("Titelfilter", conf.get("title_filter") or "Aus", "bi-funnel", "Groß-/Kleinschreibung wird ignoriert", None),
     ])
@@ -176,15 +204,18 @@ async def _render(cog, request, guilds):
         head += ui.callout("Wähle zuerst einen <b>Zielkanal</b> unter Einstellungen. " + ui.goto("Einstellungen öffnen", "settings"), tone="warn")
     if conf.get("last_error"):
         head += ui.callout(_esc(conf["last_error"]), tone="warn")
+    if role_watch.get("warning"):
+        head += ui.callout(f"<b>Discord-Rolle:</b> {_esc(role_watch['warning'])}", tone="warn")
     for provider, label in PROVIDERS.items():
         status = (cog.status or {}).get(provider) or {}
-        if status.get("error"):
+        if status.get("error") and any(source.get("provider") == provider for source in sources.values()):
             head += ui.callout(f"<b>{label}:</b> {_esc(status['error'])} Bestehende Meldungen werden bei API-Fehlern nicht als offline gelöscht.", tone="warn")
     youtube_status = getattr(cog.api, "youtube_status", None) or {}
-    if youtube_status.get("warning"):
+    if youtube_status.get("warning") and any(source.get("provider") == "youtube" for source in sources.values()):
         head += ui.callout(f"<b>YouTube-Live-Suche:</b> {_esc(youtube_status['warning'])}", tone="warn")
-    overview = _overview(ui, guild, sources, state, csrf, edit, operate)
-    overview += _connections(ui, cog.status or {})
+    overview = _role_overview(ui, role_watch) + _overview(ui, guild, sources, state, csrf, edit, operate)
+    if sources:
+        overview += _connections(ui, cog.status or {})
     if any(s.get("provider") == "youtube" for s in sources.values()):
         overview += _youtube_notice(ui)
     settings = _settings(ui, guild, conf, csrf) if edit else ui.card("Einstellungen", ui.empty(
@@ -230,7 +261,8 @@ def _overview(ui, guild, sources, state, csrf, edit, operate):
                            ui.badge("Aktiv" if enabled else "Pausiert", "ok" if enabled else "muted"),
                            f"<div class='wc-row-actions'>{''.join(controls)}</div>"))
     body = ui.table(["Kanal", "Plattform", "Überwachung", ">Aktionen"], rows,
-                    empty_text="Füge euren ersten Twitch- oder YouTube-Kanal hinzu.", search=len(rows) > 8, id="streamer-sources")
+                    empty_text="Keine zusätzlichen API-Kanäle. Für die automatische Rolle sind hier keine Einträge nötig.",
+                    search=len(rows) > 8, id="streamer-sources")
     if edit:
         add = ui.form(BASE, ui.grid(
             ui.field("Plattform", ui.select("provider", list(PROVIDERS.items()), "twitch")),
@@ -239,7 +271,31 @@ def _overview(ui, guild, sources, state, csrf, edit, operate):
                      help="YouTube: @Handle, Kanal-ID (UC…) oder Kanal-URL. Twitch: Name oder Kanal-URL."),
         ) + ui.save_row("Kanal hinzufügen"), csrf=csrf, hidden={"form": "add", "guild": guild.id})
         body += ui.divider() + add
-    return content + ui.card("Beobachtete Kanäle", body, icon="bi-person-video3")
+    return content + ui.card("Zusätzliche API-Kanäle", body, icon="bi-person-video3",
+                            desc="Optional: feste Kanäle unabhängig vom Discord-Status überwachen. Hierfür wird der jeweilige API-Zugang benötigt.")
+
+
+def _role_overview(ui, status):
+    if not status.get("role_id"):
+        return ui.card("Automatisch über Rolle", ui.empty(
+            "bi-people", "Eine Rolle für eure Streamer wählen",
+            "Alle Mitglieder dieser Rolle werden anhand ihres öffentlichen Discord-Streamingstatus erkannt. Keine API-Zugangsdaten nötig.",
+            action=ui.goto("Rolle einrichten", "settings")), icon="bi-people")
+    sources = status.get("sources") or {}
+    summary = ui.stats([
+        ("Mitglieder", status.get("members") or 0, "bi-people", None, None),
+        ("Streamingstatus", status.get("live") or 0, "bi-broadcast", "Der Titelfilter gilt zusätzlich", None),
+    ])
+    if status.get("ready") and status.get("role_name") and not status.get("warning"):
+        summary += ui.callout("<b>Rollen-Erkennung bereit.</b> Ein Twitch- oder YouTube-Stream erscheint, sobald ein Mitglied "
+                              "dieser Rolle die passende Streamingaktivität in Discord anzeigt. API-Zugangsdaten sind dafür nicht nötig.", tone="ok")
+    rows = [ui.row(_link(_role_source_url(source), source.get("name") or source.get("identifier") or key),
+                   _esc(PROVIDERS.get(source.get("provider"), source.get("provider"))))
+            for key, source in sorted(sources.items(), key=lambda item: str(item[1].get("name") or item[0]).casefold())]
+    summary += ui.table(["Erkannter Stream", "Plattform"], rows,
+                        empty_text="Aktuell zeigt kein Mitglied dieser Rolle einen unterstützten öffentlichen Streamingstatus.")
+    return ui.card("Automatisch über Rolle", summary, icon="bi-people",
+                   desc=f"Rolle: {_esc(status.get('role_name') or 'Nicht mehr vorhanden')}. Der gemeinsame Zielkanal und Titelfilter gelten auch hier.")
 
 
 def _connections(ui, status):
@@ -258,7 +314,17 @@ def _settings(ui, guild, conf, csrf):
         ui.field("Titel muss enthalten", ui.text_input("title_filter", conf.get("title_filter") or "",
                                                        placeholder="Optional, z. B. DNP", attrs={"maxlength": 100}),
                  help="Leer zeigt alle Live-Streams. „DNP“ findet auch „dnp“ und „#DNP“. Titeländerungen werden mitgeprüft."),
+        ui.field("Streamer automatisch über Rolle erkennen", ui.select(
+            "watched_role_id", [(r.id, r.name) for r in sorted(guild.roles, key=lambda r: (-r.position, r.id))
+                                if not r.is_default()], conf.get("watched_role_id"), none_label="— ausgeschaltet —"),
+                 help="Optional: z. B. die Rolle „Streamer“. Erkennt deren Twitch-/YouTube-Streamingstatus ohne API-Zugang. "
+                      "Die Rolle wird dabei nicht vom Bot vergeben.", wide=True),
     )
+    body += ui.disclosure("Discord für die Rollen-Erkennung vorbereiten", ui.callout(
+        "Im <b>Discord Developer Portal → Bot → Privileged Gateway Intents</b> müssen <b>Presence Intent</b> und "
+        "<b>Server Members Intent</b> eingeschaltet sein. Auch Red muss mit beiden Intents gestartet sein. "
+        "Danach den Bot gegebenenfalls neu starten. Mitglieder müssen ihre <b>Streamingaktivität öffentlich anzeigen</b> lassen; "
+        "eine Discord-Bildschirmfreigabe oder „Go Live“ allein ist kein solcher Streamingstatus."))
     body += ui.callout("Der Bot braucht im Zielkanal <b>Kanal ansehen</b>, <b>Nachrichten senden</b>, "
                        "<b>Links einbetten</b> und <b>Nachrichtenverlauf lesen</b>. Er löscht seine eigenen Meldungen; "
                        "„Nachrichten verwalten“ ist dafür nicht erforderlich.")
@@ -297,7 +363,8 @@ async def _access(cog, ui, guild, csrf):
     youtube += "<p class='wc-muted'>Der Bot reserviert höchstens 80 Live-Suchen pro Tag. " \
                "<a href='https://developers.google.com/youtube/data/determine_quota_cost' target='_blank' " \
                "rel='noopener noreferrer'>YouTube-Quotas</a></p>"
-    return ui.callout("<b>Botweite Zugangsdaten:</b> Sie gelten für alle Server. Gespeicherte Werte werden hier niemals "
+    return ui.callout("<b>Optional für zusätzliche API-Kanäle:</b> Die automatische Rollen-Erkennung funktioniert ohne diese Zugangsdaten.") \
+        + ui.callout("<b>Botweite Zugangsdaten:</b> Sie gelten für alle Server. Gespeicherte Werte werden hier niemals "
                        "angezeigt; die leeren Felder dienen ausschließlich zum Ersetzen.") + ui.card(
         "Twitch", twitch, icon="bi-twitch", actions=ui.badge("Eingerichtet" if twitch_ready else "Fehlt", "ok" if twitch_ready else "warn")) \
         + ui.card("YouTube", youtube, icon="bi-youtube", actions=ui.badge("Eingerichtet" if youtube_ready else "Fehlt", "ok" if youtube_ready else "warn"))

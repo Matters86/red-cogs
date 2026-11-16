@@ -70,6 +70,16 @@ async def main():
             "channel_id": "1003", "title_filter": "DNP", "enabled": "on"})
         check(response.status == 302 and "ok=" in location and await gc.channel_id() == 1003
               and await gc.title_filter() == "DNP", "Bearbeiter richtet Kanal und optionalen Titelfilter ein")
+        response, location = await post(11, "settings", {
+            "channel_id": "1003", "title_filter": "DNP", "enabled": "on", "watched_role_id": "1101"})
+        check(response.status == 302 and "ok=" in location and await gc.watched_role_id() == 1101,
+              "Bearbeiter kann eine Discord-Rolle für automatische Streamingstatus-Erkennung auswählen")
+        response, text = await page(11)
+        assert response.status == 200 and "name='watched_role_id'" in text
+        response, location = await post(11, "settings", {
+            "channel_id": "1003", "title_filter": "DNP", "enabled": "on"})
+        check(response.status == 302 and "ok=" in location and await gc.watched_role_id() == 1101,
+              "Ältere Einstellungsformulare ohne Rollenfeld erhalten die bestehende Rollenbeobachtung")
         for provider, source in (("twitch", "matters86"), ("youtube", "@projektteam")):
             response, location = await post(11, "add", {"provider": provider, "source": source})
             assert response.status == 302 and "ok=" in location, location
@@ -78,7 +88,7 @@ async def main():
         initial = copy.deepcopy(await gc.all())
         for uid in (12, 13):
             for form, fields in (
-                    ("settings", {"channel_id": "1001", "title_filter": "fremd", "enabled": "on"}),
+                    ("settings", {"channel_id": "1001", "title_filter": "fremd", "enabled": "on", "watched_role_id": "1102"}),
                     ("add", {"provider": "twitch", "source": "lenaplays"}),
                     ("remove", {"key": "twitch:matters86"})):
                 response, location = await post(uid, form, fields)
@@ -113,7 +123,9 @@ async def main():
               "Gefälschte Ziel-Guild kann keine Einstellungen eines anderen Servers ändern")
         before = copy.deepcopy(await gc.all())
         for fields in ({"channel_id": "2001", "title_filter": "DNP", "enabled": "on"},
-                       {"channel_id": "1003", "title_filter": "x" * 101, "enabled": "on"}):
+                       {"channel_id": "1003", "title_filter": "x" * 101, "enabled": "on"},
+                       {"channel_id": "1001", "title_filter": "Neu", "enabled": "on", "watched_role_id": "2101"},
+                       {"channel_id": "1001", "title_filter": "Neu", "enabled": "on", "watched_role_id": "1000"}):
             response, location = await post(11, "settings", fields)
             assert response.status == 302 and "err=" in location, location
             assert await gc.all() == before
@@ -148,6 +160,9 @@ async def main():
 
         # Öffentliche Kanalnamen und Streamtitel sind weiterhin nicht vertrauenswürdiger Inhalt.
         payload = "<img src=x onerror=alert('streamer')>"
+        watched_role = guild.get_role(await gc.watched_role_id())
+        assert watched_role is not None
+        watched_role.name = payload
         async with gc.sources() as sources:
             sources[key]["name"] = payload
         async with gc.state() as state:
@@ -156,11 +171,17 @@ async def main():
                 record["stream"]["name"] = payload
         response, text = await page(11)
         check(response.status == 200 and payload not in text and "&lt;img" in text,
-              "Quellennamen und Streamtitel werden im Dashboard sicher als Text angezeigt")
+              "Rollennamen, Quellennamen und Streamtitel werden im Dashboard sicher als Text angezeigt")
 
         response, location = await post(11, "remove", {"key": key})
         check(response.status == 302 and "ok=" in location and key not in await gc.sources(),
               "Bearbeiter kann eine Quelle wieder entfernen")
+        before_sources = copy.deepcopy(await gc.sources())
+        response, location = await post(11, "settings", {
+            "channel_id": "1003", "title_filter": "DNP", "enabled": "on", "watched_role_id": "0"})
+        check(response.status == 302 and "ok=" in location and not await gc.watched_role_id()
+              and await gc.sources() == before_sources,
+              "Rollenbeobachtung lässt sich im Dashboard ausschalten, ohne manuelle Quellen zu verlieren")
         print(f"\n{checks} Streamer-Web-Prüfungen bestanden.")
     finally:
         await client.close()

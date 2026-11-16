@@ -60,6 +60,8 @@ SUITES = [
     ("fivem_privacy_test", "FiveM: profilgetrennte Datenlöschung, Supportfälle/Fotos, Sitzungen und unveränderte Aktionswarteschlange"),
     ("tw_functest", "twitchlive: gemockte Twitch-API, Live-Meldungen, Live-Rolle, Befehle, Dashboard"),
     ("streamer_providers_test", "Streamer: Twitch-/YouTube-APIs, Live-Erkennung, Suchbudget und sichere Fehler"),
+    ("streamer_presence_test", "Streamer: sichere öffentliche Streamlinks aus Discord-Streamingaktivitäten"),
+    ("streamer_role_test", "Streamer: automatische Rollenbeobachtung, Intents, Rollenwechsel und doppelte Quellen"),
     ("streamer_core_test", "Streamer: aktive Ankündigungen, Titelfilter, Offline-Löschung und Wiederherstellung"),
     ("streamer_web_test", "Streamer: Dashboard-Einrichtung, Rollen, Titelfilter und geschützte Zugangsdaten"),
     ("wl_test_welcome", "welcome: Beitritt/Verlassen, Willkommensbild, DM, Befehle, Dashboard"),

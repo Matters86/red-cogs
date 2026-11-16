@@ -75,6 +75,8 @@ Red-Instanz im System-Temp an und löscht sie am Ende wieder.
 | `og_test.py` | organigram: Mitglieder mehrfach oder nur an höchster Position; Text-, Bild- und Website-Ausgabe, Befehl, Dashboard und Bearbeiten-Rechte |
 | `tw_functest.py` | twitchlive: gemockte Twitch-API (Token, 401/429/5xx, Backoff), genau eine Meldung pro Stream, Live-Rolle, Befehle, Dashboard |
 | `streamer_providers_test.py` | streamer: Twitch-/YouTube-APIs, tatsächliche Live-Streams, Titeldaten, Suchbudget und sichere Fehler |
+| `streamer_presence_test.py` | streamer: Discord-Streamingaktivitäten, sichere Twitch-/YouTube-Links und öffentliche Daten |
+| `streamer_role_test.py` | streamer: Rollenbeobachtung, Intents, Rollenwechsel, Neustart und doppelte Streamquellen |
 | `streamer_core_test.py` | streamer: aktive Ankündigungen, Titelfilter, Offline-Löschung, Neustart und Discord-Fehler |
 | `streamer_web_test.py` | streamer: Dashboard-Einrichtung, Rollenrechte, Filter und geschützter Plattformzugang |
 | `wl_test_welcome.py` | welcome: Beitritt/Verlassen, Willkommensbild mit Avatar, DM, Befehle, Dashboard mit Vorschau |

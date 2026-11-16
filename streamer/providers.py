@@ -250,8 +250,12 @@ class StreamAPI:
             snippet = channel.get("snippet")
             if not isinstance(snippet, dict) or not isinstance(snippet.get("title"), str):
                 raise ProviderError("YouTube liefert unvollständige Kanaldaten.")
-            return {"provider": provider, "identifier": channel["id"], "name": snippet["title"],
-                    "key": f"youtube:{channel['id']}"}
+            source = {"provider": provider, "identifier": channel["id"], "name": snippet["title"],
+                      "key": f"youtube:{channel['id']}"}
+            custom_url = snippet.get("customUrl")
+            if isinstance(custom_url, str) and _HANDLE.fullmatch(custom_url):
+                source["handles"] = [custom_url.casefold()]
+            return source
         raise ProviderError("Bitte Twitch oder YouTube als Plattform wählen.", code="input")
 
     async def streams(self, provider, sources, *, known=None):

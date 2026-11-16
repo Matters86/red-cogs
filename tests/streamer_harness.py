@@ -2,6 +2,7 @@
 import copy
 import time
 
+import discord
 import live_harness as L
 
 
@@ -77,6 +78,17 @@ async def make_cog(bot, wc=None, fake=None):
 async def make_app(seed=False):
     guilds = L.H.build_world()
     bot = L.H.FakeBot(guilds)
+    bot.intents = discord.Intents.all()
+    bot.is_ready = lambda: True
+    for guild in guilds:
+        guild.chunked = True
+        guild.unavailable = False
+        async def chunk(*, cache=True, _guild=guild):
+            # Ein unvollständig simulierter Cache bleibt bis zur expliziten Freigabe unvollständig.
+            return list(_guild.members)
+        guild.chunk = chunk
+        for member in guild.members:
+            member.activities = ()
     wc = await L.H.make_webcore(bot)
     cog = await make_cog(bot, wc)
     clock = [time.time()]
@@ -98,6 +110,24 @@ async def make_app(seed=False):
         fake.go_live("youtube:" + YOUTUBE_ID, "video-1")
         await cog.poll_once()
     return wc, bot, wc.app, cog
+
+
+async def make_role_app():
+    """Browser-Demo: zwei Rollenstreams ohne Twitch-/YouTube-Zugangsdaten."""
+    wc, bot, app, cog = await make_app()
+    guild = bot.guilds[0]
+    role = L.H.Role(guild, 1118, "Streamer", 3)
+    guild.roles.append(role)
+    for user_id, title, url in ((11, "DNP – Twitch Teamabend", "https://twitch.tv/matters86"),
+                                (14, "DNP – YouTube Projektstream", "https://www.youtube.com/watch?v=ABCdef12345")):
+        member = guild.get_member(user_id)
+        member.roles.append(role)
+        member.activities = (discord.Streaming(name=title, url=url),)
+    for field in ("twitch_client_id", "twitch_client_secret", "youtube_api_key"):
+        await getattr(cog.config, field).set("")
+    await cog.configure(guild, channel_id=guild.id + 3, title_filter="DNP", watched_role_id=role.id)
+    await cog.poll_once()
+    return wc, bot, app, cog
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ class FakeAPI:
         self.videos = {}
         self.fail = {}
         self.before_search = None
+        self.youtube_custom_url = "@DNPTeam"
 
     def video(self, identifier=VIDEO_A, *, channel=CHANNEL_A, mode="live", title="DNP live"):
         details = {"actualStartTime": "2026-11-16T10:00:00Z", "concurrentViewers": "42"}
@@ -63,7 +64,10 @@ class FakeAPI:
         assert "key" not in query
         if path == "yt:channels":
             channel = query.get("id", CHANNEL_A)
-            return 200, {}, {"items": [{"id": channel, "snippet": {"title": "DNP Team"}}]}
+            snippet = {"title": "DNP Team"}
+            if self.youtube_custom_url is not None:
+                snippet["customUrl"] = self.youtube_custom_url
+            return 200, {}, {"items": [{"id": channel, "snippet": snippet}]}
         if path == "yt:search":
             assert query["type"] == "video" and query["eventType"] == "live"
             if self.before_search:
@@ -121,6 +125,12 @@ async def main():
     check(twitch["key"] == "twitch:dnp_team" and twitch["identifier"] == "dnp_team", "Twitch-Link wird kanonisch aufgelöst")
     youtube = await api.resolve("youtube", "https://www.youtube.com/@DNPTeam")
     check(youtube["key"] == "youtube:" + CHANNEL_A, "YouTube-Handle wird über channels auf die stabile Kanal-ID aufgelöst")
+    check(youtube.get("handles") == ["@dnpteam"], "Öffentlicher YouTube-Handle wird aus vorhandenem Kanal-Snippet ohne weitere Anfrage übernommen")
+    for custom_url in (None, "alter-custom-url-name", "https://youtube.com/@DNPTeam", "@bad/path"):
+        fake.youtube_custom_url = custom_url
+        assert "handles" not in await api.resolve("youtube", CHANNEL_A)
+    fake.youtube_custom_url = "@DNPTeam"
+    check(True, "Fehlende oder ungeeignete Custom-URLs erzeugen keinen Handle-Alias")
     assert (await api.resolve("youtube", "https://youtube.com/channel/" + CHANNEL_A))["identifier"] == CHANNEL_A
     for channel_path in ("@DNPTeam", "channel/" + CHANNEL_A):
         for tab in ("streams", "videos", "featured", "live"):
