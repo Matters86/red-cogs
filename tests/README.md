@@ -74,6 +74,9 @@ Red-Instanz im System-Temp an und löscht sie am Ende wieder.
 | `ticket_assignment_test.py` | tickets: Zuweisen/Übergabe/Freigabe über Buttons, native Mitgliedersuche, Befehle und Dashboard; aktuelle Rechte, Kanalzugriff, Threads und gleichzeitige Übernahmen |
 | `og_test.py` | organigram: Mitglieder mehrfach oder nur an höchster Position; Text-, Bild- und Website-Ausgabe, Befehl, Dashboard und Bearbeiten-Rechte |
 | `tw_functest.py` | twitchlive: gemockte Twitch-API (Token, 401/429/5xx, Backoff), genau eine Meldung pro Stream, Live-Rolle, Befehle, Dashboard |
+| `streamer_providers_test.py` | streamer: Twitch-/YouTube-APIs, tatsächliche Live-Streams, Titeldaten, Suchbudget und sichere Fehler |
+| `streamer_core_test.py` | streamer: aktive Ankündigungen, Titelfilter, Offline-Löschung, Neustart und Discord-Fehler |
+| `streamer_web_test.py` | streamer: Dashboard-Einrichtung, Rollenrechte, Filter und geschützter Plattformzugang |
 | `wl_test_welcome.py` | welcome: Beitritt/Verlassen, Willkommensbild mit Avatar, DM, Befehle, Dashboard mit Vorschau |
 | `wl_test_warns.py` | warns: Punkte, Verfall, automatische Maßnahmen mit Hierarchie-Schutz, DM/Log, Befehle, Dashboard |
 | `fivem_functest.py` | fivemadmin: WebCore-Seite, Panel-Rechte/Presets, SSO, keine Secrets im HTML |

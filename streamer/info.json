@@ -1,0 +1,12 @@
+{
+    "name": "Streamer",
+    "short": "Aktive Twitch- und YouTube-Streams mit optionalem Titelfilter ankündigen.",
+    "description": "Ankündigungen für beobachtete Twitch- und YouTube-Kanäle in einem Discord-Kanal: Meldungen werden beim Offlinegehen oder bei einem nicht mehr passenden Titel gelöscht. Optionaler Titelfilter ohne Beachtung der Groß-/Kleinschreibung, pausierbare Quellen, gespeicherte Nachrichten-IDs und einfaches WebCore-Dashboard. Quotaschonende YouTube-Live-Suche mit persistentem Tagesbudget.",
+    "tags": ["twitch", "youtube", "stream", "live", "notifications", "dashboard"],
+    "requirements": ["tzdata"],
+    "min_bot_version": "3.5.0",
+    "hidden": false,
+    "disabled": false,
+    "type": "COG",
+    "end_user_data_statement": "Dieser Cog speichert pro Server die eingetragenen öffentlichen Twitch- und YouTube-Kanäle samt Einstellungen, öffentliche Live-Metadaten und die IDs seiner Discord-Ankündigungen. Botweit werden API-Zugangsdaten und der YouTube-Suchverbrauch gespeichert. Es werden keine Discord-Nutzerprofile oder Zuordnungen zwischen Discord-Mitgliedern und Streaming-Konten erstellt."
+}

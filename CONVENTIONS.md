@@ -54,6 +54,7 @@ red-cogs/
 | onlyimagevideo | 472619305847 |
 | fivemadmin | 10539329 (`0xA0D141`, Altbestand ohne `force_registration` – nicht ändern, sonst Datenverlust) |
 | twitchlive | 618305729164 |
+| streamer | 928461730552 |
 | welcome | 730418295561 |
 | warns | 551902837146 |
 | serverstats | 683920147265 |
