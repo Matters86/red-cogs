@@ -62,6 +62,7 @@ SUITES = [
     ("streamer_providers_test", "Streamer: Twitch-/YouTube-APIs, Live-Erkennung, Suchbudget und sichere Fehler"),
     ("streamer_presence_test", "Streamer: sichere öffentliche Streamlinks aus Discord-Streamingaktivitäten"),
     ("streamer_role_test", "Streamer: automatische Rollenbeobachtung, Intents, Rollenwechsel und doppelte Quellen"),
+    ("streamer_diagnostics_test", "Streamer: empfangene Discord-Aktivitäten, gezieltes Nachladen und sichere Diagnose"),
     ("streamer_core_test", "Streamer: aktive Ankündigungen, Titelfilter, Offline-Löschung und Wiederherstellung"),
     ("streamer_web_test", "Streamer: Dashboard-Einrichtung, Rollen, Titelfilter und geschützte Zugangsdaten"),
     ("wl_test_welcome", "welcome: Beitritt/Verlassen, Willkommensbild, DM, Befehle, Dashboard"),

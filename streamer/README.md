@@ -24,6 +24,7 @@ einfacher Teiltext, kein regulärer Ausdruck und keine Liste mehrerer Begriffe.
 - Gespeicherte Nachrichten-IDs überstehen Neustarts. Der Bot löscht ausschließlich seine eigenen verwalteten Stream-Meldungen.
 - API-Fehler gelten nicht als Offline-Nachweis. Verbindungs- und Löschprobleme werden im Dashboard angezeigt und erneut geprüft.
 - Einfache WebCore-Seite **Streamer** mit Quellenliste, Ankündigungen, Zielkanal, Filter und geschützten Zugangsdaten.
+- Bei fehlenden Rollenstreams: Discord-Status neu laden und pro Mitglied prüfen, welche Aktivität der Bot tatsächlich empfängt.
 - Keine automatischen Rollen-Pings, `@everyone`- oder `@here`-Pings durch Streamtitel.
 
 ## Installation
@@ -89,6 +90,33 @@ erforderlich; dadurch gelten die unten beschriebenen YouTube-API-Suchintervalle 
 Die Rolle wird nur beobachtet, nicht automatisch vom Bot vergeben. Mit einer leeren Rollenauswahl
 oder `[p]streamer role` lässt sich die automatische Erkennung wieder ausschalten.
 
+## Rolle erkannt, aber keine Ankündigung
+
+**Mitglieder: 2, Streamingstatus: 0** bedeutet: Der Bot erkennt die Rolle und deren Mitglieder,
+empfängt für sie aber keine unterstützte Twitch-/YouTube-Streamingaktivität. Die Zahl wird
+bereits vor dem Titelfilter gezählt; sie beweist nicht, dass das Mitglied auf der Plattform offline ist.
+Ein Twitch-LIVE-Hinweis allein zeigt noch nicht, welche Aktivität Discord an den Bot übermittelt.
+
+1. **Streamer → Übersicht → Automatisch über Rolle** öffnen.
+2. **Discord-Status neu laden** anklicken. Der Bot fragt die aktuellen Präsenzen direkt bei Discord
+   an und prüft die Ankündigungen erneut. Dafür sind keine Twitch-/YouTube-Zugangsdaten nötig.
+   Zwischen manuellen Abfragen liegen mindestens 30 Sekunden.
+3. Unter **Was sieht der Bot?** beim betroffenen Mitglied das Ergebnis lesen. Die Tabelle
+   unterscheidet fehlende Aktivität, eine andere Aktivitätsart, einen nicht unterstützten Streamlink
+   und einen nicht passenden Titelfilter. Bei einem erkannten Stream werden der empfangene
+   Streamtitel und der normalisierte öffentliche Link angezeigt.
+
+Alternativ `[p]streamer diagnose @mitglied` ausführen; ohne Mitglied wird der Aufrufende geprüft.
+Die Diagnose kommt bei Slash-Aufrufen nur für den Aufrufenden sichtbar, bei Textbefehlen per
+Direktnachricht. Die Diagnose-Tabelle und das Neuladen sind im Dashboard erst ab **Bedienen** verfügbar.
+
+Falls Discord auch nach dem Neuladen keine Streamingaktivität liefert, die öffentliche
+Aktivitätsanzeige für diesen Server prüfen. Eine Bildschirmfreigabe, ein benutzerdefinierter
+Statustext und ein Livestream auf Twitch sind keine austauschbaren Discord-Aktivitätstypen.
+Die Diagnose zeigt die vom Bot empfangenen Daten, ohne Inhalte benutzerdefinierter Statustexte
+oder rohe, nicht unterstützte URLs auszugeben. Mitgliedernamen und Aktivitätsdiagnosen werden
+nicht in der Cog-Konfiguration oder im Formularentwurf gespeichert.
+
 ## Optionaler Twitch-API-Zugang
 
 In der [Twitch Developer Console](https://dev.twitch.tv/console/apps) eine Anwendung registrieren.
@@ -135,6 +163,7 @@ als API-Problem angezeigt und löst keine falsche Offline-Bereinigung aus.
 | `[p]streamer remove <quellenschlüssel>` | Quelle entfernen und ihre Meldungen bereinigen. | Serververwaltung |
 | `[p]streamer filter [text]` | Titelfilter setzen; ohne Text ausschalten. | Serververwaltung |
 | `[p]streamer check` | Aktuellen Status prüfen; YouTube-Suchgrenzen bleiben wirksam. | Serververwaltung |
+| `[p]streamer diagnose [@mitglied]` | Empfangenen Discord-Status, Rollenzugehörigkeit, Streamlink und Titelfilter für ein Mitglied prüfen; ohne Mitglied sich selbst. | Serververwaltung |
 | `[p]streamerset twitch <client-id> <client-secret>` | Twitch-Zugang botweit speichern. | Bot-Owner, ausschließlich per Direktnachricht |
 | `[p]streamerset youtube <api-key>` | YouTube-Zugang botweit speichern. | Bot-Owner, ausschließlich per Direktnachricht |
 
@@ -156,7 +185,7 @@ Beispiel:
 | Stufe | Erlaubte Bedienung |
 |---|---|
 | Ansehen | Quellen, Ankündigungen und Verbindungsstatus lesen. |
-| Bedienen | Zusätzlich aktuell prüfen sowie einzelne Quellen pausieren/fortsetzen. |
+| Bedienen | Zusätzlich aktuell prüfen, Discord-Status neu laden, Mitgliedsdiagnose ansehen sowie einzelne Quellen pausieren/fortsetzen. |
 | Bearbeiten | Zusätzlich Quellen hinzufügen/entfernen, beobachtete Rolle, Zielkanal und Filter ändern. |
 | Bot-Owner | Zusätzlich botweite Twitch- und YouTube-Zugangsdaten speichern. |
 

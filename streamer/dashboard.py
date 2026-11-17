@@ -15,7 +15,7 @@ from .providers import ProviderError
 BASE = "/cogs/streamer"
 TITLE = "Streamer"
 PROVIDERS = {"twitch": "Twitch", "youtube": "YouTube"}
-OPERATE_FORMS = {"check", "toggle"}
+OPERATE_FORMS = {"check", "toggle", "presence_refresh"}
 
 
 def _esc(value):
@@ -92,6 +92,12 @@ async def dashboard_handler(cog, request):
             elif kind == "check":
                 await cog.poll_once()
                 message = "Prüfung abgeschlossen. Den aktuellen Verbindungsstatus siehst du unten."
+            elif kind == "presence_refresh":
+                result = await cog.refresh_role_presences(guild)
+                if result.get("ok"):
+                    await cog.poll_once()
+                return _redirect(guild, str(result.get("message") or "Discord-Status konnte nicht geladen werden."),
+                                 error=not result.get("ok"))
             elif kind == "credentials":
                 if not await _owner(cog, wc, request):
                     raise web.HTTPForbidden(text="Zugangsdaten darf nur der Bot-Owner ändern.")
@@ -213,7 +219,8 @@ async def _render(cog, request, guilds):
     youtube_status = getattr(cog.api, "youtube_status", None) or {}
     if youtube_status.get("warning") and any(source.get("provider") == "youtube" for source in sources.values()):
         head += ui.callout(f"<b>YouTube-Live-Suche:</b> {_esc(youtube_status['warning'])}", tone="warn")
-    overview = _role_overview(ui, role_watch) + _overview(ui, guild, sources, state, csrf, edit, operate)
+    diagnostic = _role_diagnostics(cog, ui, guild, conf, role_watch, csrf) if operate else ""
+    overview = _role_overview(ui, role_watch, diagnostic) + _overview(ui, guild, sources, state, csrf, edit, operate)
     if sources:
         overview += _connections(ui, cog.status or {})
     if any(s.get("provider") == "youtube" for s in sources.values()):
@@ -275,7 +282,7 @@ def _overview(ui, guild, sources, state, csrf, edit, operate):
                             desc="Optional: feste Kanäle unabhängig vom Discord-Status überwachen. Hierfür wird der jeweilige API-Zugang benötigt.")
 
 
-def _role_overview(ui, status):
+def _role_overview(ui, status, diagnostic=""):
     if not status.get("role_id"):
         return ui.card("Automatisch über Rolle", ui.empty(
             "bi-people", "Eine Rolle für eure Streamer wählen",
@@ -287,15 +294,55 @@ def _role_overview(ui, status):
         ("Streamingstatus", status.get("live") or 0, "bi-broadcast", "Der Titelfilter gilt zusätzlich", None),
     ])
     if status.get("ready") and status.get("role_name") and not status.get("warning"):
-        summary += ui.callout("<b>Rollen-Erkennung bereit.</b> Ein Twitch- oder YouTube-Stream erscheint, sobald ein Mitglied "
-                              "dieser Rolle die passende Streamingaktivität in Discord anzeigt. API-Zugangsdaten sind dafür nicht nötig.", tone="ok")
+        if status.get("live"):
+            summary += ui.callout("<b>Voraussetzungen erfüllt.</b> Der Bot empfängt unterstützte Streamingaktivitäten. "
+                                  "Der Titelfilter und die Rechte im Zielkanal entscheiden zusätzlich über die Ankündigung.", tone="ok")
+        else:
+            next_step = ("Lade den Discord-Status neu und prüfe die Diagnose unten." if diagnostic
+                         else "Die Serververwaltung kann den empfangenen Discord-Status prüfen.")
+            summary += ui.callout("<b>Die Rolle wird erkannt.</b> Der Bot empfängt aktuell aber keine unterstützte Streamingaktivität. "
+                                  "Das bedeutet noch nicht, dass diese Mitglieder auf Twitch oder YouTube offline sind. "
+                                  + next_step, tone="warn")
     rows = [ui.row(_link(_role_source_url(source), source.get("name") or source.get("identifier") or key),
                    _esc(PROVIDERS.get(source.get("provider"), source.get("provider"))))
             for key, source in sorted(sources.items(), key=lambda item: str(item[1].get("name") or item[0]).casefold())]
     summary += ui.table(["Erkannter Stream", "Plattform"], rows,
                         empty_text="Aktuell zeigt kein Mitglied dieser Rolle einen unterstützten öffentlichen Streamingstatus.")
-    return ui.card("Automatisch über Rolle", summary, icon="bi-people",
+    return ui.card("Automatisch über Rolle", summary + diagnostic, icon="bi-people",
                    desc=f"Rolle: {_esc(status.get('role_name') or 'Nicht mehr vorhanden')}. Der gemeinsame Zielkanal und Titelfilter gelten auch hier.")
+
+
+def _role_diagnostics(cog, ui, guild, conf, status, csrf):
+    """Nur für berechtigte Bediener; Mitgliederdaten bleiben in der aktuellen Anfrage."""
+    role_id = conf.get("watched_role_id")
+    role = guild.get_role(int(role_id)) if role_id else None
+    if role is None:
+        return ""
+    reload_form = ui.form(BASE, ui.button("Discord-Status neu laden", icon="bi-arrow-repeat", kind="ghost"),
+                          csrf=csrf, hidden={"form": "presence_refresh", "guild": guild.id}, operate=True)
+    members = sorted((m for m in role.members if not getattr(m, "bot", False)),
+                     key=lambda member: str(getattr(member, "display_name", "")).casefold())
+    rows = []
+    for member in members[:100]:
+        diagnostic = cog.member_diagnostics(guild, member, conf, watch_status=status)
+        activities = diagnostic.get("activity_types") or []
+        received = " · ".join(str(item) for item in activities) or "Keine Aktivität empfangen"
+        result = "<strong>" + _esc(diagnostic.get("reason") or "Noch nicht geprüft") + "</strong>"
+        if diagnostic.get("hint"):
+            result += "<p class='wc-muted'>" + _esc(diagnostic["hint"]) + "</p>"
+        if diagnostic.get("accepted"):
+            title = str(diagnostic.get("title") or "Ohne Titel")
+            url = _role_source_url({"url": diagnostic.get("url")})
+            result += "<p>" + _link(url, title) + "</p>"
+        rows.append(ui.row(_esc(diagnostic.get("member_name") or getattr(member, "display_name", "Mitglied")),
+                           _esc(received), "<div class='wc-msg'>" + result + "</div>"))
+    body = "<p class='wc-muted'>Diese Diagnose zeigt, welche Aktivitätsarten Discord dem Bot für eure Rollenmitglieder übermittelt.</p>"
+    body += ui.table(["Mitglied", "Empfangene Aktivität", "Ergebnis"], rows,
+                     empty_text="In dieser Rolle sind dem Bot noch keine Mitglieder bekannt.")
+    if len(members) > 100:
+        body += ui.callout(f"Die Tabelle zeigt 100 von {len(members)} Rollenmitgliedern. "
+                           "Einzelne Mitglieder lassen sich mit <code>[p]streamer diagnose @mitglied</code> prüfen.")
+    return ui.divider() + reload_form + ui.disclosure("Was sieht der Bot?", body, expanded=not status.get("live"))
 
 
 def _connections(ui, status):

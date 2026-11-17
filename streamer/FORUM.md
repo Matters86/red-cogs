@@ -29,6 +29,18 @@ Red beim Start aktiviert sein; danach den Bot neu starten. Mitglieder müssen ih
 Streamingaktivität anzeigen lassen. Eine Discord-Bildschirmfreigabe oder „Go Live“ allein ist
 kein öffentlicher Streamingstatus. Der Titelfilter verwendet den von Discord gelieferten Streamtitel.
 
+**Rolle erkannt, aber Streamingstatus 0?** In **Übersicht → Automatisch über Rolle** auf
+**Discord-Status neu laden** klicken. Der Bot fragt die aktuellen Präsenzen bei Discord an
+und prüft die Ankündigungen erneut. Unter **Was sieht der Bot?** wird pro Rollenmitglied
+angezeigt, ob keine Aktivität, eine andere Aktivitätsart, ein nicht unterstützter Link oder ein
+nicht passender Titelfilter vorliegt. Die Zahl 0 wird bereits vor dem Titelfilter gezählt und
+bedeutet nicht automatisch, dass das Mitglied auf Twitch/YouTube offline ist.
+
+Diese Diagnose und das Neuladen stehen im Dashboard ab **Bedienen** bereit; manuelles
+Neuladen ist höchstens alle 30 Sekunden möglich. Alternativ prüft `[p]streamer diagnose @mitglied`
+ein Mitglied, ohne Angabe sich selbst. Slash-Diagnosen sind nur für den Aufrufenden sichtbar,
+Textbefehle antworten per Direktnachricht. Diagnose und Mitgliedernamen werden nicht dauerhaft gespeichert.
+
 Optional kann der Bot auch feste Kanäle unabhängig vom Discord-Status beobachten: Als Bot-Owner
 im Reiter **Zugang** Twitch-App-Zugang bzw. YouTube-API-Key speichern und dann in der Übersicht
 **Zusätzliche API-Kanäle** eintragen. Derselbe Stream wird nicht zusätzlich doppelt über Rolle und
@@ -53,6 +65,7 @@ API-Störungen werden nicht als „offline“ behandelt.
 | `[p]streamer remove <quellenschlüssel>` | Quelle entfernen und ihre Meldungen bereinigen. | Serververwaltung |
 | `[p]streamer filter [text]` | Titelfilter setzen; ohne Text ausschalten. | Serververwaltung |
 | `[p]streamer check` | Aktuellen Status prüfen; YouTube-Suchgrenzen bleiben wirksam. | Serververwaltung |
+| `[p]streamer diagnose [@mitglied]` | Vom Bot empfangenen Discord-Status, Rolle, Streamlink und Filter prüfen; ohne Mitglied sich selbst. | Serververwaltung |
 | `[p]streamerset twitch <client-id> <client-secret>` | Twitch-Zugang botweit speichern. | Bot-Owner, ausschließlich per Direktnachricht |
 | `[p]streamerset youtube <api-key>` | YouTube-Zugang botweit speichern. | Bot-Owner, ausschließlich per Direktnachricht |
 
@@ -60,7 +73,7 @@ API-Störungen werden nicht als „offline“ behandelt.
 **Server verwalten**. Zugangsdaten vorzugsweise über das Dashboard eintragen; die beiden
 `streamerset`-Befehle sind Textbefehle für Direktnachrichten an den Bot.
 
-**Dashboard-Rechte:** Ansehen = Übersicht lesen; Bedienen = prüfen und Quellen pausieren/fortsetzen;
+**Dashboard-Rechte:** Ansehen = Übersicht lesen; Bedienen = prüfen, Discord-Status neu laden, Mitgliedsdiagnose ansehen und Quellen pausieren/fortsetzen;
 Bearbeiten = Quellen, beobachtete Rolle und Einstellungen verwalten. Zugangsdaten kann ausschließlich der Bot-Owner ändern.
 
 Streamer ist eigenständig. Werden dieselben Twitch-Kanäle auch durch `twitchlive` angekündigt,

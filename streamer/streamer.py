@@ -12,6 +12,7 @@ from redbot.core import Config, commands
 
 from .providers import ProviderError, StreamAPI
 from .presence import parse_activity, source_from_stream
+from .presence_refresh import PresenceRefresh
 
 log = logging.getLogger("red.red-cogs.streamer")
 PROVIDERS = ("twitch", "youtube")
@@ -48,7 +49,7 @@ class Streamer(commands.Cog):
         self.config = Config.get_conf(self, identifier=928461730552, force_registration=True)
         self.config.register_global(twitch_client_id="", twitch_client_secret="", youtube_api_key="", youtube_state={})
         self.config.register_guild(enabled=True, channel_id=None, title_filter="", watched_role_id=None,
-                                   sources={}, state={}, last_error="")
+                                   presence_refresh_enabled=False, sources={}, state={}, last_error="")
         self.api = StreamAPI(self._credentials, clock=lambda: self._now(),
                              youtube_state_get=self.config.youtube_state,
                              youtube_state_set=self.config.youtube_state.set)
@@ -61,6 +62,7 @@ class Streamer(commands.Cog):
         self._unloading = False
         self._presence_connected = True
         self._disconnected_shards = set()
+        self.presence_refresh = PresenceRefresh(bot, clock=lambda: self._now())
 
     def _now(self):
         return time.time()
@@ -130,7 +132,10 @@ class Streamer(commands.Cog):
             if enabled is not None:
                 await conf.enabled.set(bool(enabled))
             if watched_role_id is not None:
+                changed = await conf.watched_role_id() != (role_id or None)
                 await conf.watched_role_id.set(role_id or None)
+                if changed:
+                    self.presence_refresh.invalidate(guild)
         await self.cleanup_guild(guild)
         self._wake.set()
 
@@ -162,8 +167,14 @@ class Streamer(commands.Cog):
         if not getattr(guild, "chunked", True):
             status.update(ready=False, warning="Die Mitgliederliste wird noch geladen. Rollenstreams werden geprüft, sobald sie vollständig verfügbar ist.")
             return status
+        warning = self.presence_refresh.status(guild)
+        if conf.get("presence_refresh_enabled") and not self.presence_refresh.enabled(guild):
+            warning = "Der Discord-Status wird beim nächsten Prüflauf neu geladen. Vorhandene Meldungen bleiben bis dahin erhalten."
+        if warning:
+            status.update(ready=False, warning=warning)
+            return status
         for member in members:
-            for activity in getattr(member, "activities", ()):
+            for activity in self.presence_refresh.activities(member):
                 stream = parse_activity(activity)
                 if stream is None:
                     continue
@@ -177,14 +188,106 @@ class Streamer(commands.Cog):
         status["live"] = len(status["sources"])
         return status
 
+    def member_diagnostics(self, guild, member, conf, *, watch_status=None):
+        """Nur aktuelle Diagnosewerte erzeugen; keine Mitgliederdaten in Config/Logs schreiben."""
+        data = {"member_name": _cap(getattr(member, "display_name", "Nicht im Mitgliedercache"), 100),
+                "has_role": False, "activity_types": [], "streaming": 0, "accepted": 0,
+                "filter_matches": 0, "title": "", "url": "", "reason": "", "hint": ""}
+        role_id = conf.get("watched_role_id")
+        if member is None or getattr(getattr(member, "guild", None), "id", None) != guild.id:
+            data.update(reason="Mitglied nicht auf diesem Server gefunden.", hint="Ein Mitglied dieses Servers auswählen.")
+            return data
+        data["has_role"] = any(r.id == role_id for r in member.roles)
+        labels = {discord.ActivityType.playing: "Spielt", discord.ActivityType.streaming: "Streamt",
+                  discord.ActivityType.listening: "Hört zu", discord.ActivityType.watching: "Schaut",
+                  discord.ActivityType.custom: "Benutzerstatus", discord.ActivityType.competing: "Wettbewerb"}
+        activities = self.presence_refresh.activities(member)
+        accepted = []
+        for activity in activities:
+            kind = getattr(activity, "type", None)
+            label = labels.get(kind, "Unbekannte Aktivität")
+            if label not in data["activity_types"]:
+                data["activity_types"].append(label)
+            if kind == discord.ActivityType.streaming:
+                data["streaming"] += 1
+                # Keine beliebigen Aktivitätsinhalte oder ungeprüften URLs anzeigen.
+                if isinstance(activity, discord.Streaming):
+                    data["title"] = _cap(activity.name, 200)
+            stream = parse_activity(activity)
+            if stream is not None:
+                accepted.append(stream)
+        data["accepted"] = len(accepted)
+        data["filter_matches"] = sum(matches_title(s["title"], conf.get("title_filter")) for s in accepted)
+        if accepted:
+            selected = next((s for s in accepted if matches_title(s["title"], conf.get("title_filter"))), accepted[0])
+            data.update(title=_cap(selected["title"], 200), url=selected["url"])
+        if not role_id:
+            data.update(reason="Keine beobachtete Rolle eingestellt.", hint="Unter Einstellungen eine Streamer-Rolle auswählen.")
+        elif not data["has_role"]:
+            data.update(reason="Mitglied hat die beobachtete Rolle nicht.", hint="Die gespeicherte Rolle und ihre Mitgliedschaft prüfen.")
+        elif getattr(member, "bot", False):
+            data.update(reason="Bot-Mitglieder werden nicht angekündigt.")
+        else:
+            status = self.role_watch_status(guild, conf) if watch_status is None else watch_status
+            if not status["ready"]:
+                data.update(reason="Discord-Daten noch nicht sicher verfügbar.", hint=status["warning"])
+            elif not activities:
+                data.update(reason="Keine Aktivität empfangen.", hint="Discord-Status neu laden. Bleibt dies leer, übermittelt Discord dem Bot keine öffentliche Aktivität dieses Mitglieds.")
+            elif not data["streaming"]:
+                data.update(reason="Keine Streamingaktivität empfangen.", hint="Discord meldet dem Bot nur die genannten Aktivitätstypen. Für diesen Modus ist „Streamt …“ mit öffentlichem Stream-Link nötig.")
+            elif not accepted:
+                data.update(reason="Streamingaktivität ohne unterstützten Stream-Link.", hint="Discord muss einen öffentlichen Twitch- oder YouTube-Stream-Link mitsenden. Beliebige oder fehlende URLs werden nicht angekündigt.")
+            elif not data["filter_matches"]:
+                data.update(reason="Der empfangene Titel passt nicht zum Titelfilter.", hint="Maßgeblich ist der hier empfangene Discord-Titel, nicht allein der Titel auf der Streaming-Webseite.")
+            elif not conf.get("enabled"):
+                data.update(reason="Stream-Ankündigungen sind ausgeschaltet.", hint="Unter Einstellungen aktivieren.")
+            elif not self.can_post(self._target(guild, conf)):
+                data.update(reason="Zielkanal fehlt oder Bot-Rechte reichen nicht aus.", hint="Zielkanal, Senderecht, Links einbetten und Nachrichtenverlauf lesen prüfen.")
+            else:
+                data.update(reason="Passender Stream empfangen.", hint="„Jetzt prüfen“ aktualisiert die Ankündigung. Eventuelle Discord-Sendefehler stehen über der Übersicht.")
+        return data
+
+    async def refresh_role_presences(self, guild):
+        """Aktivitätsdaten über das Discord-Gateway gezielt neu anfordern."""
+        if self._unloading:
+            return {"ok": False, "message": "Streamer wird gerade neu geladen."}
+        task = asyncio.current_task()
+        self._poll_tasks.add(task)
+        try:
+            ticket = self.presence_refresh.checkpoint(guild)
+            conf = await self.config.guild(guild).all()
+            role = guild.get_role(int(conf.get("watched_role_id") or 0))
+            if role is None:
+                return {"ok": False, "message": "Bitte zuerst eine gültige Streamer-Rolle einstellen."}
+            if (not self._presence_connected or getattr(guild, "shard_id", None) in self._disconnected_shards
+                    or await self.bot.cog_disabled_in_guild(self, guild)):
+                return {"ok": False, "message": "Die Discord-Verbindung ist nicht bereit oder der Cog ist auf diesem Server deaktiviert."}
+            if self._unloading:
+                return {"ok": False, "message": "Streamer wird gerade neu geladen."}
+            # Nur die Betriebsart sichern, niemals Mitgliederdaten oder Aktivitäten.
+            await self.config.guild(guild).presence_refresh_enabled.set(True)
+            if self._unloading:
+                return {"ok": False, "message": "Streamer wird gerade neu geladen."}
+            result = await self.presence_refresh.refresh(guild, role, force=True, checkpoint=ticket)
+            if result["ok"]:
+                self._wake.set()
+            return result
+        finally:
+            self._poll_tasks.discard(task)
+
     @staticmethod
-    def _streaming_signature(member):
-        return sorted((a.name or "", a.url or "") for a in getattr(member, "activities", ())
+    def _streaming_signature(member, activities=None):
+        return sorted((str(a.name or ""), str(a.url or "")) for a in
+                      (getattr(member, "activities", ()) if activities is None else activities)
                       if isinstance(a, discord.Streaming))
 
     @commands.Cog.listener()
     async def on_presence_update(self, before, after):
-        if self._unloading or self._streaming_signature(before) == self._streaming_signature(after):
+        if self._unloading:
+            return
+        before_signature = self._streaming_signature(before, self.presence_refresh.activities(before))
+        self.presence_refresh.observe(after)
+        if before_signature == self._streaming_signature(after):
             return
         role_id = await self.config.guild(after.guild).watched_role_id()
         if role_id and any(r.id == role_id for m in (before, after) for r in m.roles):
@@ -194,10 +297,13 @@ class Streamer(commands.Cog):
     async def on_member_update(self, before, after):
         role_id = await self.config.guild(after.guild).watched_role_id()
         if role_id and ({r.id for r in before.roles} ^ {r.id for r in after.roles}) & {role_id}:
+            if not any(r.id == role_id for r in after.roles):
+                self.presence_refresh.remove(after)
             self._wake.set()
 
     @commands.Cog.listener()
     async def on_member_remove(self, member):
+        self.presence_refresh.remove(member)
         role_id = await self.config.guild(member.guild).watched_role_id()
         if role_id and any(r.id == role_id for r in member.roles):
             self._wake.set()
@@ -205,6 +311,7 @@ class Streamer(commands.Cog):
     @commands.Cog.listener()
     async def on_guild_role_delete(self, role):
         if await self.config.guild(role.guild).watched_role_id() == role.id:
+            self.presence_refresh.invalidate(role.guild)
             self._wake.set()
 
     @commands.Cog.listener()
@@ -293,6 +400,7 @@ class Streamer(commands.Cog):
         if wc is not None:
             wc.unregister_owner(self)
         await self.api.close()
+        self.presence_refresh.clear()
 
     @commands.Cog.listener()
     async def on_webcore_ready(self, webcore):
@@ -300,7 +408,7 @@ class Streamer(commands.Cog):
             self._register_dashboard(webcore)
 
     def _register_dashboard(self, webcore):
-        extra = {"operate_forms": {"check", "toggle"}} if hasattr(webcore, "OPERATE") else {}
+        extra = {"operate_forms": {"check", "toggle", "presence_refresh"}} if hasattr(webcore, "OPERATE") else {}
         webcore.register_page(owner=self, slug="streamer", name="Streamer", icon="bi-broadcast",
                               handler=self.dashboard_page, **extra)
 
@@ -337,9 +445,16 @@ class Streamer(commands.Cog):
             watched = {p: {} for p in PROVIDERS}
             known = {p: {} for p in PROVIDERS}
             for guild in list(self.bot.guilds):
+                presence_ticket = self.presence_refresh.checkpoint(guild)
                 conf = await self.config.guild(guild).all()
                 if not conf.get("enabled") or await self.bot.cog_disabled_in_guild(self, guild):
                     continue
+                if (conf.get("watched_role_id") and conf.get("presence_refresh_enabled")
+                        and self._presence_connected and getattr(guild, "shard_id", None) not in self._disconnected_shards):
+                    role = guild.get_role(int(conf["watched_role_id"]))
+                    if role is not None:
+                        await self.presence_refresh.refresh(guild, role, force=not self.presence_refresh.enabled(guild),
+                                                            checkpoint=presence_ticket)
                 for key, source in conf["sources"].items():
                     provider = source.get("provider")
                     if provider in watched and source.get("enabled", True):
@@ -720,6 +835,47 @@ class Streamer(commands.Cog):
         platform_errors = [s["error"] for s in self.status.values() if s.get("error")]
         await ctx.send(error or " · ".join(platform_errors) or "Streamübersicht aktualisiert.",
                        allowed_mentions=discord.AllowedMentions.none())
+
+    @streamer.command(name="diagnose")
+    @commands.cooldown(1, 30, commands.BucketType.guild)
+    async def streamer_diagnose(self, ctx, mitglied: discord.Member = None):
+        """Discord-Streamingstatus für dich oder ein Mitglied prüfen und gezielt neu laden."""
+        private = getattr(ctx, "interaction", None) is not None
+        if private:
+            await ctx.defer(ephemeral=True)
+        member = ctx.guild.get_member((mitglied or ctx.author).id)
+        conf = await self.config.guild(ctx.guild).all()
+        current = self.member_diagnostics(ctx.guild, member, conf)
+        result = {"ok": False, "message": ""}
+        if current["has_role"]:
+            result = await self.refresh_role_presences(ctx.guild)
+        conf = await self.config.guild(ctx.guild).all()
+        data = self.member_diagnostics(ctx.guild, member, conf)
+        safe = discord.utils.escape_markdown
+        lines = [f"**Streamer-Diagnose: {safe(data['member_name'])}**",
+                 "Beobachtete Rolle vorhanden: " + ("Ja" if data["has_role"] else "Nein"),
+                 "Empfangene Aktivitäten: " + (", ".join(data["activity_types"]) or "Keine"),
+                 f"Streamingaktivitäten: {data['streaming']} · Unterstützte Links: {data['accepted']}",
+                 "**Ergebnis:** " + safe(data["reason"])]
+        if data["title"]:
+            lines.append("Empfangener Titel: " + safe(data["title"]))
+        if data["url"]:
+            lines.append("Stream-Link: <" + data["url"] + ">")
+        if data["hint"]:
+            lines.append(safe(data["hint"]))
+        if result.get("message"):
+            lines.append(safe(result["message"]))
+        text = "\n".join(lines)[:1900]
+        if private:
+            await ctx.send(text, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        else:
+            try:
+                await ctx.author.send(text, allowed_mentions=discord.AllowedMentions.none())
+            except discord.HTTPException:
+                await ctx.send("Die Diagnose konnte dir nicht per Direktnachricht gesendet werden. "
+                               "Bitte Direktnachrichten für den Bot erlauben oder den Slash-Befehl /streamer diagnose verwenden.")
+            else:
+                await ctx.send("Die Streamer-Diagnose wurde dir per Direktnachricht geschickt.")
 
     @commands.group(name="streamerset", invoke_without_command=True)
     @commands.is_owner()
