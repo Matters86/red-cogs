@@ -5,7 +5,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import discord
 from redbot.core import Config, commands
@@ -13,6 +13,7 @@ from redbot.core import Config, commands
 from .providers import ProviderError, StreamAPI
 from .presence import parse_activity, source_from_stream
 from .presence_refresh import PresenceRefresh
+from .notifications import reconcile as reconcile_notifications
 
 log = logging.getLogger("red.red-cogs.streamer")
 PROVIDERS = ("twitch", "youtube")
@@ -36,9 +37,19 @@ def _timestamp(value):
         return None
 
 
-def _image_url(value):
+def _image_url(value, now=None):
     value = str(value or "").replace("{width}", "1280").replace("{height}", "720")
-    return value if urlsplit(value).scheme == "https" and len(value) <= 2000 else None
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or len(value) > 2000:
+            return None
+        if now is not None and parsed.hostname == "static-cdn.jtvnw.net" and parsed.path.startswith("/previews-ttv/"):
+            query = [(k, v) for k, v in parse_qsl(parsed.query) if k != "streamer_preview"]
+            query.append(("streamer_preview", str(int(now // 300))))
+            return urlunsplit(parsed._replace(query=urlencode(query)))
+        return value
+    except ValueError:
+        return None
 
 
 class Streamer(commands.Cog):
@@ -49,7 +60,8 @@ class Streamer(commands.Cog):
         self.config = Config.get_conf(self, identifier=928461730552, force_registration=True)
         self.config.register_global(twitch_client_id="", twitch_client_secret="", youtube_api_key="", youtube_state={})
         self.config.register_guild(enabled=True, channel_id=None, title_filter="", watched_role_id=None,
-                                   presence_refresh_enabled=False, sources={}, state={}, last_error="")
+                                   presence_refresh_enabled=False, mention_everyone=False, notification_state={},
+                                   sources={}, state={}, last_error="")
         self.api = StreamAPI(self._credentials, clock=lambda: self._now(),
                              youtube_state_get=self.config.youtube_state,
                              youtube_state_set=self.config.youtube_state.set)
@@ -102,7 +114,8 @@ class Streamer(commands.Cog):
         channel = guild.get_channel(int(cid)) if cid else None
         return channel if isinstance(channel, discord.TextChannel) else None
 
-    async def configure(self, guild, *, channel_id=None, title_filter=None, enabled=None, watched_role_id=None):
+    async def configure(self, guild, *, channel_id=None, title_filter=None, enabled=None, watched_role_id=None,
+                        mention_everyone=None):
         if title_filter is not None and len(str(title_filter).strip()) > 100:
             raise ValueError("Der Titelfilter darf höchstens 100 Zeichen enthalten.")
         if channel_id is not None:
@@ -125,12 +138,21 @@ class Streamer(commands.Cog):
                     raise ValueError("Bitte eine Rolle dieses Servers wählen; @everyone kann nicht beobachtet werden.")
         async with self._lock(guild):
             conf = self.config.guild(guild)
+            current = await conf.all()
+            effective_mention = current.get("mention_everyone", False) if mention_everyone is None else bool(mention_everyone)
+            if effective_mention:
+                target = guild.get_channel(int(channel_id or current.get("channel_id") or 0))
+                if (not self.can_post(target)
+                        or not target.permissions_for(guild.me).mention_everyone):
+                    raise ValueError("Für @everyone muss der Bot im Zielkanal das Recht „@everyone, @here und alle Rollen erwähnen“ haben.")
             if channel_id is not None:
                 await conf.channel_id.set(int(channel_id))
             if title_filter is not None:
                 await conf.title_filter.set(str(title_filter).strip())
             if enabled is not None:
                 await conf.enabled.set(bool(enabled))
+            if mention_everyone is not None:
+                await conf.mention_everyone.set(bool(mention_everyone))
             if watched_role_id is not None:
                 changed = await conf.watched_role_id() != (role_id or None)
                 await conf.watched_role_id.set(role_id or None)
@@ -522,6 +544,13 @@ class Streamer(commands.Cog):
         role_status = self.role_watch_status(guild, conf)
         sources.update(role_status["sources"])
         snapshots = dict(snapshots, discord=role_status["streams"] if role_status["ready"] else None)
+        notices = reconcile_notifications(conf, snapshots, role_status, self._now())
+        await gc.notification_state.set(notices)
+
+        async def persist():
+            # Reservierungen vor dem HTTP-Post sichern: unklare Antworten dürfen keinen zweiten Ping auslösen.
+            await gc.notification_state.set(notices)
+            await gc.state.set(state)
         # Unbekannte Gateway-Daten behalten, solange dieselbe Rolle eingerichtet ist.
         for record in state.values():
             if (record["source_key"].startswith("discord:") and not role_status["ready"]
@@ -609,22 +638,24 @@ class Streamer(commands.Cog):
                 continue
             record = state.get(key)
             fresh = record is None
+            notice = notices[stream["url"]]
+            if stream["source_key"].startswith("discord:"):
+                stream = dict(stream, started_at=datetime.fromtimestamp(notice["first_seen"], timezone.utc).isoformat())
             if fresh:
                 record = {"source_key": stream["source_key"], "provider": stream["provider"],
                           "stream": dict(stream), "message_id": None, "channel_id": target.id,
-                          "last_update": 0, "error": "", "pending": True, "pending_since": self._now()}
+                          "last_update": 0, "error": "", "pending": True, "pending_since": self._now(),
+                          "first_seen": notice["first_seen"]}
                 state[key] = record
                 # Eine Absicht vor dem Senden sichern; bei Abbruch kann die Meldung wiedergefunden werden.
                 await gc.state.set(state)
             if stream["source_key"].startswith("discord:"):
                 record["watch_role_id"] = conf.get("watched_role_id")
-                if record["stream"].get("started_at"):
-                    stream = dict(stream, started_at=record["stream"]["started_at"])
             await self._ensure_message(guild, target, record, stream, fresh=fresh,
-                                       persist=lambda: gc.state.set(state))
+                                       persist=persist, notice=notice, mention_everyone=conf.get("mention_everyone", False))
             if record.get("error"):
                 errors.append(record["error"])
-            await gc.state.set(state)
+            await persist()
         # Auch Fehler bei weiter unbekanntem Plattformstatus sichtbar halten.
         errors.extend(r["error"] for r in state.values() if r.get("error") and r["error"] not in errors)
         await gc.last_error.set(" · ".join(dict.fromkeys(errors))[:1000])
@@ -692,17 +723,22 @@ class Streamer(commands.Cog):
             embed.add_field(name="Spiel", value=discord.utils.escape_markdown(_cap(stream["game"], 1000)))
         if stream.get("viewers") is not None:
             embed.add_field(name="Zuschauer", value=str(max(0, int(stream["viewers"]))))
-        image = _image_url(stream.get("thumbnail"))
+        image = _image_url(stream.get("thumbnail"), self._now())
         if image:
             embed.set_image(url=image)
         embed.set_footer(text=self._footer(record))
         return embed
 
-    async def _ensure_message(self, guild, channel, record, stream, *, fresh=False, persist=None):
+    async def _ensure_message(self, guild, channel, record, stream, *, fresh=False, persist=None,
+                              notice=None, mention_everyone=False):
         now = self._now()
         if float(record.get("retry_at") or 0) > now:
             return
         attempted_send = False
+        notice = notice if notice is not None else {"announced": True}
+        previous_record = bool(record.get("announced") or record.get("message_id"))
+        previous_notice = bool(notice.get("announced"))
+        record["announced"] = previous_record
         try:
             message = None
             if record.get("message_id"):
@@ -721,6 +757,7 @@ class Streamer(commands.Cog):
                 message = await self._recover(guild, channel, record)
                 if message is not None:
                     record["message_id"] = message.id
+                    record["announced"] = True
             record["stream"] = dict(stream)
             embed = self._embed(stream, record)
             view = discord.ui.View(timeout=None)
@@ -730,19 +767,37 @@ class Streamer(commands.Cog):
                     raise ValueError("Im Ankündigungskanal fehlen Sende-, Embed- oder Leserechte.")
                 record["pending"] = True
                 record["pending_since"] = record.get("pending_since") or now
+                can_mention = bool(channel.permissions_for(guild.me).mention_everyone)
+                ping = bool(mention_everyone and can_mention and not record["announced"] and not notice.get("announced"))
+                record["message_mention"] = bool(record.get("message_mention") or ping)
+                record["mention_skipped"] = bool(mention_everyone and not can_mention and not record["announced"])
+                record["announced"] = True
+                notice["announced"] = True
                 if persist is not None:
                     await persist()
                 attempted_send = True
-                message = await channel.send(embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
+                allowed = (discord.AllowedMentions(everyone=True, users=False, roles=False, replied_user=False)
+                           if ping else discord.AllowedMentions.none())
+                message = await channel.send(content="@everyone" if record["message_mention"] else None,
+                                             embed=embed, view=view, allowed_mentions=allowed)
                 record["message_id"] = message.id
             else:
-                await message.edit(content=None, embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
-            record.update(pending=False, error="", retry_at=0, last_update=now)
+                notice["announced"] = True
+                record["announced"] = True
+                await message.edit(content="@everyone" if record.get("message_mention") else None,
+                                   embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
+            warning = ("Die Ankündigung wurde ohne Ping gesendet: Dem Bot fehlt das Recht für @everyone im Zielkanal."
+                       if record.get("mention_skipped") and mention_everyone
+                       and not channel.permissions_for(guild.me).mention_everyone else "")
+            record.update(pending=False, error=warning, retry_at=0, last_update=now)
         except discord.HTTPException as exc:
             record["error"] = f"Ankündigung konnte nicht aktualisiert werden (Discord HTTP {exc.status}); wird erneut versucht."
             record["retry_at"] = now + RETRY_SECONDS
             if attempted_send and exc.status < 500 and not record.get("message_id"):
                 record["pending"] = False
+                record["announced"] = previous_record
+                notice["announced"] = previous_notice
+                record["message_mention"] = False
         except ValueError as exc:
             record["error"] = str(exc)
             record["retry_at"] = now + RETRY_SECONDS
@@ -814,6 +869,20 @@ class Streamer(commands.Cog):
             return await ctx.send(str(exc))
         await ctx.send(f"Titelfilter: **{discord.utils.escape_markdown(text.strip())}**." if text.strip()
                        else "Titelfilter ausgeschaltet. Alle aktiven Streams der eingetragenen Kanäle werden angezeigt.",
+                       allowed_mentions=discord.AllowedMentions.none())
+
+    @streamer.command(name="everyone")
+    async def streamer_everyone(self, ctx, schalter: str):
+        """Optionalen @everyone-Ping bei neuen Live-Ankündigungen ein- oder ausschalten."""
+        value = schalter.casefold().strip()
+        if value not in {"an", "aus", "on", "off", "true", "false"}:
+            return await ctx.send("Bitte an oder aus angeben.")
+        enabled = value in {"an", "on", "true"}
+        try:
+            await self.configure(ctx.guild, mention_everyone=enabled)
+        except ValueError as exc:
+            return await ctx.send(str(exc), allowed_mentions=discord.AllowedMentions.none())
+        await ctx.send("@everyone bei neuen Live-Ankündigungen " + ("eingeschaltet." if enabled else "ausgeschaltet."),
                        allowed_mentions=discord.AllowedMentions.none())
 
     @streamer.command(name="list")

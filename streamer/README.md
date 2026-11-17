@@ -25,7 +25,37 @@ einfacher Teiltext, kein regulärer Ausdruck und keine Liste mehrerer Begriffe.
 - API-Fehler gelten nicht als Offline-Nachweis. Verbindungs- und Löschprobleme werden im Dashboard angezeigt und erneut geprüft.
 - Einfache WebCore-Seite **Streamer** mit Quellenliste, Ankündigungen, Zielkanal, Filter und geschützten Zugangsdaten.
 - Bei fehlenden Rollenstreams: Discord-Status neu laden und pro Mitglied prüfen, welche Aktivität der Bot tatsächlich empfängt.
-- Keine automatischen Rollen-Pings, `@everyone`- oder `@here`-Pings durch Streamtitel.
+- Optionaler `@everyone`-Ping bei einer neuen Live-Ankündigung, standardmäßig ausgeschaltet.
+  Streamtitel können selbst keine Rollen-, `@everyone`- oder `@here`-Pings auslösen.
+
+## Optionale @everyone-Ankündigung
+
+Unter **Streamer → Einstellungen** lässt sich **Bei neuer Live-Ankündigung @everyone erwähnen**
+einschalten. Standardmäßig ist die Option aus. Der Bot benötigt im gewählten Zielkanal zusätzlich
+das Discord-Recht **@everyone, @here und alle Rollen erwähnen**. Ohne dieses Recht wird die
+Einstellung nicht gespeichert.
+
+Die Erwähnung erfolgt einmal bei der ersten Ankündigung eines laufenden Streams. Änderungen
+an Titel oder Zuschauerzahl, ein Bot-Neustart und das Wiederherstellen einer gelöschten Meldung
+lösen keinen neuen Ping aus. Auch wenn derselbe laufende Stream den Titelfilter vorübergehend
+nicht erfüllt und später wieder passt, wird nicht erneut benachrichtigt. Das nachträgliche
+Einschalten pingt bestehende Ankündigungen nicht an. Nach einem erkannten Stream-Ende darf
+die nächste Live-Sitzung wieder eine neue Benachrichtigung auslösen.
+Kurze Unterbrechungen des Discord-Streamingstatus von weniger als fünf Minuten gelten als
+dieselbe Sitzung: Die Offline-Meldung wird trotzdem entfernt, beim Wiedererscheinen bleiben
+aber die ursprüngliche Erkennungszeit und die bereits verbrauchte Benachrichtigung erhalten.
+
+Alternativ: `[p]streamer everyone an` beziehungsweise `[p]streamer everyone aus`.
+
+## Zeitangabe und Vorschaubild
+
+Im Rollenmodus bedeutet die angezeigte Uhrzeit **erstmals vom Bot erkannt**, nicht der
+tatsächliche Sendebeginn auf Twitch oder YouTube. Titeländerungen setzen diese Zeit nicht zurück.
+
+Twitch-Vorschaubilder werden ungefähr alle fünf Minuten mit einer frischen Cacheadresse
+angefordert. Das Bild stammt von Twitch; ein dort bereits schwarzes oder mit „Keine Wiedergabe“
+geliefertes Bild wird vom Bot nicht inhaltlich verändert. Die Anzeige allein weist deshalb
+nicht nach, dass die Ursache beim Bot oder in OBS liegt.
 
 ## Installation
 
@@ -162,6 +192,7 @@ als API-Problem angezeigt und löst keine falsche Offline-Bereinigung aus.
 | `[p]streamer list` | Quellen mit ihren Schlüsseln auflisten. | Serververwaltung |
 | `[p]streamer remove <quellenschlüssel>` | Quelle entfernen und ihre Meldungen bereinigen. | Serververwaltung |
 | `[p]streamer filter [text]` | Titelfilter setzen; ohne Text ausschalten. | Serververwaltung |
+| `[p]streamer everyone <an\|aus>` | Optionale @everyone-Erwähnung bei neuen Live-Ankündigungen ein- oder ausschalten. | Serververwaltung |
 | `[p]streamer check` | Aktuellen Status prüfen; YouTube-Suchgrenzen bleiben wirksam. | Serververwaltung |
 | `[p]streamer diagnose [@mitglied]` | Empfangenen Discord-Status, Rollenzugehörigkeit, Streamlink und Titelfilter für ein Mitglied prüfen; ohne Mitglied sich selbst. | Serververwaltung |
 | `[p]streamerset twitch <client-id> <client-secret>` | Twitch-Zugang botweit speichern. | Bot-Owner, ausschließlich per Direktnachricht |

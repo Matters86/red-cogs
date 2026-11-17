@@ -7,7 +7,6 @@ Es werden weder Memberobjekte noch Discord-Namen oder Nutzer-IDs übernommen.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import re
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
@@ -86,19 +85,13 @@ def parse_activity(activity):
     title = activity.name if isinstance(activity.name, str) else ""
     if not title.strip():
         title = activity.details if isinstance(activity.details, str) else ""
-    try:
-        created = activity.created_at
-    except (ValueError, TypeError, OverflowError, OSError):
-        created = None
-    if isinstance(created, datetime):
-        created = created if created.tzinfo is not None else created.replace(tzinfo=timezone.utc)
-        started_at = created.astimezone(timezone.utc).isoformat()
-    else:
-        started_at = ""
+    # Discords created_at bezeichnet den Beginn dieser Aktivität und kann sich
+    # nach Presence-/Client-Neustarts ändern. Es ist kein Plattform-Streamstart.
+    # Der Cog hält stattdessen die erste Erkennung dieser Live-Sitzung fest.
     return {"id": "live", "provider": provider, "source_key": f"discord:{provider}:{identifier}",
             "name": identifier if provider == "twitch" else "YouTube-Livestream", "title": title,
             "url": url, "thumbnail": f"https://static-cdn.jtvnw.net/previews-ttv/live_user_{identifier}-1280x720.jpg"
-            if provider == "twitch" else "", "game": "", "viewers": None, "started_at": started_at}
+            if provider == "twitch" else "", "game": "", "viewers": None, "started_at": ""}
 
 
 def source_from_stream(stream):

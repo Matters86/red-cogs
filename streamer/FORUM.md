@@ -23,6 +23,24 @@ Im WebCore-Dashboard erscheint **Streamer**. Unter **Einstellungen** den Zielkan
 beobachtende Rolle und optional `DNP` als Titelfilter wählen. Die Übersicht zeigt die Bereitschaft
 und die erkannten Streams. Teamrechte werden unter **Zugriff & Rollen → Streamer** vergeben.
 
+**Optionaler @everyone-Ping:** Unter **Einstellungen → Bei neuer Live-Ankündigung @everyone erwähnen**
+einschalten; standardmäßig ist diese Option aus. Der Bot braucht im Zielkanal zusätzlich
+**@everyone, @here und alle Rollen erwähnen**. Die Einstellung lässt sich auch mit
+`[p]streamer everyone an` oder `[p]streamer everyone aus` ändern.
+Ein laufender Stream wird nur bei seiner ersten Ankündigung angepingt. Aktualisierungen,
+Neustarts, die Wiederherstellung einer gelöschten Meldung und vorübergehende Titelwechsel
+aus dem Filter und wieder hinein erzeugen keinen weiteren Ping. Das Einschalten der Option
+benachrichtigt bestehende Ankündigungen nicht nachträglich. Streamtitel können selbst keine
+Erwähnungen auslösen.
+Discord-Präsenzunterbrechungen von weniger als fünf Minuten behalten dieselbe Sitzung bei:
+Die Meldung verschwindet während der Unterbrechung, nach der Rückkehr entstehen kein neuer
+Ping und keine neue Erkennungszeit.
+
+Im Rollenmodus steht die Uhrzeit für **erstmals erkannt**, nicht für den tatsächlichen
+Twitch-/YouTube-Streambeginn. Twitch-Vorschaubilder werden etwa alle fünf Minuten über eine
+frische Cacheadresse angefordert. Schwarze oder „Keine Wiedergabe“-Bilder, die Twitch bereits
+so liefert, werden nicht vom Bot inhaltlich verändert.
+
 Für die Rollen-Erkennung im **Discord Developer Portal → Bot → Privileged Gateway Intents**
 **Presence Intent** und **Server Members Intent** einschalten. Beide Intents müssen auch in
 Red beim Start aktiviert sein; danach den Bot neu starten. Mitglieder müssen ihre öffentliche
@@ -64,6 +82,7 @@ API-Störungen werden nicht als „offline“ behandelt.
 | `[p]streamer list` | Quellen mit ihren Schlüsseln auflisten. | Serververwaltung |
 | `[p]streamer remove <quellenschlüssel>` | Quelle entfernen und ihre Meldungen bereinigen. | Serververwaltung |
 | `[p]streamer filter [text]` | Titelfilter setzen; ohne Text ausschalten. | Serververwaltung |
+| `[p]streamer everyone <an\|aus>` | Optionale @everyone-Erwähnung bei neuen Live-Ankündigungen ein- oder ausschalten. | Serververwaltung |
 | `[p]streamer check` | Aktuellen Status prüfen; YouTube-Suchgrenzen bleiben wirksam. | Serververwaltung |
 | `[p]streamer diagnose [@mitglied]` | Vom Bot empfangenen Discord-Status, Rolle, Streamlink und Filter prüfen; ohne Mitglied sich selbst. | Serververwaltung |
 | `[p]streamerset twitch <client-id> <client-secret>` | Twitch-Zugang botweit speichern. | Bot-Owner, ausschließlich per Direktnachricht |

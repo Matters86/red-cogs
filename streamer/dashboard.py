@@ -75,6 +75,10 @@ async def dashboard_handler(cog, request):
                     if role_id and (role is None or role.is_default()):
                         raise ValueError("Bitte eine gültige Rolle dieses Servers wählen; @everyone ist nicht möglich.")
                     values["watched_role_id"] = role_id
+                # Das versteckte Feld unterscheidet einen ausgeschalteten Schalter
+                # von alten, noch geöffneten Formularen ohne diese neue Option.
+                if "mention_settings" in data or "mention_everyone" in data:
+                    values["mention_everyone"] = bool(data.get("mention_everyone"))
                 await cog.configure(guild, **values)
                 message = "Einstellungen gespeichert."
             elif kind == "add":
@@ -353,7 +357,11 @@ def _connections(ui, status):
 def _settings(ui, guild, conf, csrf):
     channels = sorted(guild.text_channels, key=lambda c: (getattr(c, "position", 0), c.id))
     body = ui.switches(ui.switch("enabled", "Stream-Ankündigungen aktiv", conf.get("enabled", True),
-                                 desc="Beim Ausschalten werden bestehende Stream-Ankündigungen entfernt.")) + ui.divider()
+                                 desc="Beim Ausschalten werden bestehende Stream-Ankündigungen entfernt."),
+                       ui.switch("mention_everyone", "Bei neuer Live-Ankündigung @everyone erwähnen",
+                                 conf.get("mention_everyone", False),
+                                 desc="Optional. Laufende Meldungen und Wiederherstellungen werden nicht erneut angepingt. "
+                                      "Der Bot braucht im Zielkanal das Recht, @everyone und @here zu erwähnen.")) + ui.divider()
     body += ui.grid(
         ui.field("Zielkanal", ui.select("channel_id", [(c.id, f"#{c.name}") for c in channels], conf.get("channel_id"),
                                          none_label="— Kanal wählen —"),
@@ -376,7 +384,7 @@ def _settings(ui, guild, conf, csrf):
                        "<b>Links einbetten</b> und <b>Nachrichtenverlauf lesen</b>. Er löscht seine eigenen Meldungen; "
                        "„Nachrichten verwalten“ ist dafür nicht erforderlich.")
     return ui.form(BASE, ui.card("Ankündigungen", body, icon="bi-sliders") + ui.save_row("Einstellungen speichern"),
-                   csrf=csrf, hidden={"form": "settings", "guild": guild.id}, savebar=True)
+                   csrf=csrf, hidden={"form": "settings", "guild": guild.id, "mention_settings": "1"}, savebar=True)
 
 
 def _youtube_notice(ui):

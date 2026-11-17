@@ -37,9 +37,9 @@ def main():
     check(result["source_key"] == "discord:twitch:dnp_team" and result["id"] == "live"
           and result["url"] == "https://www.twitch.tv/dnp_team" and result["name"] == "dnp_team",
           "Twitch-Kanal und kanonischer Link bleiben ohne Discord-Nutzerbezug stabil")
-    check(result["started_at"] == started.isoformat() and result["viewers"] is None and result["game"] == ""
+    check(result["started_at"] == "" and result["viewers"] is None and result["game"] == ""
           and result["thumbnail"] == "https://static-cdn.jtvnw.net/previews-ttv/live_user_dnp_team-1280x720.jpg",
-          "Presence-Zeitstempel und öffentliches Twitch-Vorschaubild werden sicher übernommen")
+          "Activity-Datum wird nicht als Streamstart verwendet; öffentliches Twitch-Vorschaubild bleibt erhalten")
     source = source_from_stream(result)
     check(source == {"key": "discord:twitch:dnp_team", "provider": "twitch", "identifier": "dnp_team",
                      "name": "dnp_team", "url": "https://www.twitch.tv/dnp_team",

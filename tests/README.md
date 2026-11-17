@@ -78,6 +78,8 @@ Red-Instanz im System-Temp an und löscht sie am Ende wieder.
 | `streamer_presence_test.py` | streamer: Discord-Streamingaktivitäten, sichere Twitch-/YouTube-Links und öffentliche Daten |
 | `streamer_role_test.py` | streamer: Rollenbeobachtung, Intents, Rollenwechsel, Neustart und doppelte Streamquellen |
 | `streamer_diagnostics_test.py` | streamer: aktuelle Gateway-Präsenzen nachladen, Cacheabweichungen, Neustart, private Diagnose und Webrechte |
+| `streamer_everyone_test.py` | streamer: optionaler Everyone-Ping, Kanalrechte, Wiederholschutz und sichere Erwähnungen |
+| `streamer_preview_test.py` | streamer: stabile Erkennungszeit, kurze Aussetzer und Twitch-Bildcache |
 | `streamer_core_test.py` | streamer: aktive Ankündigungen, Titelfilter, Offline-Löschung, Neustart und Discord-Fehler |
 | `streamer_web_test.py` | streamer: Dashboard-Einrichtung, Rollenrechte, Filter und geschützter Plattformzugang |
 | `wl_test_welcome.py` | welcome: Beitritt/Verlassen, Willkommensbild mit Avatar, DM, Befehle, Dashboard mit Vorschau |
